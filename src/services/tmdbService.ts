@@ -1,4 +1,3 @@
-
 // Cache simples em memória
 const cache = new Map<string, any>();
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutos
@@ -16,18 +15,18 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export interface MovieData {
   id: number;
-  title: string;
-  original_title: string;
-  release_date: string;
+  title?: string; // Para filmes
+  original_title?: string; // Para filmes
+  release_date?: string; // Para filmes
+  name?: string; // Para séries
+  original_name?: string; // Para séries
+  first_air_date?: string; // Para séries
   overview: string;
   poster_path: string;
   backdrop_path: string;
   vote_average: number;
   genre_ids: number[];
   media_type: 'movie' | 'tv';
-  name?: string; // Para séries
-  first_air_date?: string; // Para séries
-  original_name?: string; // Para séries
 }
 
 export interface SearchResult {
@@ -114,7 +113,6 @@ class TMDBService {
         },
         {
           id: 2,
-          title: 'Stranger Things',
           name: 'Stranger Things',
           original_name: 'Stranger Things',
           first_air_date: '2016-07-15',

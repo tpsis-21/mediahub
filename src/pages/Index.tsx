@@ -1,7 +1,6 @@
-
 import React, { useState, useEffect } from 'react';
 import { Download, CheckSquare, Square } from 'lucide-react';
-import { MovieData, tmdbService } from '../services/tmdbService';
+import { MovieData, tmdbService, MediaType } from '../services/tmdbService';
 import { historyService, SearchHistoryItem } from '../services/historyService';
 import { exportService } from '../services/exportService';
 import { useAuth } from '../contexts/AuthContext';
@@ -30,7 +29,7 @@ const Index = () => {
     }
   }, [user]);
 
-  const handleSearch = async (queries: string[], type: 'individual' | 'bulk') => {
+  const handleSearch = async (queries: string[], type: 'individual' | 'bulk', mediaType: MediaType) => {
     setIsLoading(true);
     setMovies([]);
     setSelectedMovies(new Set());
@@ -40,17 +39,20 @@ const Index = () => {
       
       for (const query of queries) {
         const { title, year } = tmdbService.parseSearchQuery(query);
-        const searchResult = await tmdbService.searchMulti(title, language);
+        console.log(`Buscando: "${title}" (${year || 'sem ano'}) - Tipo: ${mediaType}`);
+        
+        const searchResult = await tmdbService.searchByType(title, mediaType, year, language);
         
         // Filtrar por ano se especificado
         let results = searchResult.results;
-        if (year) {
+        if (year && results.length > 0) {
           results = results.filter(movie => {
             const movieYear = movie.release_date || movie.first_air_date;
             return movieYear && new Date(movieYear).getFullYear().toString() === year;
           });
         }
         
+        console.log(`Encontrados ${results.length} resultados para "${query}"`);
         allResults.push(...results);
       }
 
@@ -76,6 +78,11 @@ const Index = () => {
           title: "Nenhum resultado",
           description: t('no.results'),
           variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Busca concluída",
+          description: `${uniqueResults.length} resultado(s) encontrado(s)`,
         });
       }
     } catch (error) {

@@ -1,15 +1,18 @@
 
 import React, { useState } from 'react';
-import { Search, List, User } from 'lucide-react';
+import { Search, List, User, Film, Tv, Globe } from 'lucide-react';
 import { useI18n } from '../contexts/I18nContext';
+import { MediaType } from '../services/tmdbService';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Textarea } from './ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Card, CardContent } from './ui/card';
+import { RadioGroup, RadioGroupItem } from './ui/radio-group';
+import { Label } from './ui/label';
 
 interface SearchFormProps {
-  onSearch: (queries: string[], type: 'individual' | 'bulk') => void;
+  onSearch: (queries: string[], type: 'individual' | 'bulk', mediaType: MediaType) => void;
   isLoading: boolean;
 }
 
@@ -17,10 +20,11 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading }) => {
   const { t } = useI18n();
   const [individualQuery, setIndividualQuery] = useState('');
   const [bulkQuery, setBulkQuery] = useState('');
+  const [mediaType, setMediaType] = useState<MediaType>('multi');
 
   const handleIndividualSearch = () => {
     if (individualQuery.trim()) {
-      onSearch([individualQuery.trim()], 'individual');
+      onSearch([individualQuery.trim()], 'individual', mediaType);
     }
   };
 
@@ -32,7 +36,7 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading }) => {
         .filter(q => q.length > 0);
       
       if (queries.length > 0) {
-        onSearch(queries, 'bulk');
+        onSearch(queries, 'bulk', mediaType);
       }
     }
   };
@@ -40,6 +44,38 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading }) => {
   return (
     <Card className="mb-6">
       <CardContent className="p-6">
+        {/* Filtro de Tipo de Mídia */}
+        <div className="mb-6">
+          <Label className="text-base font-semibold mb-3 block">Tipo de Mídia</Label>
+          <RadioGroup
+            value={mediaType}
+            onValueChange={(value) => setMediaType(value as MediaType)}
+            className="flex flex-row space-x-6"
+          >
+            <div className="flex items-center space-x-2">
+              <RadioGroupItem value="multi" id="multi" />
+              <Label htmlFor="multi" className="flex items-center space-x-2 cursor-pointer">
+                <Globe className="h-4 w-4" />
+                <span>Todos</span>
+              </Label>
+            </div>
+            <div className="flex items-center space-x-2">
+              <RadioGroupItem value="movie" id="movie" />
+              <Label htmlFor="movie" className="flex items-center space-x-2 cursor-pointer">
+                <Film className="h-4 w-4" />
+                <span>Filmes</span>
+              </Label>
+            </div>
+            <div className="flex items-center space-x-2">
+              <RadioGroupItem value="tv" id="tv" />
+              <Label htmlFor="tv" className="flex items-center space-x-2 cursor-pointer">
+                <Tv className="h-4 w-4" />
+                <span>Séries</span>
+              </Label>
+            </div>
+          </RadioGroup>
+        </div>
+
         <Tabs defaultValue="individual" className="w-full">
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="individual" className="flex items-center space-x-2">

@@ -1,3 +1,4 @@
+
 // Cache simples em memória
 const cache = new Map<string, any>();
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutos
@@ -36,6 +37,8 @@ export interface SearchResult {
   total_results: number;
 }
 
+export type MediaType = 'movie' | 'tv' | 'multi';
+
 class TMDBService {
   private readonly baseURL = 'https://api.themoviedb.org/3';
   private readonly imageBaseURL = 'https://image.tmdb.org/t/p/w500';
@@ -65,8 +68,8 @@ class TMDBService {
 
     try {
       if (!this.apiKey) {
-        // Retornar dados simulados para demonstração
-        return this.getMockData();
+        // Retornar dados simulados baseados na query
+        return this.getMockData(url);
       }
 
       const response = await fetch(url);
@@ -93,50 +96,92 @@ class TMDBService {
     }
   }
 
-  private getMockData(): SearchResult {
+  private getMockData(url: string): SearchResult {
+    // Extrair query da URL para simular resultados diferentes
+    const urlParams = new URLSearchParams(url.split('?')[1]);
+    const query = urlParams.get('query') || '';
+    const searchType = url.includes('/search/movie') ? 'movie' : 
+                      url.includes('/search/tv') ? 'tv' : 'multi';
+
+    const movieResults = [
+      {
+        id: Math.floor(Math.random() * 10000) + 1,
+        title: `Filme: ${query}`,
+        original_title: `Original: ${query}`,
+        release_date: '2023-05-15',
+        overview: `Sinopse simulada para o filme "${query}". Esta é uma descrição fictícia gerada para demonstração da funcionalidade de busca.`,
+        poster_path: '/q6y0Go1tsGEsmtFryDOJo3dEmqu.jpg',
+        backdrop_path: '/7RyHsO4yDXtBv1zUU3mTpHeQ0d5.jpg',
+        vote_average: Math.random() * 10,
+        genre_ids: [12, 878, 28],
+        media_type: 'movie' as const
+      },
+      {
+        id: Math.floor(Math.random() * 10000) + 2,
+        title: 'The Batman',
+        original_title: 'The Batman',
+        release_date: '2022-03-04',
+        overview: 'Quando um assassino tem como alvo a elite de Gotham City com uma série de maquinações sádicas, uma trilha de pistas enigmáticas envia o maior detetive do mundo em uma investigação no submundo.',
+        poster_path: '/b0PlSFdDwbyK0cf5RxwDpaOJQvQ.jpg',
+        backdrop_path: '/qqHQsStV6exghCM7zbObuYBiYxw.jpg',
+        vote_average: 7.8,
+        genre_ids: [28, 80, 18],
+        media_type: 'movie' as const
+      }
+    ];
+
+    const tvResults = [
+      {
+        id: Math.floor(Math.random() * 10000) + 3,
+        name: `Série: ${query}`,
+        original_name: `Original Series: ${query}`,
+        first_air_date: '2023-01-10',
+        overview: `Sinopse simulada para a série "${query}". Esta é uma descrição fictícia gerada para demonstração da funcionalidade de busca.`,
+        poster_path: '/49WJfeN0moxb9IPfGn8AIqMGskD.jpg',
+        backdrop_path: '/56v2KjBlU4XaOv9rVYEQypROD7P.jpg',
+        vote_average: Math.random() * 10,
+        genre_ids: [18, 10765, 9648],
+        media_type: 'tv' as const
+      },
+      {
+        id: Math.floor(Math.random() * 10000) + 4,
+        name: 'Stranger Things',
+        original_name: 'Stranger Things',
+        first_air_date: '2016-07-15',
+        overview: 'Quando um garoto desaparece, uma pequena cidade descobre um mistério envolvendo experimentos secretos, forças sobrenaturais aterrorizantes e uma garota muito estranha.',
+        poster_path: '/49WJfeN0moxb9IPfGn8AIqMGskD.jpg',
+        backdrop_path: '/56v2KjBlU4XaOv9rVYEQypROD7P.jpg',
+        vote_average: 8.7,
+        genre_ids: [18, 10765, 9648],
+        media_type: 'tv' as const
+      }
+    ];
+
+    let results: MovieData[] = [];
+    if (searchType === 'movie') {
+      results = movieResults;
+    } else if (searchType === 'tv') {
+      results = tvResults;
+    } else {
+      results = [...movieResults, ...tvResults];
+    }
+
     return {
       page: 1,
       total_pages: 1,
-      total_results: 3,
-      results: [
-        {
-          id: 1,
-          title: 'Vingadores: Ultimato',
-          original_title: 'Avengers: Endgame',
-          release_date: '2019-04-25',
-          overview: 'Após os eventos devastadores de Vingadores: Guerra Infinita, o universo está em ruínas devido às ações de Thanos. Com a ajuda de aliados remanescentes, os Vingadores devem se reunir mais uma vez para desfazer as ações de Thanos e restaurar a ordem no universo.',
-          poster_path: '/q6y0Go1tsGEsmtFryDOJo3dEmqu.jpg',
-          backdrop_path: '/7RyHsO4yDXtBv1zUU3mTpHeQ0d5.jpg',
-          vote_average: 8.3,
-          genre_ids: [12, 878, 28],
-          media_type: 'movie'
-        },
-        {
-          id: 2,
-          name: 'Stranger Things',
-          original_name: 'Stranger Things',
-          first_air_date: '2016-07-15',
-          overview: 'Quando um garoto desaparece, uma pequena cidade descobre um mistério envolvendo experimentos secretos, forças sobrenaturais aterrorizantes e uma garota muito estranha.',
-          poster_path: '/49WJfeN0moxb9IPfGn8AIqMGskD.jpg',
-          backdrop_path: '/56v2KjBlU4XaOv9rVYEQypROD7P.jpg',
-          vote_average: 8.7,
-          genre_ids: [18, 10765, 9648],
-          media_type: 'tv'
-        },
-        {
-          id: 3,
-          title: 'The Batman',
-          original_title: 'The Batman',
-          release_date: '2022-03-04',
-          overview: 'Quando um assassino tem como alvo a elite de Gotham City com uma série de maquinações sádicas, uma trilha de pistas enigmáticas envia o maior detetive do mundo em uma investigação no submundo.',
-          poster_path: '/b0PlSFdDwbyK0cf5RxwDpaOJQvQ.jpg',
-          backdrop_path: '/qqHQsStV6exghCM7zbObuYBiYxw.jpg',
-          vote_average: 7.8,
-          genre_ids: [28, 80, 18],
-          media_type: 'movie'
-        }
-      ]
+      total_results: results.length,
+      results
     };
+  }
+
+  async searchByType(query: string, mediaType: MediaType, year?: string, language: string = 'pt-BR'): Promise<SearchResult> {
+    if (mediaType === 'multi') {
+      return this.searchMulti(query, language);
+    } else if (mediaType === 'movie') {
+      return this.searchMovie(query, year, language);
+    } else {
+      return this.searchTV(query, year, language);
+    }
   }
 
   async searchMulti(query: string, language: string = 'pt-BR'): Promise<SearchResult> {

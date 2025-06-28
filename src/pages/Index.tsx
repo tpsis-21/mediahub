@@ -186,7 +186,7 @@ const Index = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50 dark:from-gray-900 dark:via-blue-900 dark:to-purple-900">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50 dark:from-gray-950 dark:via-blue-950 dark:to-purple-950">
       <Header />
       
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -206,56 +206,57 @@ const Index = () => {
               
               <TabsContent value="results" className="space-y-6">
                 {movies.length > 0 && (
-                  <div className="flex items-center justify-between bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm rounded-xl p-6 shadow-lg border border-white/20">
-                    <div className="flex items-center space-x-4">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleSelectAll}
-                        className="flex items-center space-x-2 border-blue-300 hover:bg-blue-50 dark:border-blue-700 dark:hover:bg-blue-900"
-                      >
-                        {selectedMovies.size === movies.length ? (
-                          <CheckSquare className="h-4 w-4 text-blue-600" />
-                        ) : (
-                          <Square className="h-4 w-4" />
-                        )}
-                        <span>
-                          {selectedMovies.size === movies.length ? 'Desmarcar Todos' : 'Selecionar Todos'}
+                  <div className="glass-effect rounded-xl p-6 shadow-lg">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center space-x-4">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleSelectAll}
+                          className="flex items-center space-x-2 border-blue-300 hover:bg-blue-50 dark:border-blue-700 dark:hover:bg-blue-900"
+                        >
+                          {selectedMovies.size === movies.length ? (
+                            <CheckSquare className="h-4 w-4 text-blue-600" />
+                          ) : (
+                            <Square className="h-4 w-4" />
+                          )}
+                          <span>
+                            {selectedMovies.size === movies.length ? 'Desmarcar Todos' : 'Selecionar Todos'}
+                          </span>
+                        </Button>
+                        <span className="text-sm text-gray-600 dark:text-gray-400 font-medium">
+                          {selectedMovies.size} de {movies.length} selecionado(s)
                         </span>
-                      </Button>
-                      <span className="text-sm text-gray-600 dark:text-gray-400 font-medium">
-                        {selectedMovies.size} de {movies.length} selecionado(s)
-                      </span>
+                      </div>
                     </div>
                     
-                    <div className="flex items-center space-x-3">
-                      <Button
-                        onClick={handleDownloadSelectedCovers}
-                        disabled={selectedMovies.size === 0}
-                        className="flex items-center space-x-2 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700"
-                      >
-                        <Download className="h-4 w-4" />
-                        <span>Baixar Capas</span>
-                      </Button>
-                      
-                      <Button
-                        onClick={handleGenerateBulkBanners}
-                        disabled={selectedMovies.size === 0}
-                        className="flex items-center space-x-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
-                      >
-                        <Image className="h-4 w-4" />
-                        <span>Gerar Banners</span>
-                      </Button>
-                      
-                      <Button
-                        onClick={handleExportSelected}
-                        disabled={selectedMovies.size === 0}
-                        className="flex items-center space-x-2 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700"
-                      >
-                        <Download className="h-4 w-4" />
-                        <span>{t('export.selected')}</span>
-                      </Button>
-                    </div>
+                    {selectedMovies.size > 0 && (
+                      <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                        <Button
+                          onClick={handleDownloadSelectedCovers}
+                          className="flex items-center space-x-2 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700"
+                        >
+                          <Download className="h-4 w-4" />
+                          <span>Baixar Capas Selecionadas</span>
+                        </Button>
+                        
+                        <Button
+                          onClick={handleGenerateBulkBanners}
+                          className="flex items-center space-x-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
+                        >
+                          <Image className="h-4 w-4" />
+                          <span>Gerar Banners Selecionados</span>
+                        </Button>
+                        
+                        <Button
+                          onClick={handleExportSelected}
+                          className="flex items-center space-x-2 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700"
+                        >
+                          <Download className="h-4 w-4" />
+                          <span>{t('export.selected')}</span>
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 )}
 

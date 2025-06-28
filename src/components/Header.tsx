@@ -6,6 +6,7 @@ import { useI18n } from '../contexts/I18nContext';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from './ui/button';
 import AuthModal from './AuthModal';
+import ApiKeyModal from './ApiKeyModal';
 
 const Header: React.FC = () => {
   const { theme, toggleTheme } = useTheme();
@@ -27,6 +28,9 @@ const Header: React.FC = () => {
 
           {/* Controls */}
           <div className="flex items-center space-x-4">
+            {/* API Key Configuration */}
+            <ApiKeyModal />
+
             {/* Language Toggle */}
             <Button
               variant="ghost"

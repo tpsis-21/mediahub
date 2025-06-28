@@ -42,12 +42,13 @@ export type MediaType = 'movie' | 'tv' | 'multi';
 class TMDBService {
   private readonly baseURL = 'https://api.themoviedb.org/3';
   private readonly imageBaseURL = 'https://image.tmdb.org/t/p/w500';
-  private readonly apiKey = import.meta.env.VITE_TMDB_API_KEY;
+
+  private getApiKey(): string {
+    return localStorage.getItem('tmdb_api_key') || '';
+  }
 
   constructor() {
-    if (!this.apiKey) {
-      console.warn('TMDB API Key não encontrada. Configure VITE_TMDB_API_KEY no ambiente.');
-    }
+    // Não precisa mais verificar no constructor
   }
 
   private async makeRequest(url: string): Promise<any> {
@@ -68,8 +69,9 @@ class TMDBService {
     }
 
     try {
-      if (!this.apiKey) {
-        throw new Error('TMDB API Key não configurada. Configure VITE_TMDB_API_KEY no ambiente.');
+      const apiKey = this.getApiKey();
+      if (!apiKey) {
+        throw new Error('TMDB API Key não configurada. Configure a chave da API nas configurações.');
       }
 
       console.log('Fazendo requisição para:', url);
@@ -123,7 +125,8 @@ class TMDBService {
   }
 
   async searchMulti(query: string, language: string = 'pt-BR'): Promise<SearchResult> {
-    const url = `${this.baseURL}/search/multi?api_key=${this.apiKey}&query=${encodeURIComponent(query)}&language=${language}`;
+    const apiKey = this.getApiKey();
+    const url = `${this.baseURL}/search/multi?api_key=${apiKey}&query=${encodeURIComponent(query)}&language=${language}`;
     const result = await this.makeRequest(url);
     
     // Filtrar apenas filmes e séries
@@ -135,7 +138,8 @@ class TMDBService {
   }
 
   async searchMovie(query: string, year?: string, language: string = 'pt-BR'): Promise<SearchResult> {
-    let url = `${this.baseURL}/search/movie?api_key=${this.apiKey}&query=${encodeURIComponent(query)}&language=${language}`;
+    const apiKey = this.getApiKey();
+    let url = `${this.baseURL}/search/movie?api_key=${apiKey}&query=${encodeURIComponent(query)}&language=${language}`;
     if (year) {
       url += `&year=${year}`;
     }
@@ -151,7 +155,8 @@ class TMDBService {
   }
 
   async searchTV(query: string, year?: string, language: string = 'pt-BR'): Promise<SearchResult> {
-    let url = `${this.baseURL}/search/tv?api_key=${this.apiKey}&query=${encodeURIComponent(query)}&language=${language}`;
+    const apiKey = this.getApiKey();
+    let url = `${this.baseURL}/search/tv?api_key=${apiKey}&query=${encodeURIComponent(query)}&language=${language}`;
     if (year) {
       url += `&first_air_date_year=${year}`;
     }

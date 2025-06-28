@@ -85,11 +85,41 @@ class ExportService {
     }
   }
 
+  async downloadSelectedCovers(items: MovieData[]): Promise<void> {
+    const zip = new JSZip();
+    
+    for (const item of items) {
+      if (item.poster_path) {
+        try {
+          const imageUrl = `https://image.tmdb.org/t/p/w500${item.poster_path}`;
+          const response = await fetch(imageUrl);
+          const blob = await response.blob();
+          
+          const filename = `${(item.title || item.name || 'cover').replace(/[^a-z0-9]/gi, '_').toLowerCase()}.jpg`;
+          zip.file(filename, blob);
+        } catch (error) {
+          console.error(`Erro ao baixar capa para ${item.title || item.name}:`, error);
+        }
+      }
+    }
+
+    // Gerar e baixar o ZIP
+    const content = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(content);
+    
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `covers_${new Date().toISOString().split('T')[0]}.zip`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    URL.revokeObjectURL(url);
+  }
+
   copyToClipboard(text: string): Promise<void> {
     return navigator.clipboard.writeText(text);
   }
 }
 
 export const exportService = new ExportService();
-
-// Instalar JSZip

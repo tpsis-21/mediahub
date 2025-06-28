@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Download, CheckSquare, Square, Image } from 'lucide-react';
 import { MovieData, tmdbService, MediaType } from '../services/tmdbService';
@@ -114,6 +115,32 @@ const Index = () => {
     }
   };
 
+  const handleDownloadSelectedCovers = async () => {
+    const selected = movies.filter(m => selectedMovies.has(m.id));
+    if (selected.length === 0) {
+      toast({
+        title: "Nenhum item selecionado",
+        description: "Selecione pelo menos um item para baixar as capas",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      await exportService.downloadSelectedCovers(selected);
+      toast({
+        title: "Sucesso",
+        description: `${selected.length} capa(s) baixada(s) com sucesso!`,
+      });
+    } catch (error) {
+      toast({
+        title: "Erro",
+        description: "Erro ao baixar capas",
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleExportSelected = async () => {
     const selected = movies.filter(m => selectedMovies.has(m.id));
     if (selected.length === 0) {
@@ -203,6 +230,15 @@ const Index = () => {
                     
                     <div className="flex items-center space-x-3">
                       <Button
+                        onClick={handleDownloadSelectedCovers}
+                        disabled={selectedMovies.size === 0}
+                        className="flex items-center space-x-2 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700"
+                      >
+                        <Download className="h-4 w-4" />
+                        <span>Baixar Capas</span>
+                      </Button>
+                      
+                      <Button
                         onClick={handleGenerateBulkBanners}
                         disabled={selectedMovies.size === 0}
                         className="flex items-center space-x-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
@@ -214,7 +250,7 @@ const Index = () => {
                       <Button
                         onClick={handleExportSelected}
                         disabled={selectedMovies.size === 0}
-                        className="flex items-center space-x-2 bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700"
+                        className="flex items-center space-x-2 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700"
                       >
                         <Download className="h-4 w-4" />
                         <span>{t('export.selected')}</span>

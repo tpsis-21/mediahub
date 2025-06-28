@@ -61,6 +61,14 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
       secondaryColor: '#8b5cf6',
       gradientFrom: '#6d28d9',
       gradientTo: '#7c3aed'
+    },
+    {
+      id: 5,
+      name: 'Preto Elegante',
+      primaryColor: '#1f2937',
+      secondaryColor: '#374151',
+      gradientFrom: '#000000',
+      gradientTo: '#1f2937'
     }
   ];
 
@@ -69,7 +77,7 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
     story: { width: 1080, height: 1920, label: '1080x1920 (Stories)' }
   };
 
-  const handleDownloadBanner = () => {
+  const handleDownloadBanner = async () => {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     
@@ -81,105 +89,261 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
     canvas.width = format.width;
     canvas.height = format.height;
 
-    // Fundo principal
+    try {
+      // Carregar a imagem da capa
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      
+      await new Promise((resolve, reject) => {
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = imageUrl;
+      });
+
+      // Fundo principal
+      const mainGradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+      mainGradient.addColorStop(0, template.gradientFrom);
+      mainGradient.addColorStop(1, template.gradientTo);
+      ctx.fillStyle = mainGradient;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      if (selectedFormat === 'square') {
+        // Layout quadrado (1080x1080)
+        const leftColumnWidth = canvas.width * 0.35;
+        const rightColumnWidth = canvas.width * 0.65;
+        const rightColumnStart = leftColumnWidth;
+        
+        // Desenhar a capa na coluna esquerda
+        const coverMargin = 30;
+        const coverWidth = leftColumnWidth - (coverMargin * 2);
+        const coverHeight = canvas.height - 200;
+        const coverY = 30;
+        
+        ctx.drawImage(img, coverMargin, coverY, coverWidth, coverHeight);
+        
+        // Título na coluna direita
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 56px Arial, sans-serif';
+        ctx.textAlign = 'left';
+        
+        const titleWords = title.split(' ');
+        let titleLine = '';
+        let titleY = 100;
+        const titleLineHeight = 70;
+        const titleMaxWidth = rightColumnWidth - 80;
+        
+        for (let i = 0; i < titleWords.length; i++) {
+          const testLine = titleLine + titleWords[i] + ' ';
+          const metrics = ctx.measureText(testLine);
+          
+          if (metrics.width > titleMaxWidth && i > 0) {
+            ctx.fillText(titleLine, rightColumnStart + 40, titleY);
+            titleLine = titleWords[i] + ' ';
+            titleY += titleLineHeight;
+          } else {
+            titleLine = testLine;
+          }
+        }
+        ctx.fillText(titleLine, rightColumnStart + 40, titleY);
+        
+        // Retângulo com gradiente para categoria
+        const rectY = titleY + 60;
+        const rectGradient = ctx.createLinearGradient(rightColumnStart + 40, rectY, rightColumnStart + 280, rectY + 60);
+        rectGradient.addColorStop(0, template.primaryColor);
+        rectGradient.addColorStop(1, template.secondaryColor);
+        ctx.fillStyle = rectGradient;
+        ctx.beginPath();
+        ctx.roundRect(rightColumnStart + 40, rectY, 280, 60, 30);
+        ctx.fill();
+        
+        // Texto no retângulo
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 24px Arial';
+        ctx.textAlign = 'center';
+        const categoryText = movie.media_type === 'movie' ? 'FILME' : 'SÉRIE';
+        ctx.fillText(`${categoryText} ${year}`, rightColumnStart + 180, rectY + 40);
+        
+        // Rótulo SINOPSE vertical
+        ctx.save();
+        ctx.translate(rightColumnStart + 40, rectY + 140);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 20px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('SINOPSE', 0, 0);
+        ctx.restore();
+        
+        // Sinopse
+        ctx.fillStyle = 'white';
+        ctx.font = '20px Arial';
+        ctx.textAlign = 'left';
+        const synopsis = movie.overview || 'Sinopse não disponível';
+        wrapText(ctx, synopsis, rightColumnStart + 80, rectY + 140, rightColumnWidth - 120, 26, 12);
+        
+        // Avaliação no canto superior direito
+        if (movie.vote_average > 0) {
+          ctx.fillStyle = 'rgba(0,0,0,0.7)';
+          ctx.beginPath();
+          ctx.roundRect(canvas.width - 140, 30, 120, 50, 25);
+          ctx.fill();
+          ctx.fillStyle = 'white';
+          ctx.font = 'bold 20px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText(`⭐ ${movie.vote_average.toFixed(1)}`, canvas.width - 80, 60);
+        }
+        
+        // Rodapé
+        const footerY = canvas.height - 150;
+        const footerGradient = ctx.createLinearGradient(0, footerY, canvas.width, footerY + 150);
+        footerGradient.addColorStop(0, 'rgba(0,0,0,0.8)');
+        footerGradient.addColorStop(1, template.gradientFrom);
+        ctx.fillStyle = footerGradient;
+        ctx.fillRect(0, footerY, canvas.width, 150);
+        
+        // Elementos do rodapé
+        drawFooterElements(ctx, canvas.width, footerY, template);
+        
+      } else {
+        // Layout vertical (1080x1920) - Stories
+        const headerHeight = 300;
+        const footerHeight = 200;
+        const contentHeight = canvas.height - headerHeight - footerHeight;
+        
+        // Header com capa em destaque
+        const coverSize = 200;
+        const coverX = (canvas.width - coverSize) / 2;
+        const coverY = 50;
+        
+        ctx.drawImage(img, coverX, coverY, coverSize, coverSize * 1.5);
+        
+        // Título abaixo da capa
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 48px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        
+        const titleWords = title.split(' ');
+        let titleLine = '';
+        let titleY = coverY + 320;
+        const titleLineHeight = 60;
+        const titleMaxWidth = canvas.width - 80;
+        
+        for (let i = 0; i < titleWords.length; i++) {
+          const testLine = titleLine + titleWords[i] + ' ';
+          const metrics = ctx.measureText(testLine);
+          
+          if (metrics.width > titleMaxWidth && i > 0) {
+            ctx.fillText(titleLine, canvas.width / 2, titleY);
+            titleLine = titleWords[i] + ' ';
+            titleY += titleLineHeight;
+          } else {
+            titleLine = testLine;
+          }
+        }
+        ctx.fillText(titleLine, canvas.width / 2, titleY);
+        
+        // Retângulo com categoria
+        const rectY = titleY + 40;
+        const rectWidth = 300;
+        const rectX = (canvas.width - rectWidth) / 2;
+        const rectGradient = ctx.createLinearGradient(rectX, rectY, rectX + rectWidth, rectY + 60);
+        rectGradient.addColorStop(0, template.primaryColor);
+        rectGradient.addColorStop(1, template.secondaryColor);
+        ctx.fillStyle = rectGradient;
+        ctx.beginPath();
+        ctx.roundRect(rectX, rectY, rectWidth, 60, 30);
+        ctx.fill();
+        
+        // Texto no retângulo
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 24px Arial';
+        ctx.textAlign = 'center';
+        const categoryText = movie.media_type === 'movie' ? 'FILME' : 'SÉRIE';
+        ctx.fillText(`${categoryText} ${year}`, canvas.width / 2, rectY + 40);
+        
+        // Sinopse centralizada
+        ctx.fillStyle = 'white';
+        ctx.font = '22px Arial';
+        ctx.textAlign = 'left';
+        const synopsis = movie.overview || 'Sinopse não disponível';
+        wrapText(ctx, synopsis, 60, rectY + 120, canvas.width - 120, 30, 15);
+        
+        // Avaliação
+        if (movie.vote_average > 0) {
+          ctx.fillStyle = 'rgba(0,0,0,0.7)';
+          ctx.beginPath();
+          ctx.roundRect(canvas.width - 140, 30, 120, 50, 25);
+          ctx.fill();
+          ctx.fillStyle = 'white';
+          ctx.font = 'bold 20px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText(`⭐ ${movie.vote_average.toFixed(1)}`, canvas.width - 80, 60);
+        }
+        
+        // Rodapé
+        const footerY = canvas.height - footerHeight;
+        const footerGradient = ctx.createLinearGradient(0, footerY, canvas.width, footerY + footerHeight);
+        footerGradient.addColorStop(0, 'rgba(0,0,0,0.8)');
+        footerGradient.addColorStop(1, template.gradientFrom);
+        ctx.fillStyle = footerGradient;
+        ctx.fillRect(0, footerY, canvas.width, footerHeight);
+        
+        // Elementos do rodapé para stories
+        drawFooterElementsStory(ctx, canvas.width, footerY, template);
+      }
+
+      // Download
+      canvas.toBlob((blob) => {
+        if (blob) {
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `banner_professional_${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${selectedFormat}.png`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }
+      });
+
+      onClose();
+    } catch (error) {
+      console.error('Erro ao gerar banner:', error);
+      // Fallback sem imagem
+      generateFallbackBanner();
+    }
+  };
+
+  const generateFallbackBanner = () => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d')!;
+    const format = formatDimensions[selectedFormat];
+    const template = templates.find(t => t.id === selectedTemplate)!;
+    
+    canvas.width = format.width;
+    canvas.height = format.height;
+
+    // Mesmo código do banner mas sem a imagem da capa
     const mainGradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
     mainGradient.addColorStop(0, template.gradientFrom);
     mainGradient.addColorStop(1, template.gradientTo);
     ctx.fillStyle = mainGradient;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Para formato quadrado - layout de duas colunas
+    // Placeholder para capa
     if (selectedFormat === 'square') {
-      const leftColumnWidth = canvas.width * 0.4;
-      const rightColumnWidth = canvas.width * 0.6;
-      const rightColumnStart = leftColumnWidth;
+      const leftColumnWidth = canvas.width * 0.35;
+      const coverMargin = 30;
+      const coverWidth = leftColumnWidth - (coverMargin * 2);
+      const coverHeight = canvas.height - 200;
       
-      // Área da capa (coluna esquerda)
-      ctx.fillStyle = 'rgba(0,0,0,0.2)';
-      ctx.fillRect(20, 20, leftColumnWidth - 40, canvas.height - 200);
-      
-      // Coluna direita - título
-      ctx.fillStyle = 'white';
-      ctx.font = 'bold 48px Arial, sans-serif';
-      ctx.textAlign = 'left';
-      
-      const titleWords = title.split(' ');
-      let titleLine = '';
-      let titleY = 80;
-      const titleLineHeight = 60;
-      const titleMaxWidth = rightColumnWidth - 60;
-      
-      for (let i = 0; i < titleWords.length; i++) {
-        const testLine = titleLine + titleWords[i] + ' ';
-        const metrics = ctx.measureText(testLine);
-        
-        if (metrics.width > titleMaxWidth && i > 0) {
-          ctx.fillText(titleLine, rightColumnStart + 30, titleY);
-          titleLine = titleWords[i] + ' ';
-          titleY += titleLineHeight;
-        } else {
-          titleLine = testLine;
-        }
-      }
-      ctx.fillText(titleLine, rightColumnStart + 30, titleY);
-      
-      // Retângulo com gradiente para ano/categoria
-      const rectY = titleY + 40;
-      const rectGradient = ctx.createLinearGradient(rightColumnStart + 30, rectY, rightColumnStart + 250, rectY + 50);
-      rectGradient.addColorStop(0, template.primaryColor);
-      rectGradient.addColorStop(1, template.secondaryColor);
-      ctx.fillStyle = rectGradient;
-      roundRect(ctx, rightColumnStart + 30, rectY, 220, 50, 25);
-      ctx.fill();
-      
-      // Texto no retângulo
-      ctx.fillStyle = 'white';
-      ctx.font = 'bold 20px Arial';
+      ctx.fillStyle = 'rgba(255,255,255,0.1)';
+      ctx.fillRect(coverMargin, 30, coverWidth, coverHeight);
+      ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      ctx.font = '24px Arial';
       ctx.textAlign = 'center';
-      const categoryText = movie.media_type === 'movie' ? 'FILME' : 'SÉRIE';
-      ctx.fillText(`${categoryText} ${year}`, rightColumnStart + 140, rectY + 32);
-      
-      // Rótulo SINOPSE vertical
-      ctx.save();
-      ctx.translate(rightColumnStart + 30, rectY + 100);
-      ctx.rotate(-Math.PI / 2);
-      ctx.fillStyle = 'white';
-      ctx.font = 'bold 16px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText('SINOPSE', 0, 0);
-      ctx.restore();
-      
-      // Sinopse
-      ctx.fillStyle = 'white';
-      ctx.font = '16px Arial';
-      ctx.textAlign = 'left';
-      const synopsis = movie.overview || 'Sinopse não disponível';
-      wrapText(ctx, synopsis, rightColumnStart + 70, rectY + 120, rightColumnWidth - 100, 20);
-      
-      // Avaliação no canto superior direito
-      if (movie.vote_average > 0) {
-        ctx.fillStyle = 'rgba(0,0,0,0.7)';
-        roundRect(ctx, canvas.width - 120, 20, 100, 40, 20);
-        ctx.fill();
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 16px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText(`⭐ ${movie.vote_average.toFixed(1)}`, canvas.width - 70, 45);
-      }
-      
-      // Rodapé
-      const footerY = canvas.height - 120;
-      const footerGradient = ctx.createLinearGradient(0, footerY, canvas.width, footerY + 120);
-      footerGradient.addColorStop(0, 'rgba(0,0,0,0.8)');
-      footerGradient.addColorStop(1, template.gradientFrom);
-      ctx.fillStyle = footerGradient;
-      ctx.fillRect(0, footerY, canvas.width, 120);
-      
-      // Elementos do rodapé
-      drawFooterElements(ctx, canvas.width, footerY, template);
+      ctx.fillText('CAPA', leftColumnWidth / 2, canvas.height / 2);
     }
 
-    // Download
     canvas.toBlob((blob) => {
       if (blob) {
         const url = URL.createObjectURL(blob);
@@ -192,32 +356,16 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
         URL.revokeObjectURL(url);
       }
     });
-
-    onClose();
-  };
-
-  // Função auxiliar para desenhar retângulos arredondados
-  const roundRect = (ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) => {
-    ctx.beginPath();
-    ctx.moveTo(x + radius, y);
-    ctx.lineTo(x + width - radius, y);
-    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
-    ctx.lineTo(x + width, y + height - radius);
-    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
-    ctx.lineTo(x + radius, y + height);
-    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
-    ctx.lineTo(x, y + radius);
-    ctx.quadraticCurveTo(x, y, x + radius, y);
-    ctx.closePath();
   };
 
   // Função para quebrar texto
-  const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number) => {
+  const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number, maxLines: number = 10) => {
     const words = text.split(' ');
     let line = '';
     let currentY = y;
+    let lineCount = 0;
 
-    for (let i = 0; i < words.length; i++) {
+    for (let i = 0; i < words.length && lineCount < maxLines; i++) {
       const testLine = line + words[i] + ' ';
       const metrics = ctx.measureText(testLine);
       
@@ -225,56 +373,128 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
         ctx.fillText(line, x, currentY);
         line = words[i] + ' ';
         currentY += lineHeight;
+        lineCount++;
       } else {
         line = testLine;
       }
     }
-    ctx.fillText(line, x, currentY);
+    if (lineCount < maxLines) {
+      ctx.fillText(line, x, currentY);
+    }
   };
 
-  // Função para desenhar elementos do rodapé
+  // Função para desenhar elementos do rodapé (formato quadrado)
   const drawFooterElements = (ctx: CanvasRenderingContext2D, canvasWidth: number, footerY: number, template: any) => {
-    const iconSize = 32;
-    const iconY = footerY + 60;
     let currentX = 40;
+    const iconY = footerY + 80;
 
     // Badge "EXPERIMENTE O TESTE GRÁTIS"
     ctx.fillStyle = template.primaryColor;
-    roundRect(ctx, currentX, footerY + 20, 250, 40, 20);
+    ctx.beginPath();
+    ctx.roundRect(currentX, footerY + 30, 300, 50, 25);
+    ctx.fill();
+    
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 18px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('✓ EXPERIMENTE O TESTE GRÁTIS', currentX + 150, footerY + 60);
+    
+    currentX += 350;
+
+    // Ícones de dispositivos
+    ctx.fillStyle = 'white';
+    ctx.font = '16px Arial';
+    ctx.textAlign = 'center';
+    
+    // Smartphone
+    ctx.fillStyle = 'white';
+    ctx.font = '32px Arial';
+    ctx.fillText('📱', currentX, iconY);
+    ctx.font = '14px Arial';
+    ctx.fillText('Celular', currentX, iconY + 25);
+    currentX += 80;
+    
+    // TV
+    ctx.font = '32px Arial';
+    ctx.fillText('📺', currentX, iconY);
+    ctx.font = '14px Arial';
+    ctx.fillText('Smart TV', currentX, iconY + 25);
+    currentX += 100;
+    
+    // Computer
+    ctx.font = '32px Arial';
+    ctx.fillText('💻', currentX, iconY);
+    ctx.font = '14px Arial';
+    ctx.fillText('Computador', currentX, iconY + 25);
+    currentX += 120;
+    
+    // Selo "Qualidade Garantida"
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.beginPath();
+    ctx.roundRect(currentX, footerY + 40, 150, 40, 20);
     ctx.fill();
     
     ctx.fillStyle = 'white';
     ctx.font = 'bold 14px Arial';
     ctx.textAlign = 'center';
-    ctx.fillText('✓ EXPERIMENTE O TESTE GRÁTIS', currentX + 125, footerY + 45);
-    
-    currentX += 280;
+    ctx.fillText('🛡️ Qualidade Garantida', currentX + 75, footerY + 65);
+  };
 
-    // Ícones de dispositivos (simulados com texto)
-    ctx.fillStyle = 'white';
-    ctx.font = '12px Arial';
-    ctx.textAlign = 'center';
+  // Função para desenhar elementos do rodapé (formato stories)
+  const drawFooterElementsStory = (ctx: CanvasRenderingContext2D, canvasWidth: number, footerY: number, template: any) => {
+    // Badge centralizado
+    const badgeWidth = 350;
+    const badgeX = (canvasWidth - badgeWidth) / 2;
     
-    ctx.fillText('📱', currentX, iconY);
-    ctx.fillText('Celular', currentX, iconY + 20);
-    currentX += 80;
-    
-    ctx.fillText('📺', currentX, iconY);
-    ctx.fillText('Smart TV', currentX, iconY + 20);
-    currentX += 80;
-    
-    ctx.fillText('💻', currentX, iconY);
-    ctx.fillText('Computador', currentX, iconY + 20);
-    currentX += 120;
-    
-    // Selo "Qualidade Garantida"
-    ctx.fillStyle = 'rgba(255,255,255,0.2)';
-    roundRect(ctx, currentX, footerY + 30, 120, 30, 15);
+    ctx.fillStyle = template.primaryColor;
+    ctx.beginPath();
+    ctx.roundRect(badgeX, footerY + 20, badgeWidth, 50, 25);
     ctx.fill();
     
     ctx.fillStyle = 'white';
-    ctx.font = 'bold 12px Arial';
-    ctx.fillText('🛡️ Qualidade Garantida', currentX + 60, footerY + 50);
+    ctx.font = 'bold 18px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('✓ EXPERIMENTE O TESTE GRÁTIS', canvasWidth / 2, footerY + 50);
+    
+    // Ícones centralizados
+    const iconsY = footerY + 100;
+    const iconSpacing = 150;
+    const startX = (canvasWidth - (iconSpacing * 3)) / 2;
+    
+    ctx.fillStyle = 'white';
+    ctx.font = '32px Arial';
+    ctx.textAlign = 'center';
+    
+    // Smartphone
+    ctx.fillText('📱', startX, iconsY);
+    ctx.font = '14px Arial';
+    ctx.fillText('Celular', startX, iconsY + 25);
+    
+    // TV
+    ctx.font = '32px Arial';
+    ctx.fillText('📺', startX + iconSpacing, iconsY);
+    ctx.font = '14px Arial';
+    ctx.fillText('Smart TV', startX + iconSpacing, iconsY + 25);
+    
+    // Computer
+    ctx.font = '32px Arial';
+    ctx.fillText('💻', startX + (iconSpacing * 2), iconsY);
+    ctx.font = '14px Arial';
+    ctx.fillText('Computador', startX + (iconSpacing * 2), iconsY + 25);
+    
+    // Selo centralizado
+    const sealWidth = 200;
+    const sealX = (canvasWidth - sealWidth) / 2;
+    
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.beginPath();
+    ctx.roundRect(sealX, footerY + 150, sealWidth, 40, 20);
+    ctx.fill();
+    
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 14px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('🛡️ Qualidade Garantida', canvasWidth / 2, footerY + 175);
   };
 
   return (
@@ -313,7 +533,7 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           {/* Seleção de Template */}
           <div>
             <Label className="text-lg font-semibold mb-3 block">Escolha um Template Profissional</Label>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               {templates.map((template) => (
                 <div
                   key={template.id}
@@ -325,7 +545,7 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
                   onClick={() => setSelectedTemplate(template.id)}
                 >
                   <div 
-                    className="rounded-lg p-4 text-center text-white font-semibold"
+                    className="rounded-lg p-4 text-center text-white font-semibold text-sm"
                     style={{
                       background: `linear-gradient(135deg, ${template.gradientFrom}, ${template.gradientTo})`
                     }}

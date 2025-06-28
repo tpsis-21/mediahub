@@ -153,7 +153,7 @@ const MovieCard: React.FC<MovieCardProps> = ({ movie, isSelected, onToggleSelect
               className="flex items-center space-x-1 text-xs border-purple-300 text-purple-600 hover:bg-purple-50 dark:border-purple-700 dark:text-purple-400 dark:hover:bg-purple-950"
             >
               <Image className="h-3 w-3" />
-              <span>Banner Pro</span>
+              <span>Gerar Banner</span>
             </Button>
           </div>
         </CardContent>

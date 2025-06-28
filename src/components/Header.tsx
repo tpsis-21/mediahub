@@ -6,7 +6,6 @@ import { useI18n } from '../contexts/I18nContext';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from './ui/button';
 import AuthModal from './AuthModal';
-import ApiKeyModal from './ApiKeyModal';
 
 const Header: React.FC = () => {
   const { theme, toggleTheme } = useTheme();
@@ -20,23 +19,22 @@ const Header: React.FC = () => {
         <div className="flex justify-between items-center h-16">
           {/* Logo */}
           <div className="flex items-center space-x-2">
-            <Search className="h-8 w-8 text-blue-600 dark:text-blue-400" />
-            <h1 className="text-xl font-bold text-gray-900 dark:text-white">
+            <div className="bg-gradient-to-r from-blue-600 to-purple-600 p-2 rounded-lg">
+              <Search className="h-6 w-6 text-white" />
+            </div>
+            <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
               {t('app.title')}
             </h1>
           </div>
 
           {/* Controls */}
           <div className="flex items-center space-x-4">
-            {/* API Key Configuration */}
-            <ApiKeyModal />
-
             {/* Language Toggle */}
             <Button
               variant="ghost"
               size="sm"
               onClick={() => setLanguage(language === 'pt-BR' ? 'en-US' : 'pt-BR')}
-              className="flex items-center space-x-1"
+              className="flex items-center space-x-1 hover:bg-blue-50 dark:hover:bg-blue-900"
             >
               <Globe className="h-4 w-4" />
               <span className="text-sm">{language === 'pt-BR' ? 'PT' : 'EN'}</span>
@@ -48,6 +46,7 @@ const Header: React.FC = () => {
               size="sm"
               onClick={toggleTheme}
               aria-label={t('theme.toggle')}
+              className="hover:bg-blue-50 dark:hover:bg-blue-900"
             >
               {theme === 'light' ? (
                 <Moon className="h-4 w-4" />
@@ -67,7 +66,7 @@ const Header: React.FC = () => {
                   variant="ghost"
                   size="sm"
                   onClick={logout}
-                  className="flex items-center space-x-1"
+                  className="flex items-center space-x-1 hover:bg-red-50 dark:hover:bg-red-900 hover:text-red-600"
                 >
                   <LogOut className="h-4 w-4" />
                   <span>{t('auth.logout')}</span>
@@ -78,6 +77,7 @@ const Header: React.FC = () => {
                 variant="outline"
                 size="sm"
                 onClick={() => setShowAuthModal(true)}
+                className="border-blue-500 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900"
               >
                 {t('auth.login')}
               </Button>

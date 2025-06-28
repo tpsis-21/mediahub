@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, CheckSquare, Square } from 'lucide-react';
+import { Download, CheckSquare, Square, Image } from 'lucide-react';
 import { MovieData, tmdbService, MediaType } from '../services/tmdbService';
 import { historyService, SearchHistoryItem } from '../services/historyService';
 import { exportService } from '../services/exportService';
@@ -10,6 +10,7 @@ import Header from '../components/Header';
 import SearchForm from '../components/SearchForm';
 import MovieCard from '../components/MovieCard';
 import SearchHistory from '../components/SearchHistory';
+import BulkBannerModal from '../components/BulkBannerModal';
 import { Button } from '../components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 
@@ -22,6 +23,7 @@ const Index = () => {
   const [selectedMovies, setSelectedMovies] = useState<Set<number>>(new Set());
   const [isLoading, setIsLoading] = useState(false);
   const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
+  const [showBulkBannerModal, setShowBulkBannerModal] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -43,7 +45,6 @@ const Index = () => {
         
         const searchResult = await tmdbService.searchByType(title, mediaType, year, language);
         
-        // Filtrar por ano se especificado
         let results = searchResult.results;
         if (year && results.length > 0) {
           results = results.filter(movie => {
@@ -56,14 +57,12 @@ const Index = () => {
         allResults.push(...results);
       }
 
-      // Remover duplicatas
       const uniqueResults = allResults.filter((movie, index, self) => 
         index === self.findIndex(m => m.id === movie.id)
       );
 
       setMovies(uniqueResults);
 
-      // Adicionar ao histórico se usuário estiver logado
       if (user && uniqueResults.length > 0) {
         historyService.addToHistory({
           query: queries.join(', '),
@@ -141,41 +140,55 @@ const Index = () => {
     }
   };
 
+  const handleGenerateBulkBanners = () => {
+    const selected = movies.filter(m => selectedMovies.has(m.id));
+    if (selected.length === 0) {
+      toast({
+        title: "Nenhum item selecionado",
+        description: "Selecione pelo menos um item para gerar banners",
+        variant: "destructive",
+      });
+      return;
+    }
+    setShowBulkBannerModal(true);
+  };
+
   const handleRerunSearch = (item: SearchHistoryItem) => {
     setMovies(item.results);
     setSelectedMovies(new Set());
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50 dark:from-gray-900 dark:via-blue-900 dark:to-purple-900">
       <Header />
       
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="space-y-6">
-          {/* Formulário de Busca */}
           <SearchForm onSearch={handleSearch} isLoading={isLoading} />
 
-          {/* Conteúdo Principal */}
           {user ? (
             <Tabs defaultValue="results" className="space-y-6">
-              <TabsList>
-                <TabsTrigger value="results">Resultados</TabsTrigger>
-                <TabsTrigger value="history">Histórico</TabsTrigger>
+              <TabsList className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm">
+                <TabsTrigger value="results" className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-blue-500 data-[state=active]:to-purple-500 data-[state=active]:text-white">
+                  Resultados
+                </TabsTrigger>
+                <TabsTrigger value="history" className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-blue-500 data-[state=active]:to-purple-500 data-[state=active]:text-white">
+                  Histórico
+                </TabsTrigger>
               </TabsList>
               
               <TabsContent value="results" className="space-y-6">
-                {/* Controles de Seleção */}
                 {movies.length > 0 && (
-                  <div className="flex items-center justify-between bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm">
+                  <div className="flex items-center justify-between bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm rounded-xl p-6 shadow-lg border border-white/20">
                     <div className="flex items-center space-x-4">
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={handleSelectAll}
-                        className="flex items-center space-x-2"
+                        className="flex items-center space-x-2 border-blue-300 hover:bg-blue-50 dark:border-blue-700 dark:hover:bg-blue-900"
                       >
                         {selectedMovies.size === movies.length ? (
-                          <CheckSquare className="h-4 w-4" />
+                          <CheckSquare className="h-4 w-4 text-blue-600" />
                         ) : (
                           <Square className="h-4 w-4" />
                         )}
@@ -183,26 +196,36 @@ const Index = () => {
                           {selectedMovies.size === movies.length ? 'Desmarcar Todos' : 'Selecionar Todos'}
                         </span>
                       </Button>
-                      <span className="text-sm text-gray-600 dark:text-gray-400">
+                      <span className="text-sm text-gray-600 dark:text-gray-400 font-medium">
                         {selectedMovies.size} de {movies.length} selecionado(s)
                       </span>
                     </div>
                     
-                    <Button
-                      onClick={handleExportSelected}
-                      disabled={selectedMovies.size === 0}
-                      className="flex items-center space-x-2"
-                    >
-                      <Download className="h-4 w-4" />
-                      <span>{t('export.selected')}</span>
-                    </Button>
+                    <div className="flex items-center space-x-3">
+                      <Button
+                        onClick={handleGenerateBulkBanners}
+                        disabled={selectedMovies.size === 0}
+                        className="flex items-center space-x-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
+                      >
+                        <Image className="h-4 w-4" />
+                        <span>Gerar Banners</span>
+                      </Button>
+                      
+                      <Button
+                        onClick={handleExportSelected}
+                        disabled={selectedMovies.size === 0}
+                        className="flex items-center space-x-2 bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700"
+                      >
+                        <Download className="h-4 w-4" />
+                        <span>{t('export.selected')}</span>
+                      </Button>
+                    </div>
                   </div>
                 )}
 
-                {/* Grid de Resultados */}
                 {isLoading ? (
                   <div className="text-center py-12">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gradient-to-r from-blue-600 to-purple-600 mx-auto mb-4"></div>
                     <p className="text-gray-600 dark:text-gray-400">{t('loading')}</p>
                   </div>
                 ) : (
@@ -228,9 +251,7 @@ const Index = () => {
               </TabsContent>
             </Tabs>
           ) : (
-            /* Conteúdo para usuários não logados */
             <div className="space-y-6">
-              {/* Grid de Resultados */}
               {isLoading ? (
                 <div className="text-center py-12">
                   <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
@@ -252,6 +273,14 @@ const Index = () => {
           )}
         </div>
       </main>
+
+      {/* Modal de Banners em Lote */}
+      {showBulkBannerModal && (
+        <BulkBannerModal
+          movies={movies.filter(m => selectedMovies.has(m.id))}
+          onClose={() => setShowBulkBannerModal(false)}
+        />
+      )}
     </div>
   );
 };

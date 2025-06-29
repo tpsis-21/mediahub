@@ -28,22 +28,21 @@ class ExportService {
             console.log(`Baixando capa: ${imageUrl}`);
             
             const response = await fetch(imageUrl, {
-              method: 'GET',
+              mode: 'cors',
               headers: {
-                'Accept': 'image/jpeg, image/png, image/webp, image/*',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'Accept': 'image/*'
               }
             });
             
             if (response.ok) {
-              const arrayBuffer = await response.arrayBuffer();
-              console.log(`Capa baixada com sucesso: ${arrayBuffer.byteLength} bytes`);
+              const blob = await response.blob();
+              console.log(`Capa baixada com sucesso: ${blob.size} bytes`);
               
               const filename = `${item.id}_${(item.title || item.name || 'cover').replace(/[^a-z0-9]/gi, '_').toLowerCase()}.jpg`;
-              zip.file(filename, arrayBuffer);
+              zip.file(filename, blob);
               successCount++;
             } else {
-              console.error(`Erro ao baixar ${imageUrl}: ${response.status} ${response.statusText}`);
+              console.error(`Erro ao baixar ${imageUrl}: ${response.status}`);
             }
           } catch (error) {
             console.error(`Erro ao processar capa para ${item.title || item.name}:`, error);
@@ -74,12 +73,11 @@ class ExportService {
       const link = document.createElement('a');
       link.href = url;
       link.download = `capas_${new Date().toISOString().split('T')[0]}.zip`;
-      link.style.display = 'none';
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       
-      setTimeout(() => URL.revokeObjectURL(url), 100);
+      URL.revokeObjectURL(url);
       
     } catch (error) {
       console.error('Erro no download das capas:', error);
@@ -88,43 +86,34 @@ class ExportService {
   }
 
   async downloadCover(item: MovieData): Promise<void> {
-    if (!item.poster_path) {
-      throw new Error('Item não possui capa disponível');
-    }
+    if (!item.poster_path) return;
 
     try {
       const imageUrl = `https://image.tmdb.org/t/p/w500${item.poster_path}`;
-      console.log(`Baixando capa individual: ${imageUrl}`);
-      
       const response = await fetch(imageUrl, {
-        method: 'GET',
+        mode: 'cors',
         headers: {
-          'Accept': 'image/jpeg, image/png, image/webp, image/*',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          'Accept': 'image/*'
         }
       });
       
       if (!response.ok) {
-        throw new Error(`Erro HTTP: ${response.status} ${response.statusText}`);
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
       
-      const arrayBuffer = await response.arrayBuffer();
-      const blob = new Blob([arrayBuffer], { type: 'image/jpeg' });
-      
-      console.log(`Capa individual baixada: ${blob.size} bytes`);
+      const blob = await response.blob();
       
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
       link.download = `${(item.title || item.name || 'cover').replace(/[^a-z0-9]/gi, '_').toLowerCase()}.jpg`;
-      link.style.display = 'none';
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       
-      setTimeout(() => URL.revokeObjectURL(url), 100);
+      URL.revokeObjectURL(url);
     } catch (error) {
-      console.error('Erro ao baixar capa individual:', error);
+      console.error('Erro ao baixar capa:', error);
       throw error;
     }
   }

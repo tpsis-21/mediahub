@@ -64,9 +64,27 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error(`Failed to load image: ${src}`));
-      img.src = src;
+      
+      img.onload = () => {
+        console.log('Imagem carregada com sucesso:', src);
+        resolve(img);
+      };
+      
+      img.onerror = (error) => {
+        console.error('Erro ao carregar imagem:', src, error);
+        reject(new Error(`Failed to load image: ${src}`));
+      };
+      
+      // Tentar diferentes resoluções se a principal falhar
+      const tryLoadImage = (url: string) => {
+        img.src = url;
+      };
+      
+      if (src.includes('w500')) {
+        tryLoadImage(src);
+      } else {
+        tryLoadImage(src);
+      }
     });
   };
 
@@ -127,6 +145,25 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+      // Carregar poster primeiro
+      let posterImg: HTMLImageElement | null = null;
+      if (movie.poster_path) {
+        const posterUrl = `https://image.tmdb.org/t/p/w500${movie.poster_path}`;
+        console.log('Tentando carregar poster:', posterUrl);
+        
+        try {
+          posterImg = await loadImage(posterUrl);
+        } catch (error) {
+          console.error('Falha ao carregar poster principal, tentando w300:', error);
+          try {
+            const fallbackUrl = `https://image.tmdb.org/t/p/w300${movie.poster_path}`;
+            posterImg = await loadImage(fallbackUrl);
+          } catch (fallbackError) {
+            console.error('Falha ao carregar poster fallback:', fallbackError);
+          }
+        }
+      }
+
       if (selectedFormat === 'square') {
         // Layout quadrado (1:1) - duas colunas
         const leftColumnWidth = canvas.width * 0.4;
@@ -140,44 +177,40 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
         const posterX = posterMargin;
         const posterY = (canvas.height - posterHeight) / 2;
 
-        try {
-          if (movie.poster_path) {
-            const posterUrl = `https://image.tmdb.org/t/p/w500${movie.poster_path}`;
-            console.log('Carregando poster:', posterUrl);
-            const posterImg = await loadImage(posterUrl);
-            
-            // Desenhar poster com bordas arredondadas e sombra
-            ctx.save();
-            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
-            ctx.shadowBlur = 20;
-            ctx.shadowOffsetX = 10;
-            ctx.shadowOffsetY = 10;
-            
-            ctx.beginPath();
-            ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
-            ctx.clip();
-            ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
-            ctx.restore();
-            
-            // Borda do poster
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
-            ctx.stroke();
-          }
-        } catch (error) {
-          console.error('Erro ao carregar poster:', error);
-          // Placeholder caso não carregue
+        if (posterImg) {
+          console.log('Desenhando poster no canvas');
+          // Desenhar poster com bordas arredondadas e sombra
+          ctx.save();
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+          ctx.shadowBlur = 20;
+          ctx.shadowOffsetX = 10;
+          ctx.shadowOffsetY = 10;
+          
+          ctx.beginPath();
+          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
+          ctx.clip();
+          ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
+          ctx.restore();
+          
+          // Borda do poster
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
+          ctx.stroke();
+        } else {
+          console.log('Poster não carregado, usando placeholder');
+          // Placeholder melhorado
           ctx.fillStyle = '#4b5563';
           ctx.beginPath();
           ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
           ctx.fill();
           
           ctx.fillStyle = '#9ca3af';
-          ctx.font = 'bold 32px Arial';
+          ctx.font = 'bold 24px Arial';
           ctx.textAlign = 'center';
-          ctx.fillText('POSTER', posterX + posterWidth/2, posterY + posterHeight/2);
+          ctx.fillText('SEM CAPA', posterX + posterWidth/2, posterY + posterHeight/2 - 10);
+          ctx.fillText('DISPONÍVEL', posterX + posterWidth/2, posterY + posterHeight/2 + 20);
         }
 
         // COLUNA DIREITA - CONTEÚDO
@@ -274,33 +307,28 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
         const posterY = 80;
 
         // CAPA
-        try {
-          if (movie.poster_path) {
-            const posterUrl = `https://image.tmdb.org/t/p/w500${movie.poster_path}`;
-            console.log('Carregando poster vertical:', posterUrl);
-            const posterImg = await loadImage(posterUrl);
-            
-            ctx.save();
-            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
-            ctx.shadowBlur = 20;
-            ctx.shadowOffsetX = 10;
-            ctx.shadowOffsetY = 10;
-            
-            ctx.beginPath();
-            ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
-            ctx.clip();
-            ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
-            ctx.restore();
-            
-            // Borda
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
-            ctx.stroke();
-          }
-        } catch (error) {
-          console.error('Erro ao carregar poster vertical:', error);
+        if (posterImg) {
+          console.log('Desenhando poster vertical no canvas');
+          ctx.save();
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+          ctx.shadowBlur = 20;
+          ctx.shadowOffsetX = 10;
+          ctx.shadowOffsetY = 10;
+          
+          ctx.beginPath();
+          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
+          ctx.clip();
+          ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
+          ctx.restore();
+          
+          // Borda
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
+          ctx.stroke();
+        } else {
+          console.log('Poster vertical não carregado, usando placeholder');
           // Placeholder
           ctx.fillStyle = '#4b5563';
           ctx.beginPath();
@@ -308,9 +336,10 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           ctx.fill();
           
           ctx.fillStyle = '#9ca3af';
-          ctx.font = 'bold 40px Arial';
+          ctx.font = 'bold 32px Arial';
           ctx.textAlign = 'center';
-          ctx.fillText('POSTER', posterX + posterWidth/2, posterY + posterHeight/2);
+          ctx.fillText('SEM CAPA', posterX + posterWidth/2, posterY + posterHeight/2 - 20);
+          ctx.fillText('DISPONÍVEL', posterX + posterWidth/2, posterY + posterHeight/2 + 20);
         }
 
         // TÍTULO abaixo do poster

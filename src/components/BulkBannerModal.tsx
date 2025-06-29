@@ -72,8 +72,17 @@ const BulkBannerModal: React.FC<BulkBannerModalProps> = ({ movies, onClose }) =>
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error(`Failed to load image: ${src}`));
+      
+      img.onload = () => {
+        console.log('Imagem carregada com sucesso (bulk):', src);
+        resolve(img);
+      };
+      
+      img.onerror = (error) => {
+        console.error('Erro ao carregar imagem (bulk):', src, error);
+        reject(new Error(`Failed to load image: ${src}`));
+      };
+      
       img.src = src;
     });
   };
@@ -125,6 +134,25 @@ const BulkBannerModal: React.FC<BulkBannerModalProps> = ({ movies, onClose }) =>
       ctx.fillStyle = mainGradient;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+      // Carregar poster primeiro
+      let posterImg: HTMLImageElement | null = null;
+      if (movie.poster_path) {
+        const posterUrl = `https://image.tmdb.org/t/p/w500${movie.poster_path}`;
+        console.log('Tentando carregar poster (bulk):', posterUrl);
+        
+        try {
+          posterImg = await loadImage(posterUrl);
+        } catch (error) {
+          console.error('Falha ao carregar poster principal (bulk), tentando w300:', error);
+          try {
+            const fallbackUrl = `https://image.tmdb.org/t/p/w300${movie.poster_path}`;
+            posterImg = await loadImage(fallbackUrl);
+          } catch (fallbackError) {
+            console.error('Falha ao carregar poster fallback (bulk):', fallbackError);
+          }
+        }
+      }
+
       if (selectedFormat === 'square') {
         // Layout quadrado (1:1) - duas colunas
         const leftColumnWidth = canvas.width * 0.4;
@@ -138,43 +166,40 @@ const BulkBannerModal: React.FC<BulkBannerModalProps> = ({ movies, onClose }) =>
         const posterX = posterMargin;
         const posterY = (canvas.height - posterHeight) / 2;
 
-        try {
-          if (movie.poster_path) {
-            const posterUrl = `https://image.tmdb.org/t/p/w500${movie.poster_path}`;
-            const posterImg = await loadImage(posterUrl);
-            
-            // Desenhar poster com bordas arredondadas e sombra
-            ctx.save();
-            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
-            ctx.shadowBlur = 20;
-            ctx.shadowOffsetX = 10;
-            ctx.shadowOffsetY = 10;
-            
-            ctx.beginPath();
-            ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
-            ctx.clip();
-            ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
-            ctx.restore();
-            
-            // Borda do poster
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
-            ctx.stroke();
-          }
-        } catch (error) {
-          console.error('Erro ao carregar poster:', error);
-          // Placeholder caso não carregue
+        if (posterImg) {
+          console.log('Desenhando poster no canvas (bulk)');
+          // Desenhar poster com bordas arredondadas e sombra
+          ctx.save();
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+          ctx.shadowBlur = 20;
+          ctx.shadowOffsetX = 10;
+          ctx.shadowOffsetY = 10;
+          
+          ctx.beginPath();
+          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
+          ctx.clip();
+          ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
+          ctx.restore();
+          
+          // Borda do poster
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
+          ctx.stroke();
+        } else {
+          console.log('Poster não carregado (bulk), usando placeholder');
+          // Placeholder melhorado
           ctx.fillStyle = '#4b5563';
           ctx.beginPath();
           ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
           ctx.fill();
           
           ctx.fillStyle = '#9ca3af';
-          ctx.font = 'bold 32px Arial';
+          ctx.font = 'bold 24px Arial';
           ctx.textAlign = 'center';
-          ctx.fillText('POSTER', posterX + posterWidth/2, posterY + posterHeight/2);
+          ctx.fillText('SEM CAPA', posterX + posterWidth/2, posterY + posterHeight/2 - 10);
+          ctx.fillText('DISPONÍVEL', posterX + posterWidth/2, posterY + posterHeight/2 + 20);
         }
 
         // COLUNA DIREITA - CONTEÚDO
@@ -271,32 +296,28 @@ const BulkBannerModal: React.FC<BulkBannerModalProps> = ({ movies, onClose }) =>
         const posterY = 80;
 
         // CAPA
-        try {
-          if (movie.poster_path) {
-            const posterUrl = `https://image.tmdb.org/t/p/w500${movie.poster_path}`;
-            const posterImg = await loadImage(posterUrl);
-            
-            ctx.save();
-            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
-            ctx.shadowBlur = 20;
-            ctx.shadowOffsetX = 10;
-            ctx.shadowOffsetY = 10;
-            
-            ctx.beginPath();
-            ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
-            ctx.clip();
-            ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
-            ctx.restore();
-            
-            // Borda
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
-            ctx.stroke();
-          }
-        } catch (error) {
-          console.error('Erro ao carregar poster vertical:', error);
+        if (posterImg) {
+          console.log('Desenhando poster vertical no canvas (bulk)');
+          ctx.save();
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+          ctx.shadowBlur = 20;
+          ctx.shadowOffsetX = 10;
+          ctx.shadowOffsetY = 10;
+          
+          ctx.beginPath();
+          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
+          ctx.clip();
+          ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
+          ctx.restore();
+          
+          // Borda
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
+          ctx.stroke();
+        } else {
+          console.log('Poster vertical não carregado (bulk), usando placeholder');
           // Placeholder
           ctx.fillStyle = '#4b5563';
           ctx.beginPath();
@@ -304,9 +325,10 @@ const BulkBannerModal: React.FC<BulkBannerModalProps> = ({ movies, onClose }) =>
           ctx.fill();
           
           ctx.fillStyle = '#9ca3af';
-          ctx.font = 'bold 40px Arial';
+          ctx.font = 'bold 32px Arial';
           ctx.textAlign = 'center';
-          ctx.fillText('POSTER', posterX + posterWidth/2, posterY + posterHeight/2);
+          ctx.fillText('SEM CAPA', posterX + posterWidth/2, posterY + posterHeight/2 - 20);
+          ctx.fillText('DISPONÍVEL', posterX + posterWidth/2, posterY + posterHeight/2 + 20);
         }
 
         // TÍTULO abaixo do poster
@@ -433,6 +455,8 @@ const BulkBannerModal: React.FC<BulkBannerModalProps> = ({ movies, onClose }) =>
     
     for (let i = 0; i < movies.length; i++) {
       const movie = movies[i];
+      console.log(`Gerando banner ${i + 1}/${movies.length} para: ${movie.title || movie.name}`);
+      
       const blob = await generateBanner(movie, template, format);
       
       const filename = `banner_${(movie.title || movie.name || 'movie').replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${selectedFormat}.png`;
@@ -441,6 +465,7 @@ const BulkBannerModal: React.FC<BulkBannerModalProps> = ({ movies, onClose }) =>
       setProgress(((i + 1) / movies.length) * 100);
     }
     
+    console.log('Gerando arquivo ZIP...');
     // Gerar e baixar o ZIP
     const zipBlob = await zip.generateAsync({ type: 'blob' });
     const url = URL.createObjectURL(zipBlob);

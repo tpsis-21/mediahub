@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Download, CheckSquare, Square, Image } from 'lucide-react';
 import { MovieData, tmdbService, MediaType } from '../services/tmdbService';
@@ -32,6 +31,15 @@ const Index = () => {
     }
   }, [user]);
 
+  const cleanSearchQuery = (query: string): string => {
+    // Remove emojis e variações de "LEG"
+    return query
+      .replace(/[\u{1F300}-\u{1F9FF}]/gu, '') // Remove emojis
+      .replace(/\s*\(?LEG\)?\s*/gi, '') // Remove LEG, leg, (LEG)
+      .replace(/\s+/g, ' ') // Remove espaços extras
+      .trim();
+  };
+
   const handleSearch = async (queries: string[], type: 'individual' | 'bulk', mediaType: MediaType) => {
     setIsLoading(true);
     setMovies([]);
@@ -41,7 +49,8 @@ const Index = () => {
       const allResults: MovieData[] = [];
       
       for (const query of queries) {
-        const { title, year } = tmdbService.parseSearchQuery(query);
+        const cleanedQuery = cleanSearchQuery(query);
+        const { title, year } = tmdbService.parseSearchQuery(cleanedQuery);
         console.log(`Buscando: "${title}" (${year || 'sem ano'}) - Tipo: ${mediaType}`);
         
         const searchResult = await tmdbService.searchByType(title, mediaType, year, language);
@@ -193,6 +202,61 @@ const Index = () => {
         <div className="space-y-6">
           <SearchForm onSearch={handleSearch} isLoading={isLoading} />
 
+          {movies.length > 0 && (
+            <div className="glass-effect rounded-xl p-6 shadow-lg">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center space-x-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSelectAll}
+                    className="flex items-center space-x-2 border-blue-300 hover:bg-blue-50 dark:border-blue-700 dark:hover:bg-blue-900"
+                  >
+                    {selectedMovies.size === movies.length ? (
+                      <CheckSquare className="h-4 w-4 text-blue-600" />
+                    ) : (
+                      <Square className="h-4 w-4" />
+                    )}
+                    <span>
+                      {selectedMovies.size === movies.length ? 'Desmarcar Todos' : 'Selecionar Todos'}
+                    </span>
+                  </Button>
+                  <span className="text-sm text-gray-600 dark:text-gray-400 font-medium">
+                    {selectedMovies.size} de {movies.length} selecionado(s)
+                  </span>
+                </div>
+              </div>
+              
+              {selectedMovies.size > 0 && (
+                <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                  <Button
+                    onClick={handleDownloadSelectedCovers}
+                    className="flex items-center space-x-2 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700"
+                  >
+                    <Download className="h-4 w-4" />
+                    <span>Baixar Capas Selecionadas</span>
+                  </Button>
+                  
+                  <Button
+                    onClick={handleGenerateBulkBanners}
+                    className="flex items-center space-x-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
+                  >
+                    <Image className="h-4 w-4" />
+                    <span>Gerar Banners Selecionados</span>
+                  </Button>
+                  
+                  <Button
+                    onClick={handleExportSelected}
+                    className="flex items-center space-x-2 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700"
+                  >
+                    <Download className="h-4 w-4" />
+                    <span>{t('export.selected')}</span>
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
           {user ? (
             <Tabs defaultValue="results" className="space-y-6">
               <TabsList className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm">
@@ -205,61 +269,6 @@ const Index = () => {
               </TabsList>
               
               <TabsContent value="results" className="space-y-6">
-                {movies.length > 0 && (
-                  <div className="glass-effect rounded-xl p-6 shadow-lg">
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center space-x-4">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleSelectAll}
-                          className="flex items-center space-x-2 border-blue-300 hover:bg-blue-50 dark:border-blue-700 dark:hover:bg-blue-900"
-                        >
-                          {selectedMovies.size === movies.length ? (
-                            <CheckSquare className="h-4 w-4 text-blue-600" />
-                          ) : (
-                            <Square className="h-4 w-4" />
-                          )}
-                          <span>
-                            {selectedMovies.size === movies.length ? 'Desmarcar Todos' : 'Selecionar Todos'}
-                          </span>
-                        </Button>
-                        <span className="text-sm text-gray-600 dark:text-gray-400 font-medium">
-                          {selectedMovies.size} de {movies.length} selecionado(s)
-                        </span>
-                      </div>
-                    </div>
-                    
-                    {selectedMovies.size > 0 && (
-                      <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
-                        <Button
-                          onClick={handleDownloadSelectedCovers}
-                          className="flex items-center space-x-2 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700"
-                        >
-                          <Download className="h-4 w-4" />
-                          <span>Baixar Capas Selecionadas</span>
-                        </Button>
-                        
-                        <Button
-                          onClick={handleGenerateBulkBanners}
-                          className="flex items-center space-x-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
-                        >
-                          <Image className="h-4 w-4" />
-                          <span>Gerar Banners Selecionados</span>
-                        </Button>
-                        
-                        <Button
-                          onClick={handleExportSelected}
-                          className="flex items-center space-x-2 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700"
-                        >
-                          <Download className="h-4 w-4" />
-                          <span>{t('export.selected')}</span>
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                )}
-
                 {isLoading ? (
                   <div className="text-center py-12">
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gradient-to-r from-blue-600 to-purple-600 mx-auto mb-4"></div>

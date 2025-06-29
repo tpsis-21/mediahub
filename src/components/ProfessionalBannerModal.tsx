@@ -1,14 +1,14 @@
 
 import React, { useState } from 'react';
-import { X, Download, Smartphone, Monitor, Tv, Shield, Check } from 'lucide-react';
+import { X, Download } from 'lucide-react';
 import { MovieData } from '../services/tmdbService';
-import { useI18n } from '../contexts/I18nContext';
 import { useAuth } from '../contexts/AuthContext';
+import { useI18n } from '../contexts/I18nContext';
 import { Button } from './ui/button';
 import { Card, CardHeader, CardTitle, CardContent } from './ui/card';
-import { Badge } from './ui/badge';
 import { RadioGroup, RadioGroupItem } from './ui/radio-group';
 import { Label } from './ui/label';
+import { useToast } from '../hooks/use-toast';
 
 interface ProfessionalBannerModalProps {
   movie: MovieData;
@@ -16,421 +16,335 @@ interface ProfessionalBannerModalProps {
 }
 
 const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie, onClose }) => {
-  const { t } = useI18n();
   const { user } = useAuth();
+  const { t } = useI18n();
+  const { toast } = useToast();
   const [selectedTemplate, setSelectedTemplate] = useState(1);
-  const [selectedFormat, setSelectedFormat] = useState<'square' | 'story'>('square');
+  const [selectedFormat, setSelectedFormat] = useState<'square' | 'vertical'>('square');
+  const [isGenerating, setIsGenerating] = useState(false);
 
   const title = movie.title || movie.name || 'Título';
   const year = movie.release_date || movie.first_air_date 
     ? new Date(movie.release_date || movie.first_air_date!).getFullYear()
     : '';
-  const imageUrl = movie.poster_path 
-    ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` 
-    : '';
-
+  const synopsis = movie.overview || 'Sinopse não disponível para este conteúdo.';
+  const rating = movie.vote_average || 0;
+  const mediaType = movie.media_type === 'movie' ? 'FILME' : 'SÉRIE';
+  
   const templates = [
     {
       id: 1,
-      name: 'Cinematográfico Azul',
-      primaryColor: '#1e40af',
-      secondaryColor: '#3b82f6',
-      gradientFrom: '#1e3a8a',
-      gradientTo: '#3b82f6'
+      name: 'Template Cinematográfico',
+      primaryColor: user?.brandColors?.primary || '#3b82f6',
+      secondaryColor: user?.brandColors?.secondary || '#8b5cf6',
+      bgColor: 'linear-gradient(135deg, #1e3a8a, #7c3aed)'
     },
     {
       id: 2,
-      name: 'Dourado Premium',
-      primaryColor: '#d97706',
-      secondaryColor: '#f59e0b',
-      gradientFrom: '#92400e',
-      gradientTo: '#d97706'
+      name: 'Template Elegante',
+      primaryColor: '#111827',
+      secondaryColor: '#374151',
+      bgColor: 'linear-gradient(135deg, #111827, #374151)'
     },
     {
       id: 3,
-      name: 'Verde Elegante',
-      primaryColor: '#059669',
-      secondaryColor: '#10b981',
-      gradientFrom: '#047857',
-      gradientTo: '#059669'
-    },
-    {
-      id: 4,
-      name: 'Roxo Moderno',
-      primaryColor: '#7c3aed',
-      secondaryColor: '#8b5cf6',
-      gradientFrom: '#6d28d9',
-      gradientTo: '#7c3aed'
-    },
-    {
-      id: 5,
-      name: 'Preto Elegante',
-      primaryColor: '#1f2937',
-      secondaryColor: '#374151',
-      gradientFrom: '#000000',
-      gradientTo: '#1f2937'
+      name: 'Template Escuro',
+      primaryColor: '#000000',
+      secondaryColor: '#1f1f1f',
+      bgColor: 'linear-gradient(135deg, #000000, #1f1f1f)'
     }
   ];
 
   const formatDimensions = {
     square: { width: 1080, height: 1080, label: '1080x1080 (Quadrado)' },
-    story: { width: 1080, height: 1920, label: '1080x1920 (Stories)' }
+    vertical: { width: 1080, height: 1920, label: '1080x1920 (Vertical)' }
   };
 
-  const handleDownloadBanner = async () => {
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    
-    if (!ctx) return;
+  const loadImage = (src: string): Promise<HTMLImageElement> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
+    });
+  };
 
-    const format = formatDimensions[selectedFormat];
-    const template = templates.find(t => t.id === selectedTemplate)!;
-    
-    canvas.width = format.width;
-    canvas.height = format.height;
+  const wrapText = (ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] => {
+    const words = text.split(' ');
+    const lines: string[] = [];
+    let currentLine = '';
 
+    for (const word of words) {
+      const testLine = currentLine + (currentLine ? ' ' : '') + word;
+      const metrics = ctx.measureText(testLine);
+      
+      if (metrics.width > maxWidth && currentLine) {
+        lines.push(currentLine);
+        currentLine = word;
+      } else {
+        currentLine = testLine;
+      }
+    }
+    
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+    
+    return lines;
+  };
+
+  const generateBanner = async () => {
+    setIsGenerating(true);
+    
     try {
-      // Fundo principal
-      const mainGradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-      mainGradient.addColorStop(0, template.gradientFrom);
-      mainGradient.addColorStop(1, template.gradientTo);
-      ctx.fillStyle = mainGradient;
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      
+      if (!ctx) {
+        throw new Error('Canvas context not available');
+      }
+
+      const format = formatDimensions[selectedFormat];
+      const template = templates.find(t => t.id === selectedTemplate)!;
+      
+      canvas.width = format.width;
+      canvas.height = format.height;
+
+      // Background gradient
+      const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+      if (template.id === 1) {
+        gradient.addColorStop(0, template.primaryColor);
+        gradient.addColorStop(1, template.secondaryColor);
+      } else if (template.id === 2) {
+        gradient.addColorStop(0, '#111827');
+        gradient.addColorStop(1, '#374151');
+      } else {
+        gradient.addColorStop(0, '#000000');
+        gradient.addColorStop(1, '#1f1f1f');
+      }
+      
+      ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       if (selectedFormat === 'square') {
-        // Layout quadrado (1080x1080) - DUAS COLUNAS
-        const leftColumnWidth = canvas.width * 0.4; // 40% para capa
-        const rightColumnWidth = canvas.width * 0.6; // 60% para conteúdo
-        const rightColumnStart = leftColumnWidth;
-        
-        // COLUNA ESQUERDA - CAPA
-        if (imageUrl) {
-          const img = new Image();
-          img.crossOrigin = 'anonymous';
+        // Layout de duas colunas para formato quadrado
+        const columnWidth = canvas.width / 2;
+        const posterWidth = columnWidth * 0.8;
+        const posterHeight = posterWidth * 1.5;
+        const posterX = columnWidth * 0.1;
+        const posterY = (canvas.height - posterHeight) / 2;
+
+        // Carregar e desenhar poster na coluna esquerda
+        try {
+          const posterUrl = movie.poster_path 
+            ? `https://image.tmdb.org/t/p/w500${movie.poster_path}`
+            : '/placeholder.svg';
           
-          try {
-            await new Promise<void>((resolve, reject) => {
-              img.onload = () => resolve();
-              img.onerror = () => resolve(); // Continue sem imagem
-              img.src = imageUrl;
-            });
-            
-            // Desenhar a capa ocupando toda a coluna esquerda com margem
-            const coverMargin = 30;
-            const coverWidth = leftColumnWidth - (coverMargin * 2);
-            const coverHeight = canvas.height - 200; // Deixar espaço para rodapé
-            const coverY = coverMargin;
-            
-            ctx.drawImage(img, coverMargin, coverY, coverWidth, coverHeight);
-          } catch (error) {
-            console.error('Erro ao carregar imagem:', error);
-          }
+          const posterImg = await loadImage(posterUrl);
+          
+          // Desenhar poster com bordas arredondadas
+          ctx.save();
+          ctx.beginPath();
+          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
+          ctx.clip();
+          ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
+          ctx.restore();
+        } catch (error) {
+          console.log('Erro ao carregar poster, usando placeholder');
+          // Desenhar placeholder
+          ctx.fillStyle = '#374151';
+          ctx.beginPath();
+          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
+          ctx.fill();
+          
+          ctx.fillStyle = 'white';
+          ctx.font = '24px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText('POSTER', posterX + posterWidth/2, posterY + posterHeight/2);
         }
+
+        // Coluna direita - conteúdo
+        const rightColumnX = columnWidth;
+        const rightColumnWidth = columnWidth * 0.9;
         
-        // COLUNA DIREITA - CONTEÚDO
-        const contentStartX = rightColumnStart + 40;
-        let currentY = 80;
-        
-        // 1. TÍTULO no topo
+        // Título
         ctx.fillStyle = 'white';
-        ctx.font = 'bold 54px Arial, sans-serif';
+        ctx.font = 'bold 48px Arial';
         ctx.textAlign = 'left';
         
-        // Quebrar título em múltiplas linhas se necessário
-        const titleWords = title.split(' ');
-        let titleLine = '';
-        const titleMaxWidth = rightColumnWidth - 80;
-        const titleLineHeight = 64;
+        const titleLines = wrapText(ctx, title, rightColumnWidth - 40);
+        let currentY = 120;
         
-        for (let i = 0; i < titleWords.length; i++) {
-          const testLine = titleLine + titleWords[i] + ' ';
-          const metrics = ctx.measureText(testLine);
+        titleLines.forEach((line, index) => {
+          ctx.fillText(line, rightColumnX + 20, currentY + (index * 60));
+        });
+        
+        currentY += titleLines.length * 60 + 40;
+
+        // Ano e tipo em retângulo com gradiente
+        if (year || mediaType) {
+          const badgeText = year ? `${year} • ${mediaType}` : mediaType;
+          const badgeWidth = 300;
+          const badgeHeight = 50;
           
-          if (metrics.width > titleMaxWidth && i > 0) {
-            ctx.fillText(titleLine.trim(), contentStartX, currentY);
-            titleLine = titleWords[i] + ' ';
-            currentY += titleLineHeight;
-          } else {
-            titleLine = testLine;
-          }
+          // Gradiente do badge
+          const badgeGradient = ctx.createLinearGradient(
+            rightColumnX + 20, currentY, 
+            rightColumnX + 20 + badgeWidth, currentY + badgeHeight
+          );
+          badgeGradient.addColorStop(0, template.primaryColor);
+          badgeGradient.addColorStop(1, template.secondaryColor);
+          
+          ctx.fillStyle = badgeGradient;
+          ctx.beginPath();
+          ctx.roundRect(rightColumnX + 20, currentY, badgeWidth, badgeHeight, 25);
+          ctx.fill();
+          
+          ctx.fillStyle = 'white';
+          ctx.font = 'bold 24px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText(badgeText, rightColumnX + 20 + badgeWidth/2, currentY + 32);
+          
+          currentY += badgeHeight + 60;
         }
-        ctx.fillText(titleLine.trim(), contentStartX, currentY);
-        currentY += 80;
-        
-        // 2. RETÂNGULO com categoria
-        const rectWidth = 280;
-        const rectHeight = 60;
-        const rectGradient = ctx.createLinearGradient(contentStartX, currentY, contentStartX + rectWidth, currentY + rectHeight);
-        rectGradient.addColorStop(0, template.primaryColor);
-        rectGradient.addColorStop(1, template.secondaryColor);
-        ctx.fillStyle = rectGradient;
-        ctx.beginPath();
-        ctx.roundRect(contentStartX, currentY, rectWidth, rectHeight, 30);
-        ctx.fill();
-        
-        // Texto no retângulo
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 24px Arial';
-        ctx.textAlign = 'center';
-        const categoryText = movie.media_type === 'movie' ? 'FILME' : 'SÉRIE';
-        ctx.fillText(`${categoryText} ${year}`, contentStartX + rectWidth/2, currentY + 40);
-        
-        currentY += 100;
-        
-        // 3. SINOPSE com rótulo vertical
-        // Rótulo "SINOPSE" vertical
-        ctx.save();
-        ctx.translate(contentStartX, currentY + 60);
-        ctx.rotate(-Math.PI / 2);
+
+        // Sinopse
         ctx.fillStyle = 'white';
         ctx.font = 'bold 20px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText('SINOPSE', 0, 0);
-        ctx.restore();
+        ctx.textAlign = 'left';
+        ctx.fillText('SINOPSE', rightColumnX + 20, currentY);
         
-        // Texto da sinopse
-        ctx.fillStyle = 'white';
+        currentY += 40;
+        
         ctx.font = '18px Arial';
-        ctx.textAlign = 'left';
-        const synopsis = movie.overview || 'Sinopse não disponível';
-        wrapText(ctx, synopsis, contentStartX + 40, currentY, rightColumnWidth - 120, 24, 12);
+        const synopsisLines = wrapText(ctx, synopsis, rightColumnWidth - 40);
+        const maxLines = Math.min(synopsisLines.length, 8);
         
-        // 5. AVALIAÇÃO no canto superior direito
-        if (movie.vote_average > 0) {
-          ctx.fillStyle = 'rgba(0,0,0,0.7)';
-          ctx.beginPath();
-          ctx.roundRect(canvas.width - 140, 30, 120, 50, 25);
-          ctx.fill();
-          ctx.fillStyle = 'white';
-          ctx.font = 'bold 20px Arial';
-          ctx.textAlign = 'center';
-          ctx.fillText(`⭐ ${movie.vote_average.toFixed(1)}`, canvas.width - 80, 60);
+        for (let i = 0; i < maxLines; i++) {
+          let line = synopsisLines[i];
+          if (i === maxLines - 1 && synopsisLines.length > maxLines) {
+            line += '...';
+          }
+          ctx.fillText(line, rightColumnX + 20, currentY + (i * 25));
         }
-        
-        // RODAPÉ ocupando as duas colunas
-        const footerHeight = 120;
-        const footerY = canvas.height - footerHeight;
-        
-        // Fundo do rodapé
-        const footerGradient = ctx.createLinearGradient(0, footerY, canvas.width, canvas.height);
-        footerGradient.addColorStop(0, 'rgba(0,0,0,0.8)');
-        footerGradient.addColorStop(1, template.gradientFrom);
-        ctx.fillStyle = footerGradient;
-        ctx.fillRect(0, footerY, canvas.width, footerHeight);
-        
-        // Elementos do rodapé
-        let footerX = 40;
-        const footerCenterY = footerY + footerHeight/2;
-        
-        // Badge "EXPERIMENTE O TESTE GRÁTIS"
-        const badgeWidth = 280;
-        const badgeHeight = 40;
-        ctx.fillStyle = template.primaryColor;
-        ctx.beginPath();
-        ctx.roundRect(footerX, footerCenterY - badgeHeight/2, badgeWidth, badgeHeight, 20);
-        ctx.fill();
-        
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 16px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText('✓ EXPERIMENTE O TESTE GRÁTIS', footerX + badgeWidth/2, footerCenterY + 6);
-        
-        footerX += badgeWidth + 60;
-        
-        // Ícones de dispositivos
-        ctx.fillStyle = 'white';
-        ctx.font = '28px Arial';
-        ctx.textAlign = 'center';
-        
-        // Celular
-        ctx.fillText('📱', footerX, footerCenterY - 10);
-        ctx.font = '12px Arial';
-        ctx.fillText('Celular', footerX, footerCenterY + 15);
-        footerX += 80;
-        
-        // Smart TV
-        ctx.font = '28px Arial';
-        ctx.fillText('📺', footerX, footerCenterY - 10);
-        ctx.font = '12px Arial';
-        ctx.fillText('Smart TV', footerX, footerCenterY + 15);
-        footerX += 80;
-        
-        // Computador
-        ctx.font = '28px Arial';
-        ctx.fillText('💻', footerX, footerCenterY - 10);
-        ctx.font = '12px Arial';
-        ctx.fillText('Computador', footerX, footerCenterY + 15);
-        footerX += 100;
-        
-        // Selo "Qualidade Garantida"
-        const sealWidth = 160;
-        const sealHeight = 35;
-        ctx.fillStyle = 'rgba(255,255,255,0.2)';
-        ctx.beginPath();
-        ctx.roundRect(footerX, footerCenterY - sealHeight/2, sealWidth, sealHeight, 17);
-        ctx.fill();
-        
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 12px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText('🛡️ Qualidade Garantida', footerX + sealWidth/2, footerCenterY + 4);
-        
+
+        // Rating badge no canto superior direito
+        if (rating > 0) {
+          const ratingBadgeX = canvas.width - 150;
+          const ratingBadgeY = 30;
+          
+          ctx.fillStyle = 'rgba(255, 193, 7, 0.9)';
+          ctx.beginPath();
+          ctx.roundRect(ratingBadgeX, ratingBadgeY, 120, 40, 20);
+          ctx.fill();
+          
+          ctx.fillStyle = 'black';
+          ctx.font = 'bold 18px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText(`⭐ ${rating.toFixed(1)}`, ratingBadgeX + 60, ratingBadgeY + 25);
+        }
+
       } else {
-        // Layout vertical (Stories) - 1080x1920
-        let currentY = 60;
-        
-        // Capa no topo centralizada
-        if (imageUrl) {
-          const img = new Image();
-          img.crossOrigin = 'anonymous';
+        // Layout vertical
+        const posterWidth = canvas.width * 0.6;
+        const posterHeight = posterWidth * 1.5;
+        const posterX = (canvas.width - posterWidth) / 2;
+        const posterY = 100;
+
+        // Carregar e desenhar poster
+        try {
+          const posterUrl = movie.poster_path 
+            ? `https://image.tmdb.org/t/p/w500${movie.poster_path}`
+            : '/placeholder.svg';
           
-          try {
-            await new Promise<void>((resolve, reject) => {
-              img.onload = () => resolve();
-              img.onerror = () => resolve();
-              img.src = imageUrl;
-            });
-            
-            const coverWidth = 300;
-            const coverHeight = 450;
-            const coverX = (canvas.width - coverWidth) / 2;
-            
-            ctx.drawImage(img, coverX, currentY, coverWidth, coverHeight);
-            currentY += coverHeight + 40;
-          } catch (error) {
-            console.error('Erro ao carregar imagem:', error);
-            currentY += 300;
-          }
-        }
-        
-        // Título centralizado
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 48px Arial, sans-serif';
-        ctx.textAlign = 'center';
-        
-        const titleWords = title.split(' ');
-        let titleLine = '';
-        const titleMaxWidth = canvas.width - 80;
-        const titleLineHeight = 56;
-        
-        for (let i = 0; i < titleWords.length; i++) {
-          const testLine = titleLine + titleWords[i] + ' ';
-          const metrics = ctx.measureText(testLine);
+          const posterImg = await loadImage(posterUrl);
           
-          if (metrics.width > titleMaxWidth && i > 0) {
-            ctx.fillText(titleLine.trim(), canvas.width/2, currentY);
-            titleLine = titleWords[i] + ' ';
-            currentY += titleLineHeight;
-          } else {
-            titleLine = testLine;
-          }
-        }
-        ctx.fillText(titleLine.trim(), canvas.width/2, currentY);
-        currentY += 60;
-        
-        // Retângulo da categoria
-        const rectWidth = 300;
-        const rectHeight = 60;
-        const rectX = (canvas.width - rectWidth) / 2;
-        const rectGradient = ctx.createLinearGradient(rectX, currentY, rectX + rectWidth, currentY + rectHeight);
-        rectGradient.addColorStop(0, template.primaryColor);
-        rectGradient.addColorStop(1, template.secondaryColor);
-        ctx.fillStyle = rectGradient;
-        ctx.beginPath();
-        ctx.roundRect(rectX, currentY, rectWidth, rectHeight, 30);
-        ctx.fill();
-        
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 24px Arial';
-        ctx.textAlign = 'center';
-        const categoryText = movie.media_type === 'movie' ? 'FILME' : 'SÉRIE';
-        ctx.fillText(`${categoryText} ${year}`, canvas.width/2, currentY + 40);
-        
-        currentY += 100;
-        
-        // Sinopse centralizada
-        ctx.fillStyle = 'white';
-        ctx.font = '22px Arial';
-        ctx.textAlign = 'left';
-        const synopsis = movie.overview || 'Sinopse não disponível';
-        wrapText(ctx, synopsis, 60, currentY, canvas.width - 120, 28, 15);
-        
-        // Avaliação
-        if (movie.vote_average > 0) {
-          ctx.fillStyle = 'rgba(0,0,0,0.7)';
+          ctx.save();
           ctx.beginPath();
-          ctx.roundRect(canvas.width - 140, 30, 120, 50, 25);
+          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
+          ctx.clip();
+          ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
+          ctx.restore();
+        } catch (error) {
+          // Placeholder
+          ctx.fillStyle = '#374151';
+          ctx.beginPath();
+          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
           ctx.fill();
+          
           ctx.fillStyle = 'white';
-          ctx.font = 'bold 20px Arial';
+          ctx.font = '32px Arial';
           ctx.textAlign = 'center';
-          ctx.fillText(`⭐ ${movie.vote_average.toFixed(1)}`, canvas.width - 80, 60);
+          ctx.fillText('POSTER', posterX + posterWidth/2, posterY + posterHeight/2);
         }
-        
-        // Rodapé para stories
-        const footerHeight = 180;
-        const footerY = canvas.height - footerHeight;
-        
-        const footerGradient = ctx.createLinearGradient(0, footerY, canvas.width, canvas.height);
-        footerGradient.addColorStop(0, 'rgba(0,0,0,0.8)');
-        footerGradient.addColorStop(1, template.gradientFrom);
-        ctx.fillStyle = footerGradient;
-        ctx.fillRect(0, footerY, canvas.width, footerHeight);
-        
-        // Badge centralizado
-        const badgeWidth = 350;
-        const badgeHeight = 40;
-        const badgeX = (canvas.width - badgeWidth) / 2;
-        
-        ctx.fillStyle = template.primaryColor;
-        ctx.beginPath();
-        ctx.roundRect(badgeX, footerY + 20, badgeWidth, badgeHeight, 20);
-        ctx.fill();
+
+        // Título abaixo do poster
+        let currentY = posterY + posterHeight + 80;
         
         ctx.fillStyle = 'white';
-        ctx.font = 'bold 16px Arial';
+        ctx.font = 'bold 56px Arial';
         ctx.textAlign = 'center';
-        ctx.fillText('✓ EXPERIMENTE O TESTE GRÁTIS', canvas.width/2, footerY + 45);
         
-        // Ícones centralizados
-        const iconsY = footerY + 90;
-        const iconSpacing = 120;
-        const startX = (canvas.width - (iconSpacing * 2)) / 2;
+        const titleLines = wrapText(ctx, title, canvas.width - 80);
+        titleLines.forEach((line, index) => {
+          ctx.fillText(line, canvas.width/2, currentY + (index * 70));
+        });
         
-        ctx.fillStyle = 'white';
-        ctx.font = '28px Arial';
-        
-        ctx.fillText('📱', startX, iconsY);
-        ctx.font = '12px Arial';
-        ctx.fillText('Celular', startX, iconsY + 20);
-        
-        ctx.font = '28px Arial';
-        ctx.fillText('📺', startX + iconSpacing, iconsY);
-        ctx.font = '12px Arial';
-        ctx.fillText('Smart TV', startX + iconSpacing, iconsY + 20);
-        
-        ctx.font = '28px Arial';
-        ctx.fillText('💻', startX + (iconSpacing * 2), iconsY);
-        ctx.font = '12px Arial';
-        ctx.fillText('Computador', startX + (iconSpacing * 2), iconsY + 20);
-        
-        // Selo centralizado
-        const sealWidth = 200;
-        const sealHeight = 35;
-        const sealX = (canvas.width - sealWidth) / 2;
-        
-        ctx.fillStyle = 'rgba(255,255,255,0.2)';
-        ctx.beginPath();
-        ctx.roundRect(sealX, footerY + 130, sealWidth, sealHeight, 17);
-        ctx.fill();
-        
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 12px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText('🛡️ Qualidade Garantida', canvas.width/2, footerY + 152);
+        currentY += titleLines.length * 70 + 40;
+
+        // Ano e rating
+        if (year) {
+          ctx.font = 'bold 32px Arial';
+          ctx.fillText(year.toString(), canvas.width/2, currentY);
+          currentY += 50;
+        }
+
+        if (rating > 0) {
+          ctx.font = 'bold 28px Arial';
+          ctx.fillText(`⭐ ${rating.toFixed(1)}`, canvas.width/2, currentY);
+          currentY += 50;
+        }
+
+        // Tipo de mídia
+        ctx.font = 'bold 24px Arial';
+        ctx.fillText(mediaType, canvas.width/2, currentY);
       }
 
-      // Download do banner
+      // Rodapé (para ambos os formatos)
+      const footerHeight = 120;
+      const footerY = canvas.height - footerHeight;
+      
+      // Fundo do rodapé com gradiente
+      const footerGradient = ctx.createLinearGradient(0, footerY, 0, canvas.height);
+      footerGradient.addColorStop(0, 'rgba(0,0,0,0.7)');
+      footerGradient.addColorStop(1, 'rgba(0,0,0,0.9)');
+      
+      ctx.fillStyle = footerGradient;
+      ctx.fillRect(0, footerY, canvas.width, footerHeight);
+
+      // Ícones e texto do rodapé
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 20px Arial';
+      ctx.textAlign = 'center';
+      
+      const footerItems = ['📱', '💻', '📺', '✅ QUALIDADE GARANTIDA'];
+      const itemWidth = canvas.width / footerItems.length;
+      
+      footerItems.forEach((item, index) => {
+        const x = (index + 0.5) * itemWidth;
+        const y = footerY + footerHeight/2 + 8;
+        ctx.fillText(item, x, y);
+      });
+
+      // Badge "EXPERIMENTE GRÁTIS"
+      if (user?.brandName) {
+        ctx.font = 'bold 16px Arial';
+        ctx.textAlign = 'left';
+        ctx.fillText(`✓ ${user.brandName.toUpperCase()}`, 20, footerY + 30);
+      }
+
+      // Download
       canvas.toBlob((blob) => {
         if (blob) {
           const url = URL.createObjectURL(blob);
@@ -441,56 +355,42 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           link.click();
           document.body.removeChild(link);
           URL.revokeObjectURL(url);
+          
+          toast({
+            title: "Sucesso",
+            description: "Banner gerado e baixado com sucesso!",
+          });
         }
-      });
+      }, 'image/png', 1.0);
 
-      onClose();
     } catch (error) {
       console.error('Erro ao gerar banner:', error);
-    }
-  };
-
-  // Função para quebrar texto
-  const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number, maxLines: number = 10) => {
-    const words = text.split(' ');
-    let line = '';
-    let currentY = y;
-    let lineCount = 0;
-
-    for (let i = 0; i < words.length && lineCount < maxLines; i++) {
-      const testLine = line + words[i] + ' ';
-      const metrics = ctx.measureText(testLine);
-      
-      if (metrics.width > maxWidth && i > 0) {
-        ctx.fillText(line, x, currentY);
-        line = words[i] + ' ';
-        currentY += lineHeight;
-        lineCount++;
-      } else {
-        line = testLine;
-      }
-    }
-    if (lineCount < maxLines) {
-      ctx.fillText(line, x, currentY);
+      toast({
+        title: "Erro",
+        description: "Erro ao gerar banner. Tente novamente.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsGenerating(false);
     }
   };
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-5xl max-h-[90vh] overflow-y-auto">
-        <CardHeader className="flex flex-row items-center justify-between bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-t-lg">
-          <CardTitle className="text-white">Banner Profissional</CardTitle>
-          <Button variant="ghost" size="sm" onClick={onClose} className="text-white hover:bg-white/20">
+      <Card className="w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>Gerar Banner - {title}</CardTitle>
+          <Button variant="ghost" size="sm" onClick={onClose}>
             <X className="h-4 w-4" />
           </Button>
         </CardHeader>
-        <CardContent className="space-y-6 p-6">
+        <CardContent className="space-y-6">
           {/* Seleção de Formato */}
           <div>
             <Label className="text-lg font-semibold mb-3 block">Formato do Banner</Label>
             <RadioGroup
               value={selectedFormat}
-              onValueChange={(value) => setSelectedFormat(value as 'square' | 'story')}
+              onValueChange={(value) => setSelectedFormat(value as 'square' | 'vertical')}
               className="flex flex-row space-x-6"
             >
               <div className="flex items-center space-x-2">
@@ -500,9 +400,9 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
                 </Label>
               </div>
               <div className="flex items-center space-x-2">
-                <RadioGroupItem value="story" id="story" />
-                <Label htmlFor="story" className="cursor-pointer">
-                  {formatDimensions.story.label}
+                <RadioGroupItem value="vertical" id="vertical" />
+                <Label htmlFor="vertical" className="cursor-pointer">
+                  {formatDimensions.vertical.label}
                 </Label>
               </div>
             </RadioGroup>
@@ -510,25 +410,25 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
 
           {/* Seleção de Template */}
           <div>
-            <Label className="text-lg font-semibold mb-3 block">Escolha um Template Profissional</Label>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <Label className="text-lg font-semibold mb-3 block">Escolha um Template</Label>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {templates.map((template) => (
                 <div
                   key={template.id}
-                  className={`cursor-pointer border-2 rounded-lg p-3 transition-all ${
+                  className={`cursor-pointer border-2 rounded-lg p-2 transition-all ${
                     selectedTemplate === template.id
-                      ? 'border-blue-500 shadow-lg scale-105'
+                      ? 'border-blue-500 shadow-lg'
                       : 'border-gray-200 hover:border-gray-300'
                   }`}
                   onClick={() => setSelectedTemplate(template.id)}
                 >
                   <div 
-                    className="rounded-lg p-4 text-center text-white font-semibold text-sm"
-                    style={{
-                      background: `linear-gradient(135deg, ${template.gradientFrom}, ${template.gradientTo})`
-                    }}
+                    className="rounded-lg p-4 text-center text-white"
+                    style={{ background: template.bgColor }}
                   >
-                    {template.name}
+                    <div className="text-sm font-bold">
+                      {template.name}
+                    </div>
                   </div>
                 </div>
               ))}
@@ -537,72 +437,20 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
 
           {/* Preview */}
           <div>
-            <Label className="text-lg font-semibold mb-3 block">Preview do Layout</Label>
+            <Label className="text-lg font-semibold mb-3 block">Preview</Label>
             <div className="flex justify-center">
               <div 
-                className="rounded-lg overflow-hidden shadow-2xl"
+                className="rounded-lg p-6 text-center text-white flex flex-col items-center justify-center space-y-3"
                 style={{
-                  width: selectedFormat === 'square' ? '300px' : '200px',
-                  height: selectedFormat === 'square' ? '300px' : '350px',
-                  background: `linear-gradient(135deg, ${templates.find(t => t.id === selectedTemplate)?.gradientFrom}, ${templates.find(t => t.id === selectedTemplate)?.gradientTo})`
+                  background: templates.find(t => t.id === selectedTemplate)?.bgColor,
+                  width: selectedFormat === 'square' ? '280px' : '200px',
+                  height: selectedFormat === 'square' ? '280px' : '350px'
                 }}
               >
-                <div className="h-full flex text-white p-4">
-                  {selectedFormat === 'square' ? (
-                    <div className="flex w-full">
-                      {/* Coluna Esquerda - Capa */}
-                      <div className="w-2/5 bg-white/10 rounded mr-2 flex items-center justify-center">
-                        <span className="text-xs">CAPA</span>
-                      </div>
-                      {/* Coluna Direita - Conteúdo */}
-                      <div className="w-3/5 flex flex-col justify-between">
-                        <div>
-                          <h3 className="text-xs font-bold mb-1">{title}</h3>
-                          <div 
-                            className="text-[8px] px-2 py-1 rounded mb-2 text-center"
-                            style={{ backgroundColor: templates.find(t => t.id === selectedTemplate)?.primaryColor }}
-                          >
-                            {movie.media_type === 'movie' ? 'FILME' : 'SÉRIE'} {year}
-                          </div>
-                          <div className="text-[6px] opacity-80">
-                            <span className="font-bold">SINOPSE</span>
-                            <p className="mt-1">{(movie.overview || 'Sinopse...').substring(0, 80)}...</p>
-                          </div>
-                        </div>
-                        <div className="bg-black/20 p-2 rounded text-[6px] flex justify-between items-center">
-                          <span>✓ TESTE GRÁTIS</span>
-                          <div className="flex space-x-1">
-                            <span>📱</span>
-                            <span>📺</span>
-                            <span>💻</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col justify-between w-full">
-                      <div className="text-center">
-                        <div className="w-16 h-24 bg-white/10 rounded mx-auto mb-2"></div>
-                        <h3 className="text-xs font-bold mb-1">{title}</h3>
-                        <div 
-                          className="text-[8px] px-2 py-1 rounded mb-2 inline-block"
-                          style={{ backgroundColor: templates.find(t => t.id === selectedTemplate)?.primaryColor }}
-                        >
-                          {movie.media_type === 'movie' ? 'FILME' : 'SÉRIE'} {year}
-                        </div>
-                        <p className="text-[6px] opacity-80">{(movie.overview || 'Sinopse...').substring(0, 60)}...</p>
-                      </div>
-                      <div className="bg-black/20 p-2 rounded text-[6px] text-center">
-                        <div>✓ TESTE GRÁTIS</div>
-                        <div className="flex justify-center space-x-2 mt-1">
-                          <span>📱</span>
-                          <span>📺</span>
-                          <span>💻</span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                <h3 className="font-bold text-lg">{title}</h3>
+                {year && <span className="text-sm bg-black/30 px-2 py-1 rounded">{year}</span>}
+                <span className="text-xs bg-black/30 px-2 py-1 rounded">{mediaType}</span>
+                {rating > 0 && <span className="text-xs">⭐ {rating.toFixed(1)}</span>}
               </div>
             </div>
           </div>
@@ -610,11 +458,14 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           {/* Botão de Download */}
           <div className="flex justify-end">
             <Button
-              onClick={handleDownloadBanner}
-              className="flex items-center space-x-2 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
+              onClick={generateBanner}
+              disabled={isGenerating}
+              className="flex items-center space-x-2"
             >
               <Download className="h-4 w-4" />
-              <span>Baixar Banner ({formatDimensions[selectedFormat].label})</span>
+              <span>
+                {isGenerating ? 'Gerando...' : `Gerar Banner (${formatDimensions[selectedFormat].label})`}
+              </span>
             </Button>
           </div>
         </CardContent>

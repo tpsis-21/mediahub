@@ -1,17 +1,21 @@
 
 import React, { useState } from 'react';
-import { Moon, Sun, Globe, User, LogOut, Search } from 'lucide-react';
+import { Moon, Sun, Globe, User, LogOut, Search, Settings, UserCog } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useI18n } from '../contexts/I18nContext';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from './ui/button';
 import AuthModal from './AuthModal';
+import AdminModal from './AdminModal';
+import UserAreaModal from './UserAreaModal';
 
 const Header: React.FC = () => {
   const { theme, toggleTheme } = useTheme();
   const { language, setLanguage, t } = useI18n();
   const { user, logout } = useAuth();
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showAdminModal, setShowAdminModal] = useState(false);
+  const [showUserAreaModal, setShowUserAreaModal] = useState(false);
 
   return (
     <header className="bg-white dark:bg-gray-900 shadow-sm border-b border-gray-200 dark:border-gray-700">
@@ -23,7 +27,7 @@ const Header: React.FC = () => {
               <Search className="h-6 w-6 text-white" />
             </div>
             <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-              {t('app.title')}
+              {user?.brandName || t('app.title')}
             </h1>
           </div>
 
@@ -61,7 +65,37 @@ const Header: React.FC = () => {
                 <div className="flex items-center space-x-1 text-sm text-gray-700 dark:text-gray-300">
                   <User className="h-4 w-4" />
                   <span>{user.name}</span>
+                  {user.type === 'admin' && (
+                    <span className="text-xs bg-red-100 text-red-800 px-2 py-1 rounded-full">
+                      Admin
+                    </span>
+                  )}
                 </div>
+                
+                {user.type === 'admin' && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowAdminModal(true)}
+                    className="flex items-center space-x-1 hover:bg-blue-50 dark:hover:bg-blue-900"
+                  >
+                    <Settings className="h-4 w-4" />
+                    <span>Admin</span>
+                  </Button>
+                )}
+
+                {user.type === 'user' && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowUserAreaModal(true)}
+                    className="flex items-center space-x-1 hover:bg-blue-50 dark:hover:bg-blue-900"
+                  >
+                    <UserCog className="h-4 w-4" />
+                    <span>Minha Área</span>
+                  </Button>
+                )}
+
                 <Button
                   variant="ghost"
                   size="sm"
@@ -86,9 +120,17 @@ const Header: React.FC = () => {
         </div>
       </div>
 
-      {/* Auth Modal */}
+      {/* Modals */}
       {showAuthModal && (
         <AuthModal onClose={() => setShowAuthModal(false)} />
+      )}
+      
+      {showAdminModal && (
+        <AdminModal onClose={() => setShowAdminModal(false)} />
+      )}
+      
+      {showUserAreaModal && (
+        <UserAreaModal onClose={() => setShowUserAreaModal(false)} />
       )}
     </header>
   );

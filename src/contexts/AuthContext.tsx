@@ -5,13 +5,22 @@ interface User {
   id: string;
   email: string;
   name: string;
+  type: 'admin' | 'user';
+  brandName?: string;
+  brandColors?: {
+    primary: string;
+    secondary: string;
+  };
+  brandLogo?: string;
+  brandNameChangedAt?: string;
 }
 
 interface AuthContextType {
   user: User | null;
   login: (email: string, password: string) => Promise<boolean>;
-  register: (email: string, password: string, name: string) => Promise<boolean>;
+  register: (email: string, password: string, name: string, brandName: string) => Promise<boolean>;
   logout: () => void;
+  updateUser: (updates: Partial<User>) => void;
   isLoading: boolean;
 }
 
@@ -22,7 +31,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Simular carregamento de usuário do localStorage
     const savedUser = localStorage.getItem('user');
     if (savedUser) {
       setUser(JSON.parse(savedUser));
@@ -31,12 +39,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const login = async (email: string, password: string): Promise<boolean> => {
-    // Simulação de login - em produção, integrar com backend real
     setIsLoading(true);
     await new Promise(resolve => setTimeout(resolve, 1000));
     
     if (email && password) {
-      const user = { id: '1', email, name: email.split('@')[0] };
+      const userType = email === 'admin@tmdb.com' ? 'admin' : 'user';
+      const user: User = { 
+        id: email === 'admin@tmdb.com' ? 'admin' : Date.now().toString(), 
+        email, 
+        name: email.split('@')[0],
+        type: userType
+      };
       setUser(user);
       localStorage.setItem('user', JSON.stringify(user));
       setIsLoading(false);
@@ -46,12 +59,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return false;
   };
 
-  const register = async (email: string, password: string, name: string): Promise<boolean> => {
+  const register = async (email: string, password: string, name: string, brandName: string): Promise<boolean> => {
     setIsLoading(true);
     await new Promise(resolve => setTimeout(resolve, 1000));
     
-    if (email && password && name) {
-      const user = { id: Date.now().toString(), email, name };
+    if (email && password && name && brandName) {
+      const user: User = { 
+        id: Date.now().toString(), 
+        email, 
+        name,
+        type: 'user',
+        brandName,
+        brandColors: {
+          primary: '#3b82f6',
+          secondary: '#8b5cf6'
+        }
+      };
       setUser(user);
       localStorage.setItem('user', JSON.stringify(user));
       setIsLoading(false);
@@ -59,6 +82,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     setIsLoading(false);
     return false;
+  };
+
+  const updateUser = (updates: Partial<User>) => {
+    if (user) {
+      const updatedUser = { ...user, ...updates };
+      setUser(updatedUser);
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+    }
   };
 
   const logout = () => {
@@ -67,7 +98,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, register, logout, isLoading }}>
+    <AuthContext.Provider value={{ user, login, register, logout, updateUser, isLoading }}>
       {children}
     </AuthContext.Provider>
   );

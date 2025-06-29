@@ -65,7 +65,7 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
       const img = new Image();
       img.crossOrigin = 'anonymous';
       img.onload = () => resolve(img);
-      img.onerror = reject;
+      img.onerror = () => reject(new Error(`Failed to load image: ${src}`));
       img.src = src;
     });
   };
@@ -128,44 +128,47 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       if (selectedFormat === 'square') {
-        // Layout de duas colunas para formato quadrado (1:1)
-        const columnWidth = canvas.width / 2;
-        const posterWidth = columnWidth * 0.75;
+        // Layout quadrado (1:1) - duas colunas
+        const leftColumnWidth = canvas.width * 0.4;
+        const rightColumnX = leftColumnWidth + 20;
+        const rightColumnWidth = canvas.width - rightColumnX - 40;
+        
+        // COLUNA ESQUERDA - CAPA
+        const posterMargin = 40;
+        const posterWidth = leftColumnWidth - (posterMargin * 2);
         const posterHeight = posterWidth * 1.5;
-        const posterX = (columnWidth - posterWidth) / 2;
+        const posterX = posterMargin;
         const posterY = (canvas.height - posterHeight) / 2;
 
-        // Carregar e desenhar poster na coluna esquerda
         try {
-          const posterUrl = movie.poster_path 
-            ? `https://image.tmdb.org/t/p/w500${movie.poster_path}`
-            : '';
-          
-          if (posterUrl) {
+          if (movie.poster_path) {
+            const posterUrl = `https://image.tmdb.org/t/p/w500${movie.poster_path}`;
+            console.log('Carregando poster:', posterUrl);
             const posterImg = await loadImage(posterUrl);
             
-            // Desenhar poster com bordas arredondadas
+            // Desenhar poster com bordas arredondadas e sombra
             ctx.save();
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+            ctx.shadowBlur = 20;
+            ctx.shadowOffsetX = 10;
+            ctx.shadowOffsetY = 10;
+            
             ctx.beginPath();
             ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
             ctx.clip();
             ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
             ctx.restore();
             
-            // Sombra do poster
-            ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
-            ctx.shadowBlur = 10;
-            ctx.shadowOffsetX = 5;
-            ctx.shadowOffsetY = 5;
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-            ctx.lineWidth = 2;
+            // Borda do poster
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
             ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
             ctx.stroke();
-            ctx.shadowColor = 'transparent';
           }
         } catch (error) {
-          console.log('Erro ao carregar poster, usando placeholder');
-          // Desenhar placeholder
+          console.error('Erro ao carregar poster:', error);
+          // Placeholder caso não carregue
           ctx.fillStyle = '#4b5563';
           ctx.beginPath();
           ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
@@ -177,28 +180,25 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           ctx.fillText('POSTER', posterX + posterWidth/2, posterY + posterHeight/2);
         }
 
-        // Coluna direita - conteúdo
-        const rightColumnX = columnWidth + 20;
-        const rightColumnWidth = columnWidth - 40;
+        // COLUNA DIREITA - CONTEÚDO
+        let currentY = 80;
         
-        // Título
+        // 1. TÍTULO
         ctx.fillStyle = 'white';
-        ctx.font = 'bold 52px Arial, Helvetica, sans-serif';
+        ctx.font = 'bold 48px Arial, sans-serif';
         ctx.textAlign = 'left';
         
         const titleLines = wrapText(ctx, title, rightColumnWidth);
-        let currentY = 100;
-        
         titleLines.forEach((line, index) => {
-          ctx.fillText(line, rightColumnX, currentY + (index * 65));
+          ctx.fillText(line, rightColumnX, currentY + (index * 60));
         });
         
-        currentY += titleLines.length * 65 + 30;
+        currentY += titleLines.length * 60 + 40;
 
-        // Ano e tipo em retângulo com gradiente
+        // 2. RETÂNGULO COM ANO E TIPO
         if (year || mediaType) {
           const badgeText = year ? `${year} • ${mediaType}` : mediaType;
-          const badgeWidth = Math.min(rightColumnWidth - 20, 320);
+          const badgeWidth = Math.min(rightColumnWidth, 320);
           const badgeHeight = 55;
           
           // Gradiente do badge
@@ -215,79 +215,92 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           ctx.fill();
           
           ctx.fillStyle = 'white';
-          ctx.font = 'bold 26px Arial';
+          ctx.font = 'bold 22px Arial';
           ctx.textAlign = 'center';
           ctx.fillText(badgeText, rightColumnX + badgeWidth/2, currentY + 35);
           
           currentY += badgeHeight + 50;
         }
 
-        // Sinopse
+        // 3. RÓTULO VERTICAL "SINOPSE"
+        ctx.save();
+        ctx.translate(rightColumnX + 15, currentY + 80);
+        ctx.rotate(-Math.PI / 2);
         ctx.fillStyle = 'white';
-        ctx.font = 'bold 24px Arial';
+        ctx.font = 'bold 18px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('SINOPSE', 0, 0);
+        ctx.restore();
+
+        // 4. SINOPSE
+        ctx.fillStyle = 'white';
+        ctx.font = '18px Arial';
         ctx.textAlign = 'left';
-        ctx.fillText('SINOPSE', rightColumnX, currentY);
         
-        currentY += 35;
+        const synopsisX = rightColumnX + 40;
+        const synopsisWidth = rightColumnWidth - 60;
+        const synopsisLines = wrapText(ctx, synopsis, synopsisWidth);
+        const maxSynopsisLines = Math.min(synopsisLines.length, 8);
         
-        ctx.font = '20px Arial';
-        const synopsisLines = wrapText(ctx, synopsis, rightColumnWidth - 20);
-        const maxLines = Math.min(synopsisLines.length, 6);
-        
-        for (let i = 0; i < maxLines; i++) {
+        for (let i = 0; i < maxSynopsisLines; i++) {
           let line = synopsisLines[i];
-          if (i === maxLines - 1 && synopsisLines.length > maxLines) {
+          if (i === maxSynopsisLines - 1 && synopsisLines.length > maxSynopsisLines) {
             line += '...';
           }
-          ctx.fillText(line, rightColumnX, currentY + (i * 28));
+          ctx.fillText(line, synopsisX, currentY + (i * 25));
         }
 
-        // Rating badge no canto superior direito
+        // 5. BADGE DE AVALIAÇÃO (canto superior direito)
         if (rating > 0) {
-          const ratingBadgeX = canvas.width - 160;
-          const ratingBadgeY = 30;
+          const ratingX = canvas.width - 140;
+          const ratingY = 30;
           
           ctx.fillStyle = 'rgba(255, 193, 7, 0.95)';
           ctx.beginPath();
-          ctx.roundRect(ratingBadgeX, ratingBadgeY, 130, 45, 22);
+          ctx.roundRect(ratingX, ratingY, 120, 45, 22);
           ctx.fill();
           
           ctx.fillStyle = 'black';
-          ctx.font = 'bold 20px Arial';
+          ctx.font = 'bold 18px Arial';
           ctx.textAlign = 'center';
-          ctx.fillText(`⭐ ${rating.toFixed(1)}`, ratingBadgeX + 65, ratingBadgeY + 28);
+          ctx.fillText(`⭐ ${rating.toFixed(1)}`, ratingX + 60, ratingY + 28);
         }
 
       } else {
-        // Layout vertical
-        const posterWidth = canvas.width * 0.65;
+        // Layout vertical (9:16)
+        const posterWidth = canvas.width * 0.6;
         const posterHeight = posterWidth * 1.5;
         const posterX = (canvas.width - posterWidth) / 2;
         const posterY = 80;
 
-        // Carregar e desenhar poster
+        // CAPA
         try {
-          const posterUrl = movie.poster_path 
-            ? `https://image.tmdb.org/t/p/w500${movie.poster_path}`
-            : '';
-          
-          if (posterUrl) {
+          if (movie.poster_path) {
+            const posterUrl = `https://image.tmdb.org/t/p/w500${movie.poster_path}`;
+            console.log('Carregando poster vertical:', posterUrl);
             const posterImg = await loadImage(posterUrl);
             
             ctx.save();
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+            ctx.shadowBlur = 20;
+            ctx.shadowOffsetX = 10;
+            ctx.shadowOffsetY = 10;
+            
             ctx.beginPath();
             ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
             ctx.clip();
             ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
             ctx.restore();
             
-            // Borda do poster
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+            // Borda
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
             ctx.lineWidth = 3;
+            ctx.beginPath();
             ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
             ctx.stroke();
           }
         } catch (error) {
+          console.error('Erro ao carregar poster vertical:', error);
           // Placeholder
           ctx.fillStyle = '#4b5563';
           ctx.beginPath();
@@ -300,39 +313,52 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           ctx.fillText('POSTER', posterX + posterWidth/2, posterY + posterHeight/2);
         }
 
-        // Título abaixo do poster
-        let currentY = posterY + posterHeight + 70;
+        // TÍTULO abaixo do poster
+        let currentY = posterY + posterHeight + 60;
         
         ctx.fillStyle = 'white';
-        ctx.font = 'bold 64px Arial, Helvetica, sans-serif';
+        ctx.font = 'bold 56px Arial, sans-serif';
         ctx.textAlign = 'center';
         
         const titleLines = wrapText(ctx, title, canvas.width - 80);
         titleLines.forEach((line, index) => {
-          ctx.fillText(line, canvas.width/2, currentY + (index * 75));
+          ctx.fillText(line, canvas.width/2, currentY + (index * 70));
         });
         
-        currentY += titleLines.length * 75 + 40;
+        currentY += titleLines.length * 70 + 40;
 
-        // Ano, rating e tipo
+        // ANO E TIPO
         if (year) {
-          ctx.font = 'bold 36px Arial';
-          ctx.fillText(year.toString(), canvas.width/2, currentY);
-          currentY += 50;
-        }
-
-        if (rating > 0) {
           ctx.font = 'bold 32px Arial';
-          ctx.fillText(`⭐ ${rating.toFixed(1)}`, canvas.width/2, currentY);
+          ctx.fillText(`${year} • ${mediaType}`, canvas.width/2, currentY);
           currentY += 50;
         }
 
-        // Tipo de mídia
-        ctx.font = 'bold 28px Arial';
-        ctx.fillText(mediaType, canvas.width/2, currentY);
+        // AVALIAÇÃO
+        if (rating > 0) {
+          ctx.font = 'bold 28px Arial';
+          ctx.fillText(`⭐ ${rating.toFixed(1)}`, canvas.width/2, currentY);
+          currentY += 60;
+        }
+
+        // SINOPSE CENTRALIZADA
+        ctx.font = '22px Arial';
+        ctx.textAlign = 'left';
+        const synopsisLines = wrapText(ctx, synopsis, canvas.width - 100);
+        const maxLines = Math.min(synopsisLines.length, 6);
+        
+        for (let i = 0; i < maxLines; i++) {
+          let line = synopsisLines[i];
+          if (i === maxLines - 1 && synopsisLines.length > maxLines) {
+            line += '...';
+          }
+          const lineWidth = ctx.measureText(line).width;
+          const lineX = (canvas.width - lineWidth) / 2;
+          ctx.fillText(line, lineX, currentY + (i * 30));
+        }
       }
 
-      // Rodapé (para ambos os formatos)
+      // RODAPÉ (para ambos os formatos)
       const footerHeight = 100;
       const footerY = canvas.height - footerHeight;
       
@@ -345,51 +371,64 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
       ctx.fillRect(0, footerY, canvas.width, footerHeight);
 
       // Conteúdo do rodapé
-      ctx.fillStyle = 'white';
-      ctx.font = 'bold 18px Arial';
-      ctx.textAlign = 'left';
+      let footerX = 30;
       
-      const footerY1 = footerY + 25;
-      const footerY2 = footerY + 55;
-      
-      // Lado esquerdo - Badge "EXPERIMENTE O TESTE GRÁTIS"
+      // Badge "EXPERIMENTE O TESTE GRÁTIS"
+      const badgeWidth = 280;
       ctx.fillStyle = template.primaryColor;
       ctx.beginPath();
-      ctx.roundRect(20, footerY1 - 5, 250, 30, 15);
+      ctx.roundRect(footerX, footerY + 25, badgeWidth, 35, 17);
       ctx.fill();
       
       ctx.fillStyle = 'white';
       ctx.font = 'bold 16px Arial';
       ctx.textAlign = 'center';
-      ctx.fillText('✓ EXPERIMENTE O TESTE GRÁTIS', 145, footerY1 + 12);
+      ctx.fillText('✓ EXPERIMENTE O TESTE GRÁTIS', footerX + badgeWidth/2, footerY + 47);
+      
+      footerX += badgeWidth + 40;
 
       // Nome da marca (se disponível)
       if (user?.brandName) {
+        ctx.fillStyle = 'white';
         ctx.font = 'bold 14px Arial';
         ctx.textAlign = 'left';
-        ctx.fillText(user.brandName.toUpperCase(), 20, footerY2 + 12);
+        ctx.fillText(user.brandName.toUpperCase(), footerX, footerY + 75);
+        footerX += 120;
       }
       
-      // Lado direito - Ícones de dispositivos
-      const iconY = footerY + 50;
-      const iconSpacing = 100;
-      const startX = canvas.width - 420;
+      // Ícones de dispositivos
+      const iconSize = 24;
+      const iconSpacing = 80;
       
       ctx.fillStyle = 'white';
-      ctx.font = 'bold 14px Arial';
+      ctx.font = `${iconSize}px Arial`;
       ctx.textAlign = 'center';
       
-      // Ícones de dispositivos (usando texto Unicode)
-      const devices = ['📱', '💻', '📺', '✅'];
-      const deviceLabels = ['Mobile', 'PC', 'TV', 'Qualidade'];
+      // Celular
+      ctx.fillText('📱', footerX, footerY + 40);
+      ctx.font = '12px Arial';
+      ctx.fillText('Mobile', footerX, footerY + 65);
+      footerX += iconSpacing;
       
-      devices.forEach((icon, index) => {
-        const x = startX + (index * iconSpacing);
-        ctx.font = '24px Arial';
-        ctx.fillText(icon, x, iconY - 10);
-        ctx.font = 'bold 12px Arial';
-        ctx.fillText(deviceLabels[index], x, iconY + 15);
-      });
+      // PC
+      ctx.font = `${iconSize}px Arial`;
+      ctx.fillText('💻', footerX, footerY + 40);
+      ctx.font = '12px Arial';
+      ctx.fillText('PC', footerX, footerY + 65);
+      footerX += iconSpacing;
+      
+      // TV
+      ctx.font = `${iconSize}px Arial`;
+      ctx.fillText('📺', footerX, footerY + 40);
+      ctx.font = '12px Arial';
+      ctx.fillText('TV', footerX, footerY + 65);
+      footerX += iconSpacing;
+      
+      // Qualidade
+      ctx.font = `${iconSize}px Arial`;
+      ctx.fillText('✅', footerX, footerY + 40);
+      ctx.font = '12px Arial';
+      ctx.fillText('Qualidade', footerX, footerY + 65);
 
       // Download
       canvas.toBlob((blob) => {

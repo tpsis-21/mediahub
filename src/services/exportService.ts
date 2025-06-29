@@ -34,18 +34,16 @@ class ExportService {
               }
             });
             
-            if (!response.ok) {
+            if (response.ok) {
+              const blob = await response.blob();
+              console.log(`Capa baixada com sucesso: ${blob.size} bytes`);
+              
+              const filename = `${item.id}_${(item.title || item.name || 'cover').replace(/[^a-z0-9]/gi, '_').toLowerCase()}.jpg`;
+              zip.file(filename, blob);
+              successCount++;
+            } else {
               console.error(`Erro ao baixar ${imageUrl}: ${response.status}`);
-              continue;
             }
-            
-            const blob = await response.blob();
-            console.log(`Capa baixada com sucesso: ${blob.size} bytes`);
-            
-            const filename = `${item.id}_${(item.title || item.name || 'cover').replace(/[^a-z0-9]/gi, '_').toLowerCase()}.jpg`;
-            zip.file(filename, blob);
-            successCount++;
-            
           } catch (error) {
             console.error(`Erro ao processar capa para ${item.title || item.name}:`, error);
           }

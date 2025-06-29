@@ -68,6 +68,40 @@ const BulkBannerModal: React.FC<BulkBannerModalProps> = ({ movies, onClose }) =>
     story: { width: 1080, height: 1920, label: '1080x1920 (Stories)' }
   };
 
+  const loadImage = (src: string): Promise<HTMLImageElement> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error(`Failed to load image: ${src}`));
+      img.src = src;
+    });
+  };
+
+  const wrapText = (ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] => {
+    const words = text.split(' ');
+    const lines: string[] = [];
+    let currentLine = '';
+
+    for (const word of words) {
+      const testLine = currentLine + (currentLine ? ' ' : '') + word;
+      const metrics = ctx.measureText(testLine);
+      
+      if (metrics.width > maxWidth && currentLine) {
+        lines.push(currentLine);
+        currentLine = word;
+      } else {
+        currentLine = testLine;
+      }
+    }
+    
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+    
+    return lines;
+  };
+
   const generateBanner = async (movie: MovieData, template: any, format: any): Promise<Blob> => {
     return new Promise(async (resolve) => {
       const canvas = document.createElement('canvas');
@@ -80,9 +114,9 @@ const BulkBannerModal: React.FC<BulkBannerModalProps> = ({ movies, onClose }) =>
       const year = movie.release_date || movie.first_air_date 
         ? new Date(movie.release_date || movie.first_air_date!).getFullYear()
         : '';
-      const imageUrl = movie.poster_path 
-        ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` 
-        : '';
+      const synopsis = movie.overview || 'Sinopse não disponível para este conteúdo.';
+      const rating = movie.vote_average || 0;
+      const mediaType = movie.media_type === 'movie' ? 'FILME' : 'SÉRIE';
 
       // Aplicar fundo gradiente
       const mainGradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
@@ -91,355 +125,302 @@ const BulkBannerModal: React.FC<BulkBannerModalProps> = ({ movies, onClose }) =>
       ctx.fillStyle = mainGradient;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      try {
-        // Tentar carregar a imagem
-        let img = null;
-        if (imageUrl) {
-          img = new Image();
-          img.crossOrigin = 'anonymous';
+      if (selectedFormat === 'square') {
+        // Layout quadrado (1:1) - duas colunas
+        const leftColumnWidth = canvas.width * 0.4;
+        const rightColumnX = leftColumnWidth + 20;
+        const rightColumnWidth = canvas.width - rightColumnX - 40;
+        
+        // COLUNA ESQUERDA - CAPA
+        const posterMargin = 40;
+        const posterWidth = leftColumnWidth - (posterMargin * 2);
+        const posterHeight = posterWidth * 1.5;
+        const posterX = posterMargin;
+        const posterY = (canvas.height - posterHeight) / 2;
+
+        try {
+          if (movie.poster_path) {
+            const posterUrl = `https://image.tmdb.org/t/p/w500${movie.poster_path}`;
+            const posterImg = await loadImage(posterUrl);
+            
+            // Desenhar poster com bordas arredondadas e sombra
+            ctx.save();
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+            ctx.shadowBlur = 20;
+            ctx.shadowOffsetX = 10;
+            ctx.shadowOffsetY = 10;
+            
+            ctx.beginPath();
+            ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
+            ctx.clip();
+            ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
+            ctx.restore();
+            
+            // Borda do poster
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
+            ctx.stroke();
+          }
+        } catch (error) {
+          console.error('Erro ao carregar poster:', error);
+          // Placeholder caso não carregue
+          ctx.fillStyle = '#4b5563';
+          ctx.beginPath();
+          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
+          ctx.fill();
           
-          await new Promise((imgResolve, imgReject) => {
-            img!.onload = () => imgResolve(img);
-            img!.onerror = () => imgResolve(null); // Continuar sem imagem
-            img!.src = imageUrl;
-          });
+          ctx.fillStyle = '#9ca3af';
+          ctx.font = 'bold 32px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText('POSTER', posterX + posterWidth/2, posterY + posterHeight/2);
         }
 
-        if (selectedFormat === 'square') {
-          // Layout quadrado
-          const leftColumnWidth = canvas.width * 0.35;
-          const rightColumnWidth = canvas.width * 0.65;
-          const rightColumnStart = leftColumnWidth;
+        // COLUNA DIREITA - CONTEÚDO
+        let currentY = 80;
+        
+        // 1. TÍTULO
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 48px Arial, sans-serif';
+        ctx.textAlign = 'left';
+        
+        const titleLines = wrapText(ctx, title, rightColumnWidth);
+        titleLines.forEach((line, index) => {
+          ctx.fillText(line, rightColumnX, currentY + (index * 60));
+        });
+        
+        currentY += titleLines.length * 60 + 40;
+
+        // 2. RETÂNGULO COM ANO E TIPO
+        if (year || mediaType) {
+          const badgeText = year ? `${year} • ${mediaType}` : mediaType;
+          const badgeWidth = Math.min(rightColumnWidth, 320);
+          const badgeHeight = 55;
           
-          // Desenhar capa ou placeholder
-          const coverMargin = 30;
-          const coverWidth = leftColumnWidth - (coverMargin * 2);
-          const coverHeight = canvas.height - 200;
-          const coverY = 30;
+          // Gradiente do badge
+          const badgeGradient = ctx.createLinearGradient(
+            rightColumnX, currentY, 
+            rightColumnX + badgeWidth, currentY + badgeHeight
+          );
+          badgeGradient.addColorStop(0, template.primaryColor);
+          badgeGradient.addColorStop(1, template.secondaryColor);
           
-          if (img) {
-            ctx.drawImage(img, coverMargin, coverY, coverWidth, coverHeight);
-          } else {
-            // Placeholder para capa
-            ctx.fillStyle = 'rgba(255,255,255,0.1)';
-            ctx.fillRect(coverMargin, coverY, coverWidth, coverHeight);
-            ctx.fillStyle = 'rgba(255,255,255,0.3)';
-            ctx.font = '24px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText('CAPA', leftColumnWidth / 2, coverY + coverHeight / 2);
-          }
-          
-          // Título
-          ctx.fillStyle = 'white';
-          ctx.font = 'bold 56px Arial, sans-serif';
-          ctx.textAlign = 'left';
-          
-          const titleWords = title.split(' ');
-          let titleLine = '';
-          let titleY = 100;
-          const titleLineHeight = 70;
-          const titleMaxWidth = rightColumnWidth - 80;
-          
-          for (let i = 0; i < titleWords.length; i++) {
-            const testLine = titleLine + titleWords[i] + ' ';
-            const metrics = ctx.measureText(testLine);
-            
-            if (metrics.width > titleMaxWidth && i > 0) {
-              ctx.fillText(titleLine, rightColumnStart + 40, titleY);
-              titleLine = titleWords[i] + ' ';
-              titleY += titleLineHeight;
-            } else {
-              titleLine = testLine;
-            }
-          }
-          ctx.fillText(titleLine, rightColumnStart + 40, titleY);
-          
-          // Retângulo da categoria
-          const rectY = titleY + 60;
-          const rectGradient = ctx.createLinearGradient(rightColumnStart + 40, rectY, rightColumnStart + 280, rectY + 60);
-          rectGradient.addColorStop(0, template.primaryColor);
-          rectGradient.addColorStop(1, template.secondaryColor);
-          ctx.fillStyle = rectGradient;
+          ctx.fillStyle = badgeGradient;
           ctx.beginPath();
-          ctx.roundRect(rightColumnStart + 40, rectY, 280, 60, 30);
-          ctx.fill();
-          
-          // Texto da categoria
-          ctx.fillStyle = 'white';
-          ctx.font = 'bold 24px Arial';
-          ctx.textAlign = 'center';
-          const categoryText = movie.media_type === 'movie' ? 'FILME' : 'SÉRIE';
-          ctx.fillText(`${categoryText} ${year}`, rightColumnStart + 180, rectY + 40);
-          
-          // Rótulo SINOPSE
-          ctx.save();
-          ctx.translate(rightColumnStart + 40, rectY + 140);
-          ctx.rotate(-Math.PI / 2);
-          ctx.fillStyle = 'white';
-          ctx.font = 'bold 20px Arial';
-          ctx.textAlign = 'center';
-          ctx.fillText('SINOPSE', 0, 0);
-          ctx.restore();
-          
-          // Sinopse
-          ctx.fillStyle = 'white';
-          ctx.font = '20px Arial';
-          ctx.textAlign = 'left';
-          const synopsis = (movie.overview || 'Sinopse não disponível').substring(0, 300);
-          wrapText(ctx, synopsis, rightColumnStart + 80, rectY + 140, rightColumnWidth - 120, 26, 10);
-          
-          // Avaliação
-          if (movie.vote_average > 0) {
-            ctx.fillStyle = 'rgba(0,0,0,0.7)';
-            ctx.beginPath();
-            ctx.roundRect(canvas.width - 140, 30, 120, 50, 25);
-            ctx.fill();
-            ctx.fillStyle = 'white';
-            ctx.font = 'bold 20px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText(`⭐ ${movie.vote_average.toFixed(1)}`, canvas.width - 80, 60);
-          }
-          
-          // Rodapé
-          drawFooterSquare(ctx, canvas.width, canvas.height, template);
-        } else {
-          // Layout stories
-          const headerHeight = 300;
-          
-          // Capa centralizada
-          const coverSize = 200;
-          const coverX = (canvas.width - coverSize) / 2;
-          const coverY = 50;
-          
-          if (img) {
-            ctx.drawImage(img, coverX, coverY, coverSize, coverSize * 1.5);
-          } else {
-            ctx.fillStyle = 'rgba(255,255,255,0.1)';
-            ctx.fillRect(coverX, coverY, coverSize, coverSize * 1.5);
-            ctx.fillStyle = 'rgba(255,255,255,0.3)';
-            ctx.font = '24px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText('CAPA', canvas.width / 2, coverY + 150);
-          }
-          
-          // Título
-          ctx.fillStyle = 'white';
-          ctx.font = 'bold 48px Arial, sans-serif';
-          ctx.textAlign = 'center';
-          
-          const titleWords = title.split(' ');
-          let titleLine = '';
-          let titleY = coverY + 320;
-          const titleLineHeight = 60;
-          const titleMaxWidth = canvas.width - 80;
-          
-          for (let i = 0; i < titleWords.length; i++) {
-            const testLine = titleLine + titleWords[i] + ' ';
-            const metrics = ctx.measureText(testLine);
-            
-            if (metrics.width > titleMaxWidth && i > 0) {
-              ctx.fillText(titleLine, canvas.width / 2, titleY);
-              titleLine = titleWords[i] + ' ';
-              titleY += titleLineHeight;
-            } else {
-              titleLine = testLine;
-            }
-          }
-          ctx.fillText(titleLine, canvas.width / 2, titleY);
-          
-          // Categoria
-          const rectY = titleY + 40;
-          const rectWidth = 300;
-          const rectX = (canvas.width - rectWidth) / 2;
-          const rectGradient = ctx.createLinearGradient(rectX, rectY, rectX + rectWidth, rectY + 60);
-          rectGradient.addColorStop(0, template.primaryColor);
-          rectGradient.addColorStop(1, template.secondaryColor);
-          ctx.fillStyle = rectGradient;
-          ctx.beginPath();
-          ctx.roundRect(rectX, rectY, rectWidth, 60, 30);
+          ctx.roundRect(rightColumnX, currentY, badgeWidth, badgeHeight, 27);
           ctx.fill();
           
           ctx.fillStyle = 'white';
-          ctx.font = 'bold 24px Arial';
+          ctx.font = 'bold 22px Arial';
           ctx.textAlign = 'center';
-          const categoryText = movie.media_type === 'movie' ? 'FILME' : 'SÉRIE';
-          ctx.fillText(`${categoryText} ${year}`, canvas.width / 2, rectY + 40);
+          ctx.fillText(badgeText, rightColumnX + badgeWidth/2, currentY + 35);
           
-          // Sinopse
-          ctx.fillStyle = 'white';
-          ctx.font = '22px Arial';
-          ctx.textAlign = 'left';
-          const synopsis = (movie.overview || 'Sinopse não disponível').substring(0, 200);
-          wrapText(ctx, synopsis, 60, rectY + 120, canvas.width - 120, 30, 12);
-          
-          // Avaliação
-          if (movie.vote_average > 0) {
-            ctx.fillStyle = 'rgba(0,0,0,0.7)';
-            ctx.beginPath();
-            ctx.roundRect(canvas.width - 140, 30, 120, 50, 25);
-            ctx.fill();
-            ctx.fillStyle = 'white';
-            ctx.font = 'bold 20px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText(`⭐ ${movie.vote_average.toFixed(1)}`, canvas.width - 80, 60);
-          }
-          
-          // Rodapé
-          drawFooterStory(ctx, canvas.width, canvas.height, template);
+          currentY += badgeHeight + 50;
         }
-      } catch (error) {
-        console.error('Erro ao processar imagem:', error);
+
+        // 3. RÓTULO VERTICAL "SINOPSE"
+        ctx.save();
+        ctx.translate(rightColumnX + 15, currentY + 80);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 18px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('SINOPSE', 0, 0);
+        ctx.restore();
+
+        // 4. SINOPSE
+        ctx.fillStyle = 'white';
+        ctx.font = '18px Arial';
+        ctx.textAlign = 'left';
+        
+        const synopsisX = rightColumnX + 40;
+        const synopsisWidth = rightColumnWidth - 60;
+        const synopsisLines = wrapText(ctx, synopsis, synopsisWidth);
+        const maxSynopsisLines = Math.min(synopsisLines.length, 8);
+        
+        for (let i = 0; i < maxSynopsisLines; i++) {
+          let line = synopsisLines[i];
+          if (i === maxSynopsisLines - 1 && synopsisLines.length > maxSynopsisLines) {
+            line += '...';
+          }
+          ctx.fillText(line, synopsisX, currentY + (i * 25));
+        }
+
+        // 5. BADGE DE AVALIAÇÃO (canto superior direito)
+        if (rating > 0) {
+          const ratingX = canvas.width - 140;
+          const ratingY = 30;
+          
+          ctx.fillStyle = 'rgba(255, 193, 7, 0.95)';
+          ctx.beginPath();
+          ctx.roundRect(ratingX, ratingY, 120, 45, 22);
+          ctx.fill();
+          
+          ctx.fillStyle = 'black';
+          ctx.font = 'bold 18px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText(`⭐ ${rating.toFixed(1)}`, ratingX + 60, ratingY + 28);
+        }
+
+      } else {
+        // Layout vertical (9:16)
+        const posterWidth = canvas.width * 0.6;
+        const posterHeight = posterWidth * 1.5;
+        const posterX = (canvas.width - posterWidth) / 2;
+        const posterY = 80;
+
+        // CAPA
+        try {
+          if (movie.poster_path) {
+            const posterUrl = `https://image.tmdb.org/t/p/w500${movie.poster_path}`;
+            const posterImg = await loadImage(posterUrl);
+            
+            ctx.save();
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+            ctx.shadowBlur = 20;
+            ctx.shadowOffsetX = 10;
+            ctx.shadowOffsetY = 10;
+            
+            ctx.beginPath();
+            ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
+            ctx.clip();
+            ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
+            ctx.restore();
+            
+            // Borda
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
+            ctx.stroke();
+          }
+        } catch (error) {
+          console.error('Erro ao carregar poster vertical:', error);
+          // Placeholder
+          ctx.fillStyle = '#4b5563';
+          ctx.beginPath();
+          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
+          ctx.fill();
+          
+          ctx.fillStyle = '#9ca3af';
+          ctx.font = 'bold 40px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText('POSTER', posterX + posterWidth/2, posterY + posterHeight/2);
+        }
+
+        // TÍTULO abaixo do poster
+        let currentY = posterY + posterHeight + 60;
+        
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 56px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        
+        const titleLines = wrapText(ctx, title, canvas.width - 80);
+        titleLines.forEach((line, index) => {
+          ctx.fillText(line, canvas.width/2, currentY + (index * 70));
+        });
+        
+        currentY += titleLines.length * 70 + 40;
+
+        // ANO E TIPO
+        if (year) {
+          ctx.font = 'bold 32px Arial';
+          ctx.fillText(`${year} • ${mediaType}`, canvas.width/2, currentY);
+          currentY += 50;
+        }
+
+        // AVALIAÇÃO
+        if (rating > 0) {
+          ctx.font = 'bold 28px Arial';
+          ctx.fillText(`⭐ ${rating.toFixed(1)}`, canvas.width/2, currentY);
+          currentY += 60;
+        }
+
+        // SINOPSE CENTRALIZADA
+        ctx.font = '22px Arial';
+        ctx.textAlign = 'left';
+        const synopsisLines = wrapText(ctx, synopsis, canvas.width - 100);
+        const maxLines = Math.min(synopsisLines.length, 6);
+        
+        for (let i = 0; i < maxLines; i++) {
+          let line = synopsisLines[i];
+          if (i === maxLines - 1 && synopsisLines.length > maxLines) {
+            line += '...';
+          }
+          const lineWidth = ctx.measureText(line).width;
+          const lineX = (canvas.width - lineWidth) / 2;
+          ctx.fillText(line, lineX, currentY + (i * 30));
+        }
       }
+
+      // RODAPÉ (para ambos os formatos)
+      const footerHeight = 100;
+      const footerY = canvas.height - footerHeight;
+      
+      // Fundo do rodapé
+      const footerGradient = ctx.createLinearGradient(0, footerY, 0, canvas.height);
+      footerGradient.addColorStop(0, 'rgba(0,0,0,0.8)');
+      footerGradient.addColorStop(1, 'rgba(0,0,0,0.95)');
+      
+      ctx.fillStyle = footerGradient;
+      ctx.fillRect(0, footerY, canvas.width, footerHeight);
+
+      // Conteúdo do rodapé
+      let footerX = 30;
+      
+      // Badge "EXPERIMENTE O TESTE GRÁTIS"
+      const badgeWidth = 280;
+      ctx.fillStyle = template.primaryColor;
+      ctx.beginPath();
+      ctx.roundRect(footerX, footerY + 25, badgeWidth, 35, 17);
+      ctx.fill();
+      
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 16px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('✓ EXPERIMENTE O TESTE GRÁTIS', footerX + badgeWidth/2, footerY + 47);
+      
+      footerX += badgeWidth + 40;
+
+      // Ícones de dispositivos
+      const iconSize = 24;
+      const iconSpacing = 80;
+      
+      ctx.fillStyle = 'white';
+      ctx.font = `${iconSize}px Arial`;
+      ctx.textAlign = 'center';
+      
+      // Celular
+      ctx.fillText('📱', footerX, footerY + 40);
+      ctx.font = '12px Arial';
+      ctx.fillText('Mobile', footerX, footerY + 65);
+      footerX += iconSpacing;
+      
+      // PC
+      ctx.font = `${iconSize}px Arial`;
+      ctx.fillText('💻', footerX, footerY + 40);
+      ctx.font = '12px Arial';
+      ctx.fillText('PC', footerX, footerY + 65);
+      footerX += iconSpacing;
+      
+      // TV
+      ctx.font = `${iconSize}px Arial`;
+      ctx.fillText('📺', footerX, footerY + 40);
+      ctx.font = '12px Arial';
+      ctx.fillText('TV', footerX, footerY + 65);
+      footerX += iconSpacing;
+      
+      // Qualidade
+      ctx.font = `${iconSize}px Arial`;
+      ctx.fillText('✅', footerX, footerY + 40);
+      ctx.font = '12px Arial';
+      ctx.fillText('Qualidade', footerX, footerY + 65);
 
       canvas.toBlob((blob) => {
         if (blob) resolve(blob);
-      });
+      }, 'image/png', 1.0);
     });
-  };
-
-  const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number, maxLines: number) => {
-    const words = text.split(' ');
-    let line = '';
-    let currentY = y;
-    let lineCount = 0;
-
-    for (let i = 0; i < words.length && lineCount < maxLines; i++) {
-      const testLine = line + words[i] + ' ';
-      const metrics = ctx.measureText(testLine);
-      
-      if (metrics.width > maxWidth && i > 0) {
-        ctx.fillText(line, x, currentY);
-        line = words[i] + ' ';
-        currentY += lineHeight;
-        lineCount++;
-      } else {
-        line = testLine;
-      }
-    }
-    if (lineCount < maxLines) {
-      ctx.fillText(line, x, currentY);
-    }
-  };
-
-  const drawFooterSquare = (ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number, template: any) => {
-    const footerY = canvasHeight - 150;
-    
-    // Fundo do rodapé
-    const footerGradient = ctx.createLinearGradient(0, footerY, canvasWidth, footerY + 150);
-    footerGradient.addColorStop(0, 'rgba(0,0,0,0.8)');
-    footerGradient.addColorStop(1, template.gradientFrom);
-    ctx.fillStyle = footerGradient;
-    ctx.fillRect(0, footerY, canvasWidth, 150);
-    
-    let currentX = 40;
-    
-    // Badge
-    ctx.fillStyle = template.primaryColor;
-    ctx.beginPath();
-    ctx.roundRect(currentX, footerY + 30, 300, 50, 25);
-    ctx.fill();
-    
-    ctx.fillStyle = 'white';
-    ctx.font = 'bold 18px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText('✓ EXPERIMENTE O TESTE GRÁTIS', currentX + 150, footerY + 60);
-    
-    currentX += 350;
-    
-    // Ícones
-    ctx.fillStyle = 'white';
-    ctx.font = '32px Arial';
-    ctx.textAlign = 'center';
-    
-    ctx.fillText('📱', currentX, footerY + 70);
-    ctx.font = '14px Arial';
-    ctx.fillText('Celular', currentX, footerY + 95);
-    currentX += 80;
-    
-    ctx.font = '32px Arial';
-    ctx.fillText('📺', currentX, footerY + 70);
-    ctx.font = '14px Arial';
-    ctx.fillText('Smart TV', currentX, footerY + 95);
-    currentX += 100;
-    
-    ctx.font = '32px Arial';
-    ctx.fillText('💻', currentX, footerY + 70);
-    ctx.font = '14px Arial';
-    ctx.fillText('Computador', currentX, footerY + 95);
-    currentX += 120;
-    
-    // Selo
-    ctx.fillStyle = 'rgba(255,255,255,0.2)';
-    ctx.beginPath();
-    ctx.roundRect(currentX, footerY + 40, 150, 40, 20);
-    ctx.fill();
-    
-    ctx.fillStyle = 'white';
-    ctx.font = 'bold 14px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText('🛡️ Qualidade Garantida', currentX + 75, footerY + 65);
-  };
-
-  const drawFooterStory = (ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number, template: any) => {
-    const footerY = canvasHeight - 200;
-    
-    // Fundo do rodapé
-    const footerGradient = ctx.createLinearGradient(0, footerY, canvasWidth, footerY + 200);
-    footerGradient.addColorStop(0, 'rgba(0,0,0,0.8)');
-    footerGradient.addColorStop(1, template.gradientFrom);
-    ctx.fillStyle = footerGradient;
-    ctx.fillRect(0, footerY, canvasWidth, 200);
-    
-    // Badge centralizado
-    const badgeWidth = 350;
-    const badgeX = (canvasWidth - badgeWidth) / 2;
-    
-    ctx.fillStyle = template.primaryColor;
-    ctx.beginPath();
-    ctx.roundRect(badgeX, footerY + 20, badgeWidth, 50, 25);
-    ctx.fill();
-    
-    ctx.fillStyle = 'white';
-    ctx.font = 'bold 18px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText('✓ EXPERIMENTE O TESTE GRÁTIS', canvasWidth / 2, footerY + 50);
-    
-    // Ícones
-    const iconsY = footerY + 100;
-    const iconSpacing = 150;
-    const startX = (canvasWidth - (iconSpacing * 2)) / 2;
-    
-    ctx.fillStyle = 'white';
-    ctx.font = '32px Arial';
-    ctx.textAlign = 'center';
-    
-    ctx.fillText('📱', startX, iconsY);
-    ctx.font = '14px Arial';
-    ctx.fillText('Celular', startX, iconsY + 25);
-    
-    ctx.font = '32px Arial';
-    ctx.fillText('📺', startX + iconSpacing, iconsY);
-    ctx.font = '14px Arial';
-    ctx.fillText('Smart TV', startX + iconSpacing, iconsY + 25);
-    
-    ctx.font = '32px Arial';
-    ctx.fillText('💻', startX + (iconSpacing * 2), iconsY);
-    ctx.font = '14px Arial';
-    ctx.fillText('Computador', startX + (iconSpacing * 2), iconsY + 25);
-    
-    // Selo
-    const sealWidth = 200;
-    const sealX = (canvasWidth - sealWidth) / 2;
-    
-    ctx.fillStyle = 'rgba(255,255,255,0.2)';
-    ctx.beginPath();
-    ctx.roundRect(sealX, footerY + 150, sealWidth, 40, 20);
-    ctx.fill();
-    
-    ctx.fillStyle = 'white';
-    ctx.font = 'bold 14px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText('🛡️ Qualidade Garantida', canvasWidth / 2, footerY + 175);
   };
 
   const handleGenerateBulkBanners = async () => {

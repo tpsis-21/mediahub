@@ -12,55 +12,79 @@ export interface ExportData {
 }
 
 class ExportService {
-  async exportSelectedItems(items: MovieData[], userEmail?: string): Promise<void> {
+  async downloadSelectedCovers(items: MovieData[]): Promise<void> {
+    if (items.length === 0) return;
+
     const zip = new JSZip();
+    let successCount = 0;
     
-    // Criar JSON com metadados
-    const exportData: ExportData = {
-      movies: items.map(item => ({
-        ...item,
-        // Adicionar URLs completas das imagens
-        poster_url: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : '',
-        backdrop_url: item.backdrop_path ? `https://image.tmdb.org/t/p/w500${item.backdrop_path}` : ''
-      })),
-      exportDate: new Date().toISOString(),
-      metadata: {
-        totalItems: items.length,
-        exportedBy: userEmail || 'anonymous'
-      }
-    };
-
-    zip.file('metadata.json', JSON.stringify(exportData, null, 2));
-
-    // Baixar capas (simulado - em produção, fazer download real)
-    const coversFolder = zip.folder('covers');
-    
-    for (const item of items) {
-      if (item.poster_path) {
-        try {
-          // Em produção, fazer fetch da imagem real
-          const filename = `${item.id}_${(item.title || item.name || 'unknown').replace(/[^a-z0-9]/gi, '_').toLowerCase()}.jpg`;
-          
-          // Simulando adição de arquivo de imagem
-          coversFolder?.file(filename, 'fake-image-data', { base64: true });
-        } catch (error) {
-          console.error(`Erro ao baixar capa para ${item.title || item.name}:`, error);
+    try {
+      console.log(`Iniciando download de ${items.length} capas...`);
+      
+      for (const item of items) {
+        if (item.poster_path) {
+          try {
+            const imageUrl = `https://image.tmdb.org/t/p/w500${item.poster_path}`;
+            console.log(`Baixando capa: ${imageUrl}`);
+            
+            const response = await fetch(imageUrl, {
+              mode: 'cors',
+              headers: {
+                'Accept': 'image/*'
+              }
+            });
+            
+            if (!response.ok) {
+              console.error(`Erro ao baixar ${imageUrl}: ${response.status}`);
+              continue;
+            }
+            
+            const blob = await response.blob();
+            console.log(`Capa baixada com sucesso: ${blob.size} bytes`);
+            
+            const filename = `${item.id}_${(item.title || item.name || 'cover').replace(/[^a-z0-9]/gi, '_').toLowerCase()}.jpg`;
+            zip.file(filename, blob);
+            successCount++;
+            
+          } catch (error) {
+            console.error(`Erro ao processar capa para ${item.title || item.name}:`, error);
+          }
+        } else {
+          console.log(`Item ${item.title || item.name} não possui poster_path`);
         }
       }
-    }
 
-    // Gerar e baixar o ZIP
-    const content = await zip.generateAsync({ type: 'blob' });
-    const url = URL.createObjectURL(content);
-    
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `movie_export_${new Date().toISOString().split('T')[0]}.zip`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    URL.revokeObjectURL(url);
+      if (successCount === 0) {
+        throw new Error('Nenhuma capa foi baixada com sucesso');
+      }
+
+      console.log(`${successCount} capas processadas com sucesso`);
+
+      // Gerar e baixar o ZIP
+      const content = await zip.generateAsync({ 
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: {
+          level: 6
+        }
+      });
+      
+      console.log(`Arquivo ZIP gerado: ${content.size} bytes`);
+      
+      const url = URL.createObjectURL(content);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `capas_${new Date().toISOString().split('T')[0]}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      URL.revokeObjectURL(url);
+      
+    } catch (error) {
+      console.error('Erro no download das capas:', error);
+      throw error;
+    }
   }
 
   async downloadCover(item: MovieData): Promise<void> {
@@ -68,7 +92,17 @@ class ExportService {
 
     try {
       const imageUrl = `https://image.tmdb.org/t/p/w500${item.poster_path}`;
-      const response = await fetch(imageUrl);
+      const response = await fetch(imageUrl, {
+        mode: 'cors',
+        headers: {
+          'Accept': 'image/*'
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
       const blob = await response.blob();
       
       const url = URL.createObjectURL(blob);
@@ -82,39 +116,8 @@ class ExportService {
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Erro ao baixar capa:', error);
+      throw error;
     }
-  }
-
-  async downloadSelectedCovers(items: MovieData[]): Promise<void> {
-    const zip = new JSZip();
-    
-    for (const item of items) {
-      if (item.poster_path) {
-        try {
-          const imageUrl = `https://image.tmdb.org/t/p/w500${item.poster_path}`;
-          const response = await fetch(imageUrl);
-          const blob = await response.blob();
-          
-          const filename = `${(item.title || item.name || 'cover').replace(/[^a-z0-9]/gi, '_').toLowerCase()}.jpg`;
-          zip.file(filename, blob);
-        } catch (error) {
-          console.error(`Erro ao baixar capa para ${item.title || item.name}:`, error);
-        }
-      }
-    }
-
-    // Gerar e baixar o ZIP
-    const content = await zip.generateAsync({ type: 'blob' });
-    const url = URL.createObjectURL(content);
-    
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `covers_${new Date().toISOString().split('T')[0]}.zip`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    URL.revokeObjectURL(url);
   }
 
   copyToClipboard(text: string): Promise<void> {

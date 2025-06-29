@@ -42,16 +42,16 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
     {
       id: 2,
       name: 'Template Elegante',
-      primaryColor: '#111827',
-      secondaryColor: '#374151',
-      bgColor: 'linear-gradient(135deg, #111827, #374151)'
+      primaryColor: '#374151',
+      secondaryColor: '#6b7280',
+      bgColor: 'linear-gradient(135deg, #374151, #6b7280)'
     },
     {
       id: 3,
       name: 'Template Escuro',
       primaryColor: '#000000',
-      secondaryColor: '#1f1f1f',
-      bgColor: 'linear-gradient(135deg, #000000, #1f1f1f)'
+      secondaryColor: '#1f2937',
+      bgColor: 'linear-gradient(135deg, #000000, #1f2937)'
     }
   ];
 
@@ -117,232 +117,279 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
         gradient.addColorStop(0, template.primaryColor);
         gradient.addColorStop(1, template.secondaryColor);
       } else if (template.id === 2) {
-        gradient.addColorStop(0, '#111827');
-        gradient.addColorStop(1, '#374151');
+        gradient.addColorStop(0, '#374151');
+        gradient.addColorStop(1, '#6b7280');
       } else {
         gradient.addColorStop(0, '#000000');
-        gradient.addColorStop(1, '#1f1f1f');
+        gradient.addColorStop(1, '#1f2937');
       }
       
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       if (selectedFormat === 'square') {
-        // Layout de duas colunas para formato quadrado
+        // Layout de duas colunas para formato quadrado (1:1)
         const columnWidth = canvas.width / 2;
-        const posterWidth = columnWidth * 0.8;
+        const posterWidth = columnWidth * 0.75;
         const posterHeight = posterWidth * 1.5;
-        const posterX = columnWidth * 0.1;
+        const posterX = (columnWidth - posterWidth) / 2;
         const posterY = (canvas.height - posterHeight) / 2;
 
         // Carregar e desenhar poster na coluna esquerda
         try {
           const posterUrl = movie.poster_path 
             ? `https://image.tmdb.org/t/p/w500${movie.poster_path}`
-            : '/placeholder.svg';
+            : '';
           
-          const posterImg = await loadImage(posterUrl);
-          
-          // Desenhar poster com bordas arredondadas
-          ctx.save();
-          ctx.beginPath();
-          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
-          ctx.clip();
-          ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
-          ctx.restore();
+          if (posterUrl) {
+            const posterImg = await loadImage(posterUrl);
+            
+            // Desenhar poster com bordas arredondadas
+            ctx.save();
+            ctx.beginPath();
+            ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
+            ctx.clip();
+            ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
+            ctx.restore();
+            
+            // Sombra do poster
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+            ctx.shadowBlur = 10;
+            ctx.shadowOffsetX = 5;
+            ctx.shadowOffsetY = 5;
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+            ctx.lineWidth = 2;
+            ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
+            ctx.stroke();
+            ctx.shadowColor = 'transparent';
+          }
         } catch (error) {
           console.log('Erro ao carregar poster, usando placeholder');
           // Desenhar placeholder
-          ctx.fillStyle = '#374151';
+          ctx.fillStyle = '#4b5563';
           ctx.beginPath();
-          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
+          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 15);
           ctx.fill();
           
-          ctx.fillStyle = 'white';
-          ctx.font = '24px Arial';
+          ctx.fillStyle = '#9ca3af';
+          ctx.font = 'bold 32px Arial';
           ctx.textAlign = 'center';
           ctx.fillText('POSTER', posterX + posterWidth/2, posterY + posterHeight/2);
         }
 
         // Coluna direita - conteúdo
-        const rightColumnX = columnWidth;
-        const rightColumnWidth = columnWidth * 0.9;
+        const rightColumnX = columnWidth + 20;
+        const rightColumnWidth = columnWidth - 40;
         
         // Título
         ctx.fillStyle = 'white';
-        ctx.font = 'bold 48px Arial';
+        ctx.font = 'bold 52px Arial, Helvetica, sans-serif';
         ctx.textAlign = 'left';
         
-        const titleLines = wrapText(ctx, title, rightColumnWidth - 40);
-        let currentY = 120;
+        const titleLines = wrapText(ctx, title, rightColumnWidth);
+        let currentY = 100;
         
         titleLines.forEach((line, index) => {
-          ctx.fillText(line, rightColumnX + 20, currentY + (index * 60));
+          ctx.fillText(line, rightColumnX, currentY + (index * 65));
         });
         
-        currentY += titleLines.length * 60 + 40;
+        currentY += titleLines.length * 65 + 30;
 
         // Ano e tipo em retângulo com gradiente
         if (year || mediaType) {
           const badgeText = year ? `${year} • ${mediaType}` : mediaType;
-          const badgeWidth = 300;
-          const badgeHeight = 50;
+          const badgeWidth = Math.min(rightColumnWidth - 20, 320);
+          const badgeHeight = 55;
           
           // Gradiente do badge
           const badgeGradient = ctx.createLinearGradient(
-            rightColumnX + 20, currentY, 
-            rightColumnX + 20 + badgeWidth, currentY + badgeHeight
+            rightColumnX, currentY, 
+            rightColumnX + badgeWidth, currentY + badgeHeight
           );
           badgeGradient.addColorStop(0, template.primaryColor);
           badgeGradient.addColorStop(1, template.secondaryColor);
           
           ctx.fillStyle = badgeGradient;
           ctx.beginPath();
-          ctx.roundRect(rightColumnX + 20, currentY, badgeWidth, badgeHeight, 25);
+          ctx.roundRect(rightColumnX, currentY, badgeWidth, badgeHeight, 27);
           ctx.fill();
           
           ctx.fillStyle = 'white';
-          ctx.font = 'bold 24px Arial';
+          ctx.font = 'bold 26px Arial';
           ctx.textAlign = 'center';
-          ctx.fillText(badgeText, rightColumnX + 20 + badgeWidth/2, currentY + 32);
+          ctx.fillText(badgeText, rightColumnX + badgeWidth/2, currentY + 35);
           
-          currentY += badgeHeight + 60;
+          currentY += badgeHeight + 50;
         }
 
         // Sinopse
         ctx.fillStyle = 'white';
-        ctx.font = 'bold 20px Arial';
+        ctx.font = 'bold 24px Arial';
         ctx.textAlign = 'left';
-        ctx.fillText('SINOPSE', rightColumnX + 20, currentY);
+        ctx.fillText('SINOPSE', rightColumnX, currentY);
         
-        currentY += 40;
+        currentY += 35;
         
-        ctx.font = '18px Arial';
-        const synopsisLines = wrapText(ctx, synopsis, rightColumnWidth - 40);
-        const maxLines = Math.min(synopsisLines.length, 8);
+        ctx.font = '20px Arial';
+        const synopsisLines = wrapText(ctx, synopsis, rightColumnWidth - 20);
+        const maxLines = Math.min(synopsisLines.length, 6);
         
         for (let i = 0; i < maxLines; i++) {
           let line = synopsisLines[i];
           if (i === maxLines - 1 && synopsisLines.length > maxLines) {
             line += '...';
           }
-          ctx.fillText(line, rightColumnX + 20, currentY + (i * 25));
+          ctx.fillText(line, rightColumnX, currentY + (i * 28));
         }
 
         // Rating badge no canto superior direito
         if (rating > 0) {
-          const ratingBadgeX = canvas.width - 150;
+          const ratingBadgeX = canvas.width - 160;
           const ratingBadgeY = 30;
           
-          ctx.fillStyle = 'rgba(255, 193, 7, 0.9)';
+          ctx.fillStyle = 'rgba(255, 193, 7, 0.95)';
           ctx.beginPath();
-          ctx.roundRect(ratingBadgeX, ratingBadgeY, 120, 40, 20);
+          ctx.roundRect(ratingBadgeX, ratingBadgeY, 130, 45, 22);
           ctx.fill();
           
           ctx.fillStyle = 'black';
-          ctx.font = 'bold 18px Arial';
+          ctx.font = 'bold 20px Arial';
           ctx.textAlign = 'center';
-          ctx.fillText(`⭐ ${rating.toFixed(1)}`, ratingBadgeX + 60, ratingBadgeY + 25);
+          ctx.fillText(`⭐ ${rating.toFixed(1)}`, ratingBadgeX + 65, ratingBadgeY + 28);
         }
 
       } else {
         // Layout vertical
-        const posterWidth = canvas.width * 0.6;
+        const posterWidth = canvas.width * 0.65;
         const posterHeight = posterWidth * 1.5;
         const posterX = (canvas.width - posterWidth) / 2;
-        const posterY = 100;
+        const posterY = 80;
 
         // Carregar e desenhar poster
         try {
           const posterUrl = movie.poster_path 
             ? `https://image.tmdb.org/t/p/w500${movie.poster_path}`
-            : '/placeholder.svg';
+            : '';
           
-          const posterImg = await loadImage(posterUrl);
-          
-          ctx.save();
-          ctx.beginPath();
-          ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
-          ctx.clip();
-          ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
-          ctx.restore();
+          if (posterUrl) {
+            const posterImg = await loadImage(posterUrl);
+            
+            ctx.save();
+            ctx.beginPath();
+            ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
+            ctx.clip();
+            ctx.drawImage(posterImg, posterX, posterY, posterWidth, posterHeight);
+            ctx.restore();
+            
+            // Borda do poster
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.lineWidth = 3;
+            ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
+            ctx.stroke();
+          }
         } catch (error) {
           // Placeholder
-          ctx.fillStyle = '#374151';
+          ctx.fillStyle = '#4b5563';
           ctx.beginPath();
           ctx.roundRect(posterX, posterY, posterWidth, posterHeight, 20);
           ctx.fill();
           
-          ctx.fillStyle = 'white';
-          ctx.font = '32px Arial';
+          ctx.fillStyle = '#9ca3af';
+          ctx.font = 'bold 40px Arial';
           ctx.textAlign = 'center';
           ctx.fillText('POSTER', posterX + posterWidth/2, posterY + posterHeight/2);
         }
 
         // Título abaixo do poster
-        let currentY = posterY + posterHeight + 80;
+        let currentY = posterY + posterHeight + 70;
         
         ctx.fillStyle = 'white';
-        ctx.font = 'bold 56px Arial';
+        ctx.font = 'bold 64px Arial, Helvetica, sans-serif';
         ctx.textAlign = 'center';
         
         const titleLines = wrapText(ctx, title, canvas.width - 80);
         titleLines.forEach((line, index) => {
-          ctx.fillText(line, canvas.width/2, currentY + (index * 70));
+          ctx.fillText(line, canvas.width/2, currentY + (index * 75));
         });
         
-        currentY += titleLines.length * 70 + 40;
+        currentY += titleLines.length * 75 + 40;
 
-        // Ano e rating
+        // Ano, rating e tipo
         if (year) {
-          ctx.font = 'bold 32px Arial';
+          ctx.font = 'bold 36px Arial';
           ctx.fillText(year.toString(), canvas.width/2, currentY);
           currentY += 50;
         }
 
         if (rating > 0) {
-          ctx.font = 'bold 28px Arial';
+          ctx.font = 'bold 32px Arial';
           ctx.fillText(`⭐ ${rating.toFixed(1)}`, canvas.width/2, currentY);
           currentY += 50;
         }
 
         // Tipo de mídia
-        ctx.font = 'bold 24px Arial';
+        ctx.font = 'bold 28px Arial';
         ctx.fillText(mediaType, canvas.width/2, currentY);
       }
 
       // Rodapé (para ambos os formatos)
-      const footerHeight = 120;
+      const footerHeight = 100;
       const footerY = canvas.height - footerHeight;
       
-      // Fundo do rodapé com gradiente
+      // Fundo do rodapé
       const footerGradient = ctx.createLinearGradient(0, footerY, 0, canvas.height);
-      footerGradient.addColorStop(0, 'rgba(0,0,0,0.7)');
-      footerGradient.addColorStop(1, 'rgba(0,0,0,0.9)');
+      footerGradient.addColorStop(0, 'rgba(0,0,0,0.8)');
+      footerGradient.addColorStop(1, 'rgba(0,0,0,0.95)');
       
       ctx.fillStyle = footerGradient;
       ctx.fillRect(0, footerY, canvas.width, footerHeight);
 
-      // Ícones e texto do rodapé
+      // Conteúdo do rodapé
       ctx.fillStyle = 'white';
-      ctx.font = 'bold 20px Arial';
+      ctx.font = 'bold 18px Arial';
+      ctx.textAlign = 'left';
+      
+      const footerY1 = footerY + 25;
+      const footerY2 = footerY + 55;
+      
+      // Lado esquerdo - Badge "EXPERIMENTE O TESTE GRÁTIS"
+      ctx.fillStyle = template.primaryColor;
+      ctx.beginPath();
+      ctx.roundRect(20, footerY1 - 5, 250, 30, 15);
+      ctx.fill();
+      
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 16px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('✓ EXPERIMENTE O TESTE GRÁTIS', 145, footerY1 + 12);
+
+      // Nome da marca (se disponível)
+      if (user?.brandName) {
+        ctx.font = 'bold 14px Arial';
+        ctx.textAlign = 'left';
+        ctx.fillText(user.brandName.toUpperCase(), 20, footerY2 + 12);
+      }
+      
+      // Lado direito - Ícones de dispositivos
+      const iconY = footerY + 50;
+      const iconSpacing = 100;
+      const startX = canvas.width - 420;
+      
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 14px Arial';
       ctx.textAlign = 'center';
       
-      const footerItems = ['📱', '💻', '📺', '✅ QUALIDADE GARANTIDA'];
-      const itemWidth = canvas.width / footerItems.length;
+      // Ícones de dispositivos (usando texto Unicode)
+      const devices = ['📱', '💻', '📺', '✅'];
+      const deviceLabels = ['Mobile', 'PC', 'TV', 'Qualidade'];
       
-      footerItems.forEach((item, index) => {
-        const x = (index + 0.5) * itemWidth;
-        const y = footerY + footerHeight/2 + 8;
-        ctx.fillText(item, x, y);
+      devices.forEach((icon, index) => {
+        const x = startX + (index * iconSpacing);
+        ctx.font = '24px Arial';
+        ctx.fillText(icon, x, iconY - 10);
+        ctx.font = 'bold 12px Arial';
+        ctx.fillText(deviceLabels[index], x, iconY + 15);
       });
-
-      // Badge "EXPERIMENTE GRÁTIS"
-      if (user?.brandName) {
-        ctx.font = 'bold 16px Arial';
-        ctx.textAlign = 'left';
-        ctx.fillText(`✓ ${user.brandName.toUpperCase()}`, 20, footerY + 30);
-      }
 
       // Download
       canvas.toBlob((blob) => {
@@ -426,32 +473,16 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
                     className="rounded-lg p-4 text-center text-white"
                     style={{ background: template.bgColor }}
                   >
-                    <div className="text-sm font-bold">
+                    <div className="text-sm font-bold mb-2">
                       {template.name}
                     </div>
+                    <div className="text-xs opacity-80">
+                      {title}
+                    </div>
+                    {year && <div className="text-xs mt-1">{year}</div>}
                   </div>
                 </div>
               ))}
-            </div>
-          </div>
-
-          {/* Preview */}
-          <div>
-            <Label className="text-lg font-semibold mb-3 block">Preview</Label>
-            <div className="flex justify-center">
-              <div 
-                className="rounded-lg p-6 text-center text-white flex flex-col items-center justify-center space-y-3"
-                style={{
-                  background: templates.find(t => t.id === selectedTemplate)?.bgColor,
-                  width: selectedFormat === 'square' ? '280px' : '200px',
-                  height: selectedFormat === 'square' ? '280px' : '350px'
-                }}
-              >
-                <h3 className="font-bold text-lg">{title}</h3>
-                {year && <span className="text-sm bg-black/30 px-2 py-1 rounded">{year}</span>}
-                <span className="text-xs bg-black/30 px-2 py-1 rounded">{mediaType}</span>
-                {rating > 0 && <span className="text-xs">⭐ {rating.toFixed(1)}</span>}
-              </div>
             </div>
           </div>
 

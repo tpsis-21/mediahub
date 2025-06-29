@@ -136,41 +136,21 @@ const Index = () => {
     }
 
     try {
+      toast({
+        title: "Processando...",
+        description: `Iniciando download de ${selected.length} capa(s)...`,
+      });
+      
       await exportService.downloadSelectedCovers(selected);
       toast({
         title: "Sucesso",
         description: `${selected.length} capa(s) baixada(s) com sucesso!`,
       });
     } catch (error) {
+      console.error('Erro ao baixar capas:', error);
       toast({
         title: "Erro",
-        description: "Erro ao baixar capas",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const handleExportSelected = async () => {
-    const selected = movies.filter(m => selectedMovies.has(m.id));
-    if (selected.length === 0) {
-      toast({
-        title: "Nenhum item selecionado",
-        description: "Selecione pelo menos um item para exportar",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    try {
-      await exportService.exportSelectedItems(selected, user?.email);
-      toast({
-        title: "Sucesso",
-        description: `${selected.length} item(s) exportado(s) com sucesso!`,
-      });
-    } catch (error) {
-      toast({
-        title: "Erro",
-        description: "Erro ao exportar itens",
+        description: "Erro ao baixar capas. Verifique a conexão e tente novamente.",
         variant: "destructive",
       });
     }
@@ -244,14 +224,6 @@ const Index = () => {
                     <Image className="h-4 w-4" />
                     <span>Gerar Banners Selecionados</span>
                   </Button>
-                  
-                  <Button
-                    onClick={handleExportSelected}
-                    className="flex items-center space-x-2 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700"
-                  >
-                    <Download className="h-4 w-4" />
-                    <span>{t('export.selected')}</span>
-                  </Button>
                 </div>
               )}
             </div>
@@ -320,7 +292,6 @@ const Index = () => {
         </div>
       </main>
 
-      {/* Modal de Banners em Lote */}
       {showBulkBannerModal && (
         <BulkBannerModal
           movies={movies.filter(m => selectedMovies.has(m.id))}

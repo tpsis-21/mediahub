@@ -1,5 +1,5 @@
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import Header from "../components/Header";
 import SearchForm from "../components/SearchForm";
@@ -9,7 +9,8 @@ import SearchInstructions from "../components/SearchInstructions";
 import ExpiryNotice from "../components/ExpiryNotice";
 import TermsModal from "../components/TermsModal";
 import { useToast } from "../hooks/use-toast";
-import { MovieData } from "../services/tmdbService";
+import { MovieData, MediaType } from "../services/tmdbService";
+import { historyService, SearchHistoryItem } from "../services/historyService";
 
 const Index = () => {
   const { user, canSearch, incrementSearch } = useAuth();
@@ -18,8 +19,13 @@ const Index = () => {
   const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set());
   const [isLoading, setIsLoading] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
+  const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
 
-  const handleSearch = async (query: string, searchType: string) => {
+  useEffect(() => {
+    setSearchHistory(historyService.getHistory());
+  }, []);
+
+  const handleSearch = async (queries: string[], type: 'individual' | 'bulk', mediaType: MediaType) => {
     if (!canSearch()) {
       toast({
         title: "Limite atingido",
@@ -31,19 +37,39 @@ const Index = () => {
 
     setIsLoading(true);
     try {
-      const response = await fetch(
-        `https://api.themoviedb.org/3/search/${searchType}?api_key=${localStorage.getItem('tmdb_api_key') || '4e44d9029b1270a757cddc766a1bcb63'}&language=pt-BR&query=${encodeURIComponent(query)}`
-      );
+      let allResults: MovieData[] = [];
       
-      if (!response.ok) {
-        throw new Error('Erro na busca');
+      for (const query of queries) {
+        const endpoint = mediaType === 'multi' ? 'multi' : mediaType;
+        const response = await fetch(
+          `https://api.themoviedb.org/3/search/${endpoint}?api_key=${localStorage.getItem('tmdb_api_key') || '4e44d9029b1270a757cddc766a1bcb63'}&language=pt-BR&query=${encodeURIComponent(query)}`
+        );
+        
+        if (!response.ok) {
+          throw new Error('Erro na busca');
+        }
+        
+        const data = await response.json();
+        allResults = [...allResults, ...(data.results || [])];
       }
-      
-      const data = await response.json();
-      setMovies(data.results || []);
+
+      // Remove duplicatas baseado no ID
+      const uniqueResults = allResults.filter((movie, index, self) => 
+        index === self.findIndex(m => m.id === movie.id)
+      );
+
+      setMovies(uniqueResults);
       incrementSearch();
+
+      // Adicionar ao histórico
+      historyService.addToHistory({
+        query: queries.join(', '),
+        results: uniqueResults,
+        type: type
+      });
+      setSearchHistory(historyService.getHistory());
       
-      if (data.results?.length === 0) {
+      if (uniqueResults.length === 0) {
         toast({
           title: "Nenhum resultado",
           description: "Tente com outros termos de busca.",
@@ -61,14 +87,23 @@ const Index = () => {
     }
   };
 
-  const handleItemSelect = (id: number, selected: boolean) => {
+  const handleItemToggleSelect = (movieId: number) => {
     const newSelected = new Set(selectedItems);
-    if (selected) {
-      newSelected.add(id);
+    if (newSelected.has(movieId)) {
+      newSelected.delete(movieId);
     } else {
-      newSelected.delete(id);
+      newSelected.add(movieId);
     }
     setSelectedItems(newSelected);
+  };
+
+  const handleHistoryRerun = async (item: SearchHistoryItem) => {
+    const queries = item.query.split(', ').filter(q => q.trim());
+    await handleSearch(queries, item.type, 'multi');
+  };
+
+  const handleHistoryRefresh = () => {
+    setSearchHistory(historyService.getHistory());
   };
 
   const getSelectedMovies = () => {
@@ -87,9 +122,8 @@ const Index = () => {
         
         <div id="search" className="mb-8">
           <SearchForm 
-            onSearch={handleSearch} 
-            selectedItems={getSelectedMovies()}
-            canUseBulkFeatures={user?.type === 'premium' || user?.type === 'admin'}
+            onSearch={handleSearch}
+            isLoading={isLoading}
           />
         </div>
 
@@ -107,16 +141,19 @@ const Index = () => {
                 <MovieCard
                   key={movie.id}
                   movie={movie}
-                  onSelect={handleItemSelect}
+                  onToggleSelect={() => handleItemToggleSelect(movie.id)}
                   isSelected={selectedItems.has(movie.id)}
-                  canUsePremiumFeatures={user?.type === 'premium' || user?.type === 'admin'}
                 />
               ))}
             </div>
           </div>
         )}
 
-        <SearchHistory />
+        <SearchHistory 
+          history={searchHistory}
+          onRerun={handleHistoryRerun}
+          onRefresh={handleHistoryRefresh}
+        />
 
         {/* Terms and Privacy sections */}
         <div id="terms" className="mt-16 pt-8 border-t border-gray-200 dark:border-gray-700">

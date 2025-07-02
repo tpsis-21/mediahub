@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Download, Copy, Image, Check, CheckSquare, Square } from 'lucide-react';
+import { Download, Copy, Image, CheckSquare, Square } from 'lucide-react';
 import { MovieData } from '../services/tmdbService';
 import { useI18n } from '../contexts/I18nContext';
 import { exportService } from '../services/exportService';
@@ -13,7 +13,7 @@ import ProfessionalBannerModal from './ProfessionalBannerModal';
 interface MovieCardProps {
   movie: MovieData;
   isSelected: boolean;
-  onToggleSelect: (movieId: number) => void;
+  onToggleSelect: () => void;
 }
 
 const MovieCard: React.FC<MovieCardProps> = ({ movie, isSelected, onToggleSelect }) => {
@@ -69,7 +69,7 @@ const MovieCard: React.FC<MovieCardProps> = ({ movie, isSelected, onToggleSelect
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => onToggleSelect(movie.id)}
+              onClick={onToggleSelect}
               className="p-1 h-auto hover:bg-blue-50 dark:hover:bg-blue-900"
             >
               {isSelected ? (

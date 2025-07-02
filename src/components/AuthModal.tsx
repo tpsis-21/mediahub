@@ -7,6 +7,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Card, CardHeader, CardTitle, CardContent } from './ui/card';
+import { Checkbox } from './ui/checkbox';
 
 interface AuthModalProps {
   onClose: () => void;
@@ -17,11 +18,13 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
   const { t } = useI18n();
   const [isLogin, setIsLogin] = useState(true);
   const [formData, setFormData] = useState({
+    name: '',
     email: '',
     password: '',
     confirmPassword: '',
-    name: '',
-    brandName: ''
+    phone: '',
+    brandName: '',
+    acceptTerms: false
   });
   const [error, setError] = useState('');
 
@@ -29,9 +32,21 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
     e.preventDefault();
     setError('');
 
-    if (!isLogin && formData.password !== formData.confirmPassword) {
-      setError('As senhas não coincidem');
-      return;
+    if (!isLogin) {
+      if (formData.password !== formData.confirmPassword) {
+        setError('As senhas não coincidem');
+        return;
+      }
+      
+      if (!formData.acceptTerms) {
+        setError('Você deve aceitar os termos de uso');
+        return;
+      }
+
+      if (!formData.name || !formData.phone || !formData.brandName) {
+        setError('Todos os campos são obrigatórios');
+        return;
+      }
     }
 
     try {
@@ -39,11 +54,13 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
       if (isLogin) {
         success = await login(formData.email, formData.password);
       } else {
-        if (!formData.brandName) {
-          setError('Nome da marca é obrigatório');
-          return;
-        }
-        success = await register(formData.email, formData.password, formData.name, formData.brandName);
+        success = await register({
+          name: formData.name,
+          email: formData.email,
+          password: formData.password,
+          phone: formData.phone,
+          brandName: formData.brandName
+        });
       }
 
       if (success) {
@@ -58,9 +75,9 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-md">
+      <Card className="w-full max-w-md max-h-[90vh] overflow-y-auto">
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>{isLogin ? 'Entrar' : 'Cadastrar'}</CardTitle>
+          <CardTitle>{isLogin ? t('auth.login') : t('auth.register')}</CardTitle>
           <Button variant="ghost" size="sm" onClick={onClose}>
             <X className="h-4 w-4" />
           </Button>
@@ -70,7 +87,7 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
             {!isLogin && (
               <>
                 <div>
-                  <Label htmlFor="name">Nome</Label>
+                  <Label htmlFor="name">{t('auth.name')} *</Label>
                   <Input
                     id="name"
                     type="text"
@@ -81,7 +98,19 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
                 </div>
                 
                 <div>
-                  <Label htmlFor="brandName">Nome da Marca</Label>
+                  <Label htmlFor="phone">{t('auth.phone')} *</Label>
+                  <Input
+                    id="phone"
+                    type="tel"
+                    value={formData.phone}
+                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                    placeholder="(11) 99999-9999"
+                    required={!isLogin}
+                  />
+                </div>
+                
+                <div>
+                  <Label htmlFor="brandName">{t('auth.brandName')} *</Label>
                   <Input
                     id="brandName"
                     type="text"
@@ -95,19 +124,19 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
             )}
             
             <div>
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="email">{t('auth.email')} *</Label>
               <Input
                 id="email"
                 type="email"
                 value={formData.email}
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                placeholder={isLogin ? "admin@tmdb.com para admin" : "seu@email.com"}
+                placeholder={isLogin ? "admin@capturecapas.com para admin" : "seu@email.com"}
                 required
               />
             </div>
             
             <div>
-              <Label htmlFor="password">Senha</Label>
+              <Label htmlFor="password">{t('auth.password')} *</Label>
               <Input
                 id="password"
                 type="password"
@@ -118,16 +147,31 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
             </div>
 
             {!isLogin && (
-              <div>
-                <Label htmlFor="confirmPassword">Confirmar Senha</Label>
-                <Input
-                  id="confirmPassword"
-                  type="password"
-                  value={formData.confirmPassword}
-                  onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
-                  required
-                />
-              </div>
+              <>
+                <div>
+                  <Label htmlFor="confirmPassword">{t('auth.confirmPassword')} *</Label>
+                  <Input
+                    id="confirmPassword"
+                    type="password"
+                    value={formData.confirmPassword}
+                    onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+                    required
+                  />
+                </div>
+
+                <div className="flex items-start space-x-2">
+                  <Checkbox
+                    id="acceptTerms"
+                    checked={formData.acceptTerms}
+                    onCheckedChange={(checked) => 
+                      setFormData({ ...formData, acceptTerms: checked as boolean })
+                    }
+                  />
+                  <label htmlFor="acceptTerms" className="text-sm text-gray-600 dark:text-gray-400">
+                    {t('auth.terms')} *
+                  </label>
+                </div>
+              </>
             )}
 
             {error && (
@@ -135,7 +179,7 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
             )}
 
             <Button type="submit" className="w-full" disabled={isLoading}>
-              {isLoading ? 'Carregando...' : (isLogin ? 'Entrar' : 'Cadastrar')}
+              {isLoading ? 'Carregando...' : (isLogin ? t('auth.login') : t('auth.register'))}
             </Button>
           </form>
 
@@ -151,8 +195,9 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
 
           {isLogin && (
             <div className="mt-4 text-sm text-gray-600 dark:text-gray-400">
-              <p><strong>Conta Admin:</strong> admin@tmdb.com</p>
+              <p><strong>Conta Admin:</strong> admin@capturecapas.com</p>
               <p><strong>Usuário comum:</strong> qualquer outro email</p>
+              <p><strong>Premium:</strong> inclua "premium" no email</p>
             </div>
           )}
         </CardContent>

@@ -111,6 +111,48 @@ const Index = () => {
     return movies.filter(movie => selectedItems.has(movie.id));
   };
 
+  const handleDownloadSelectedCovers = async () => {
+    if (selectedItems.size === 0) {
+      toast({
+        title: "Aviso",
+        description: "Selecione pelo menos um item para baixar",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!user || user.type === 'free') {
+      toast({
+        title: "Recurso Premium",
+        description: "O download em lote está disponível apenas para usuários premium",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      toast({
+        title: "Iniciando download...",
+        description: `Preparando ${selectedItems.size} capas. Isso pode levar alguns minutos.`,
+      });
+
+      const { exportService } = await import('../services/exportService');
+      await exportService.downloadSelectedCovers(getSelectedMovies());
+      
+      toast({
+        title: "Sucesso!",
+        description: `${selectedItems.size} capas baixadas com sucesso!`,
+      });
+    } catch (error) {
+      console.error('Erro no download em lote:', error);
+      toast({
+        title: "Erro no Download",
+        description: error instanceof Error ? error.message : "Erro ao baixar capas selecionadas. Tente novamente.",
+        variant: "destructive",
+      });
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <Header />
@@ -140,26 +182,14 @@ const Index = () => {
               <h2 className="text-xl font-semibold">Resultados da Busca</h2>
               {selectedItems.size > 0 && (
                 <Button
-                  onClick={async () => {
-                    try {
-                      const { exportService } = await import('../services/exportService');
-                      await exportService.downloadSelectedCovers(getSelectedMovies());
-                      toast({
-                        title: "Sucesso",
-                        description: `${selectedItems.size} capas baixadas com sucesso!`,
-                      });
-                    } catch (error) {
-                      toast({
-                        title: "Erro",
-                        description: error instanceof Error ? error.message : "Erro ao baixar capas selecionadas",
-                        variant: "destructive",
-                      });
-                    }
-                  }}
-                  className="flex items-center space-x-2"
+                  onClick={handleDownloadSelectedCovers}
+                  className="flex items-center space-x-2 bg-green-600 hover:bg-green-700"
                   disabled={!user || user.type === 'free'}
                 >
                   <span>Baixar Selecionados ({selectedItems.size})</span>
+                  {(!user || user.type === 'free') && (
+                    <span className="text-xs bg-orange-500 px-2 py-1 rounded ml-2">PREMIUM</span>
+                  )}
                 </Button>
               )}
             </div>

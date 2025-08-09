@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Download, Copy, Image, CheckSquare, Square } from 'lucide-react';
+import { Download, Copy, Image, CheckSquare, Square, Loader2 } from 'lucide-react';
 import { MovieData } from '../services/tmdbService';
 import { useI18n } from '../contexts/I18nContext';
 import { exportService } from '../services/exportService';
@@ -20,6 +20,7 @@ const MovieCard: React.FC<MovieCardProps> = ({ movie, isSelected, onToggleSelect
   const { t } = useI18n();
   const { toast } = useToast();
   const [showBannerModal, setShowBannerModal] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const title = movie.title || movie.name || 'Título não disponível';
   const releaseDate = movie.release_date || movie.first_air_date || '';
@@ -29,18 +30,31 @@ const MovieCard: React.FC<MovieCardProps> = ({ movie, isSelected, onToggleSelect
     : '/placeholder.svg';
 
   const handleDownloadCover = async () => {
+    if (isDownloading) return;
+    
+    setIsDownloading(true);
+    
     try {
-      await exportService.downloadCover(movie);
       toast({
-        title: "Sucesso",
+        title: "Iniciando download...",
+        description: "Preparando a capa. Isso pode levar alguns segundos.",
+      });
+
+      await exportService.downloadCover(movie);
+      
+      toast({
+        title: "Sucesso!",
         description: "Capa baixada com sucesso!",
       });
     } catch (error) {
+      console.error('Erro no download:', error);
       toast({
-        title: "Erro",
-        description: "Erro ao baixar a capa",
+        title: "Erro no Download",
+        description: error instanceof Error ? error.message : "Erro ao baixar a capa. Tente novamente.",
         variant: "destructive",
       });
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -130,10 +144,15 @@ const MovieCard: React.FC<MovieCardProps> = ({ movie, isSelected, onToggleSelect
               variant="outline"
               size="sm"
               onClick={handleDownloadCover}
-              className="flex items-center space-x-1 text-xs border-green-300 text-green-600 hover:bg-green-50 dark:border-green-700 dark:text-green-400 dark:hover:bg-green-950"
+              disabled={isDownloading}
+              className="flex items-center space-x-1 text-xs border-green-300 text-green-600 hover:bg-green-50 dark:border-green-700 dark:text-green-400 dark:hover:bg-green-950 disabled:opacity-50"
             >
-              <Download className="h-3 w-3" />
-              <span>{t('download.cover')}</span>
+              {isDownloading ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Download className="h-3 w-3" />
+              )}
+              <span>{isDownloading ? 'Baixando...' : t('download.cover')}</span>
             </Button>
             
             <Button

@@ -8,6 +8,7 @@ import SearchHistory from "../components/SearchHistory";
 import SearchInstructions from "../components/SearchInstructions";
 import ExpiryNotice from "../components/ExpiryNotice";
 import TermsModal from "../components/TermsModal";
+import { Button } from "../components/ui/button";
 import { useToast } from "../hooks/use-toast";
 import { MovieData, MediaType } from "../services/tmdbService";
 import { historyService, SearchHistoryItem } from "../services/historyService";
@@ -135,7 +136,33 @@ const Index = () => {
 
         {movies.length > 0 && (
           <div className="mb-8">
-            <h2 className="text-xl font-semibold mb-4">Resultados da Busca</h2>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-semibold">Resultados da Busca</h2>
+              {selectedItems.size > 0 && (
+                <Button
+                  onClick={async () => {
+                    try {
+                      const { exportService } = await import('../services/exportService');
+                      await exportService.downloadSelectedCovers(getSelectedMovies());
+                      toast({
+                        title: "Sucesso",
+                        description: `${selectedItems.size} capas baixadas com sucesso!`,
+                      });
+                    } catch (error) {
+                      toast({
+                        title: "Erro",
+                        description: error instanceof Error ? error.message : "Erro ao baixar capas selecionadas",
+                        variant: "destructive",
+                      });
+                    }
+                  }}
+                  className="flex items-center space-x-2"
+                  disabled={!user || user.type === 'free'}
+                >
+                  <span>Baixar Selecionados ({selectedItems.size})</span>
+                </Button>
+              )}
+            </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
               {movies.map((movie) => (
                 <MovieCard

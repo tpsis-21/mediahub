@@ -21,13 +21,15 @@ const SearchInstructions: React.FC = () => {
       <CardContent className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
-            <h4 className="font-semibold text-sm">Como usar:</h4>
-            <ul className="text-sm space-y-1 text-gray-600 dark:text-gray-400">
-              <li>{t('search.instructions.step1')}</li>
-              <li>{t('search.instructions.step2')}</li>
-              <li>{t('search.instructions.step3')}</li>
-              <li>{t('search.instructions.step4')}</li>
-              <li>{t('search.instructions.step5')}</li>
+            <h4 className="font-semibold text-sm flex items-center space-x-2">
+              <span>📚 Como usar o Capture Capas:</span>
+            </h4>
+            <ul className="text-sm space-y-2 text-gray-600 dark:text-gray-400">
+              <li>• <strong>Busque</strong> por filmes ou séries pelo nome</li>
+              <li>• <strong>Selecione</strong> os resultados desejados</li>
+              <li>• <strong>Baixe</strong> capas individuais ou em lote</li>
+              <li>• <strong>Gere banners</strong> profissionais (BETA)</li>
+              <li>• <strong>Copie</strong> sinopses com um clique</li>
             </ul>
           </div>
           
@@ -67,11 +69,13 @@ const SearchInstructions: React.FC = () => {
             </div>
             
             <div className="text-xs text-gray-500 dark:text-gray-400 space-y-1">
-              <p><strong>Recursos Premium:</strong></p>
-              <ul className="list-disc list-inside ml-2">
-                <li>Busca em massa</li>
-                <li>Geração de banners profissionais</li>
+              <p><strong>🚀 Recursos Premium:</strong></p>
+              <ul className="list-disc list-inside ml-2 space-y-1">
+                <li>Busca em massa (múltiplos filmes)</li>
+                <li>Geração de banners profissionais (BETA)</li>
                 <li>Download em lote otimizado</li>
+                <li>Personalização de marca</li>
+                <li>Sem limite de buscas diárias</li>
                 <li>Suporte prioritário</li>
               </ul>
             </div>

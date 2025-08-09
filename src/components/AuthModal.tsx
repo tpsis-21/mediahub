@@ -130,7 +130,7 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
                 type="email"
                 value={formData.email}
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                placeholder={isLogin ? "admin@capturecapas.com para admin" : "seu@email.com"}
+                placeholder={isLogin ? "Digite seu email" : "seu@email.com"}
                 required
               />
             </div>
@@ -194,10 +194,14 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
           </div>
 
           {isLogin && (
-            <div className="mt-4 text-sm text-gray-600 dark:text-gray-400">
-              <p><strong>Conta Admin:</strong> admin@capturecapas.com</p>
-              <p><strong>Usuário comum:</strong> qualquer outro email</p>
-              <p><strong>Premium:</strong> inclua "premium" no email</p>
+            <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-950 rounded-lg">
+              <h4 className="font-semibold text-sm mb-2">💡 Dicas de Login:</h4>
+              <div className="text-xs space-y-1 text-gray-600 dark:text-gray-400">
+                <p>• <strong>Primeira vez?</strong> Clique em "Criar conta"</p>
+                <p>• <strong>Teste Premium:</strong> use "premium" no email</p>
+                <p>• <strong>Demo Admin:</strong> admin@capturecapas.com</p>
+                <p>• Qualquer senha funciona para demonstração</p>
+              </div>
             </div>
           )}
         </CardContent>

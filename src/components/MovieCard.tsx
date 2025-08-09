@@ -150,10 +150,16 @@ const MovieCard: React.FC<MovieCardProps> = ({ movie, isSelected, onToggleSelect
               variant="outline"
               size="sm"
               onClick={() => setShowBannerModal(true)}
-              className="flex items-center space-x-1 text-xs border-purple-300 text-purple-600 hover:bg-purple-50 dark:border-purple-700 dark:text-purple-400 dark:hover:bg-purple-950"
+              className="flex items-center space-x-1 text-xs border-purple-300 text-purple-600 hover:bg-purple-50 dark:border-purple-700 dark:text-purple-400 dark:hover:bg-purple-950 relative"
             >
               <Image className="h-3 w-3" />
               <span>Gerar Banner</span>
+              <Badge 
+                variant="secondary" 
+                className="absolute -top-2 -right-2 text-[10px] h-4 px-1 bg-orange-500 text-white border-0"
+              >
+                BETA
+              </Badge>
             </Button>
           </div>
         </CardContent>

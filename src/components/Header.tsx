@@ -31,18 +31,20 @@ const Header: React.FC = () => {
         <div className="flex justify-between items-center h-16">
           {/* Logo */}
           <div className="flex items-center space-x-2">
-            <div 
-              className="p-2 rounded-lg"
-              style={{
-                background: user?.brandColors 
-                  ? `linear-gradient(135deg, ${user.brandColors.primary}, ${user.brandColors.secondary})`
-                  : 'linear-gradient(135deg, #3b82f6, #8b5cf6)'
-              }}
-            >
+            <div className="flex items-center justify-center w-10 h-10">
               {user?.brandLogo ? (
-                <img src={user.brandLogo} alt="Logo" className="h-6 w-6 object-contain" />
+                <img src={user.brandLogo} alt="Logo" className="h-8 w-8 object-contain" />
               ) : (
-                <Search className="h-6 w-6 text-white" />
+                <div 
+                  className="p-2 rounded-lg"
+                  style={{
+                    background: user?.brandColors 
+                      ? `linear-gradient(135deg, ${user.brandColors.primary}, ${user.brandColors.secondary})`
+                      : 'linear-gradient(135deg, #3b82f6, #8b5cf6)'
+                  }}
+                >
+                  <Search className="h-6 w-6 text-white" />
+                </div>
               )}
             </div>
             <h1 

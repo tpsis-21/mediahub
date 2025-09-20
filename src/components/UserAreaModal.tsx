@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { X, User, Palette, Image, Save } from 'lucide-react';
+import { X, User, Palette, Image, Save, Wand2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useI18n } from '../contexts/I18nContext';
 import { Button } from './ui/button';
@@ -8,6 +8,7 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Card, CardHeader, CardTitle, CardContent } from './ui/card';
 import { useToast } from '../hooks/use-toast';
+import { extractColorsFromImage } from '../utils/colorExtractor';
 
 interface UserAreaModalProps {
   onClose: () => void;
@@ -22,6 +23,9 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
   const [primaryColor, setPrimaryColor] = useState(user?.brandColors?.primary || '#3b82f6');
   const [secondaryColor, setSecondaryColor] = useState(user?.brandColors?.secondary || '#8b5cf6');
   const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [isExtractingColors, setIsExtractingColors] = useState(false);
+  const [phone, setPhone] = useState(user?.phone || '');
+  const [website, setWebsite] = useState(user?.website || '');
 
   const canChangeBrandName = () => {
     if (!user?.brandNameChangedAt) return true;
@@ -38,7 +42,9 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
       brandColors: {
         primary: primaryColor,
         secondary: secondaryColor
-      }
+      },
+      phone: phone || undefined,
+      website: website || undefined
     };
 
     if (brandName !== user.brandName && canChangeBrandName()) {
@@ -74,6 +80,37 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
     const now = new Date();
     const daysDiff = (now.getTime() - lastChange.getTime()) / (1000 * 3600 * 24);
     return Math.max(0, 15 - Math.floor(daysDiff));
+  };
+
+  const handleExtractColors = async () => {
+    if (!logoFile) {
+      toast({
+        title: "Erro",
+        description: "Selecione uma logo primeiro!",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsExtractingColors(true);
+    try {
+      const colors = await extractColorsFromImage(logoFile);
+      setPrimaryColor(colors.primary);
+      setSecondaryColor(colors.secondary);
+      
+      toast({
+        title: "Sucesso",
+        description: "Cores extraídas da logo com sucesso!",
+      });
+    } catch (error) {
+      toast({
+        title: "Erro",
+        description: "Erro ao extrair cores da logo. Tente novamente.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsExtractingColors(false);
+    }
   };
 
   return (
@@ -156,17 +193,64 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
               {/* Logo da Marca */}
               <div>
                 <Label htmlFor="brandLogo">Logo da Marca</Label>
-                <Input
-                  id="brandLogo"
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => setLogoFile(e.target.files?.[0] || null)}
-                />
+                <div className="flex items-center space-x-2">
+                  <Input
+                    id="brandLogo"
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => setLogoFile(e.target.files?.[0] || null)}
+                    className="flex-1"
+                  />
+                  {logoFile && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleExtractColors}
+                      disabled={isExtractingColors}
+                      className="flex items-center space-x-1"
+                    >
+                      <Wand2 className="h-4 w-4" />
+                      <span>{isExtractingColors ? 'Extraindo...' : 'Extrair Cores'}</span>
+                    </Button>
+                  )}
+                </div>
                 {user?.brandLogo && (
                   <div className="mt-2">
-                    <img src={user.brandLogo} alt="Logo atual" className="h-16 w-auto" />
+                    <img src={user.brandLogo} alt="Logo atual" className="h-16 w-auto object-contain bg-gray-100 rounded p-2" />
                   </div>
                 )}
+                {logoFile && (
+                  <div className="mt-2">
+                    <img 
+                      src={URL.createObjectURL(logoFile)} 
+                      alt="Nova logo" 
+                      className="h-16 w-auto object-contain bg-gray-100 rounded p-2" 
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Informações de Contato */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="phone">Telefone</Label>
+                  <Input
+                    id="phone"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="(11) 99999-9999"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="website">Website</Label>
+                  <Input
+                    id="website"
+                    value={website}
+                    onChange={(e) => setWebsite(e.target.value)}
+                    placeholder="https://seusite.com"
+                  />
+                </div>
               </div>
 
               {/* Preview das Cores */}

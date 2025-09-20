@@ -22,6 +22,8 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
   const [selectedTemplate, setSelectedTemplate] = useState(1);
   const [selectedFormat, setSelectedFormat] = useState<'square' | 'vertical'>('square');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [phone, setPhone] = useState(user?.phone || '');
+  const [website, setWebsite] = useState(user?.website || '');
 
   const title = movie.title || movie.name || 'Título';
   const year = movie.release_date || movie.first_air_date 
@@ -425,39 +427,59 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
         footerX += 120;
       }
       
+      // Telefone (se disponível)
+      if (phone) {
+        ctx.fillStyle = 'white';
+        ctx.font = '12px Arial';
+        ctx.textAlign = 'left';
+        ctx.fillText(`📞 ${phone}`, footerX, footerY + 30);
+        footerX += 140;
+      }
+      
+      // Website (se disponível)
+      if (website) {
+        ctx.fillStyle = 'white';
+        ctx.font = '12px Arial';
+        ctx.textAlign = 'left';
+        ctx.fillText(`🌐 ${website}`, footerX, footerY + 55);
+      }
+      
       // Ícones de dispositivos
       const iconSize = 24;
       const iconSpacing = 80;
+      const remainingSpace = canvas.width - footerX - 50;
       
-      ctx.fillStyle = 'white';
-      ctx.font = `${iconSize}px Arial`;
-      ctx.textAlign = 'center';
-      
-      // Celular
-      ctx.fillText('📱', footerX, footerY + 40);
-      ctx.font = '12px Arial';
-      ctx.fillText('Mobile', footerX, footerY + 65);
-      footerX += iconSpacing;
-      
-      // PC
-      ctx.font = `${iconSize}px Arial`;
-      ctx.fillText('💻', footerX, footerY + 40);
-      ctx.font = '12px Arial';
-      ctx.fillText('PC', footerX, footerY + 65);
-      footerX += iconSpacing;
-      
-      // TV
-      ctx.font = `${iconSize}px Arial`;
-      ctx.fillText('📺', footerX, footerY + 40);
-      ctx.font = '12px Arial';
-      ctx.fillText('TV', footerX, footerY + 65);
-      footerX += iconSpacing;
-      
-      // Qualidade
-      ctx.font = `${iconSize}px Arial`;
-      ctx.fillText('✅', footerX, footerY + 40);
-      ctx.font = '12px Arial';
-      ctx.fillText('Qualidade', footerX, footerY + 65);
+      if (remainingSpace >= iconSpacing * 4) {
+        ctx.fillStyle = 'white';
+        ctx.font = `${iconSize}px Arial`;
+        ctx.textAlign = 'center';
+        
+        // Celular
+        ctx.fillText('📱', footerX, footerY + 40);
+        ctx.font = '12px Arial';
+        ctx.fillText('Mobile', footerX, footerY + 65);
+        footerX += iconSpacing;
+        
+        // PC
+        ctx.font = `${iconSize}px Arial`;
+        ctx.fillText('💻', footerX, footerY + 40);
+        ctx.font = '12px Arial';
+        ctx.fillText('PC', footerX, footerY + 65);
+        footerX += iconSpacing;
+        
+        // TV
+        ctx.font = `${iconSize}px Arial`;
+        ctx.fillText('📺', footerX, footerY + 40);
+        ctx.font = '12px Arial';
+        ctx.fillText('TV', footerX, footerY + 65);
+        footerX += iconSpacing;
+        
+        // Qualidade
+        ctx.font = `${iconSize}px Arial`;
+        ctx.fillText('✅', footerX, footerY + 40);
+        ctx.font = '12px Arial';
+        ctx.fillText('Qualidade', footerX, footerY + 65);
+      }
 
       // Download
       canvas.toBlob((blob) => {
@@ -551,6 +573,35 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+
+          {/* Personalização */}
+          <div>
+            <Label className="text-lg font-semibold mb-3 block">Informações de Contato</Label>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="phone" className="text-sm">Telefone (opcional)</Label>
+                <input
+                  id="phone"
+                  type="text"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="(11) 99999-9999"
+                  className="w-full mt-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                />
+              </div>
+              <div>
+                <Label htmlFor="website" className="text-sm">Website (opcional)</Label>
+                <input
+                  id="website"
+                  type="text"
+                  value={website}
+                  onChange={(e) => setWebsite(e.target.value)}
+                  placeholder="https://seusite.com"
+                  className="w-full mt-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                />
+              </div>
             </div>
           </div>
 

@@ -1,14 +1,16 @@
 
 import React, { useState } from 'react';
-import { Download, Copy, Image, CheckSquare, Square, Loader2 } from 'lucide-react';
+import { Download, Copy, Image, CheckSquare, Square, Loader2, Play } from 'lucide-react';
 import { MovieData } from '../services/tmdbService';
 import { useI18n } from '../contexts/I18nContext';
+import { useAuth } from '../contexts/AuthContext';
 import { exportService } from '../services/exportService';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
 import { useToast } from '../hooks/use-toast';
 import ProfessionalBannerModal from './ProfessionalBannerModal';
+import VideoGenerationModal from './VideoGenerationModal';
 
 interface MovieCardProps {
   movie: MovieData;
@@ -18,8 +20,10 @@ interface MovieCardProps {
 
 const MovieCard: React.FC<MovieCardProps> = ({ movie, isSelected, onToggleSelect }) => {
   const { t } = useI18n();
+  const { user } = useAuth();
   const { toast } = useToast();
   const [showBannerModal, setShowBannerModal] = useState(false);
+  const [showVideoModal, setShowVideoModal] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
 
   const title = movie.title || movie.name || 'Título não disponível';
@@ -165,21 +169,41 @@ const MovieCard: React.FC<MovieCardProps> = ({ movie, isSelected, onToggleSelect
               <span>{t('copy.synopsis')}</span>
             </Button>
             
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowBannerModal(true)}
-              className="flex items-center space-x-1 text-xs border-purple-300 text-purple-600 hover:bg-purple-50 dark:border-purple-700 dark:text-purple-400 dark:hover:bg-purple-950 relative"
-            >
-              <Image className="h-3 w-3" />
-              <span>Gerar Banner</span>
-              <Badge 
-                variant="secondary" 
-                className="absolute -top-2 -right-2 text-[10px] h-4 px-1 bg-orange-500 text-white border-0"
-              >
-                BETA
-              </Badge>
-            </Button>
+            {user && (user.type === 'premium' || user.type === 'admin') && (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowBannerModal(true)}
+                  className="flex items-center space-x-1 text-xs border-purple-300 text-purple-600 hover:bg-purple-50 dark:border-purple-700 dark:text-purple-400 dark:hover:bg-purple-950 relative"
+                >
+                  <Image className="h-3 w-3" />
+                  <span>Banner</span>
+                  <Badge 
+                    variant="secondary" 
+                    className="absolute -top-2 -right-2 text-[10px] h-4 px-1 bg-orange-500 text-white border-0"
+                  >
+                    BETA
+                  </Badge>
+                </Button>
+                
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowVideoModal(true)}
+                  className="flex items-center space-x-1 text-xs border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950 relative"
+                >
+                  <Play className="h-3 w-3" />
+                  <span>Vídeo</span>
+                  <Badge 
+                    variant="secondary" 
+                    className="absolute -top-2 -right-2 text-[10px] h-4 px-1 bg-orange-500 text-white border-0"
+                  >
+                    BETA
+                  </Badge>
+                </Button>
+              </>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -189,6 +213,14 @@ const MovieCard: React.FC<MovieCardProps> = ({ movie, isSelected, onToggleSelect
         <ProfessionalBannerModal
           movie={movie}
           onClose={() => setShowBannerModal(false)}
+        />
+      )}
+      
+      {/* Modal de Geração de Vídeo */}
+      {showVideoModal && (
+        <VideoGenerationModal
+          movie={movie}
+          onClose={() => setShowVideoModal(false)}
         />
       )}
     </>

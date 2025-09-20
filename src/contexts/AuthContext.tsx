@@ -6,6 +6,7 @@ interface User {
   email: string;
   name: string;
   phone?: string;
+  website?: string;
   type: 'admin' | 'premium' | 'free';
   brandName?: string;
   brandColors?: {

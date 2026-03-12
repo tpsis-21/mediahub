@@ -1,13 +1,14 @@
 
 import React, { useState } from 'react';
 import { X, Download } from 'lucide-react';
-import { MovieData } from '../services/tmdbService';
+import { MovieData } from '../services/searchService';
 import { useI18n } from '../contexts/I18nContext';
 import { Button } from './ui/button';
 import { Card, CardHeader, CardTitle, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
 import { RadioGroup, RadioGroupItem } from './ui/radio-group';
 import { Label } from './ui/label';
+import { getApiBaseUrl } from '../services/apiClient';
 
 interface BannerModalProps {
   movie: MovieData;
@@ -23,9 +24,14 @@ const BannerModal: React.FC<BannerModalProps> = ({ movie, onClose }) => {
   const year = movie.release_date || movie.first_air_date 
     ? new Date(movie.release_date || movie.first_air_date!).getFullYear()
     : '';
-  const imageUrl = movie.poster_path 
-    ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` 
-    : '/placeholder.svg';
+  const imageUrl = (() => {
+    if (!movie.poster_path) return '/placeholder.svg';
+    const baseUrl = getApiBaseUrl();
+    const params = new URLSearchParams();
+    params.set('size', 'w500');
+    params.set('path', movie.poster_path);
+    return `${baseUrl}/api/search/image?${params.toString()}`;
+  })();
 
   const templates = [
     {
@@ -97,7 +103,7 @@ const BannerModal: React.FC<BannerModalProps> = ({ movie, onClose }) => {
     const maxWidth = canvas.width * 0.8;
     const words = title.split(' ');
     let line = '';
-    let lineHeight = titleFontSize * 1.2;
+    const lineHeight = titleFontSize * 1.2;
     let currentY = titleY;
 
     for (let i = 0; i < words.length; i++) {

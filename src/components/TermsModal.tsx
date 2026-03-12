@@ -11,8 +11,8 @@ interface TermsModalProps {
 
 const TermsModal: React.FC<TermsModalProps> = ({ onClose }) => {
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-4xl max-h-[90vh]">
+    <div className="fixed inset-0 bg-black/55 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <Card className="w-full max-w-4xl max-h-[90vh] glass-effect">
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Termos de Uso e Política de Privacidade</CardTitle>
           <Button variant="ghost" size="sm" onClick={onClose}>
@@ -23,17 +23,17 @@ const TermsModal: React.FC<TermsModalProps> = ({ onClose }) => {
           <ScrollArea className="h-[70vh] pr-4">
             <div className="space-y-6">
               <section>
-                <h3 className="text-lg font-semibold mb-3">Termos de Uso - Capture Capas</h3>
+                <h3 className="text-lg font-semibold mb-3">Termos de Uso - MediaHub</h3>
                 
                 <div className="space-y-4 text-sm">
                   <div>
                     <h4 className="font-medium mb-2">1. Aceitação dos Termos</h4>
-                    <p>Ao utilizar o Capture Capas, você concorda com estes termos de uso e nossa política de privacidade.</p>
+                    <p>Ao utilizar o MediaHub, você concorda com estes termos de uso e nossa política de privacidade.</p>
                   </div>
                   
                   <div>
                     <h4 className="font-medium mb-2">2. Descrição do Serviço</h4>
-                    <p>O Capture Capas é uma aplicação que permite buscar e baixar capas de filmes e séries utilizando a API do TMDB (The Movie Database).</p>
+                    <p>O MediaHub é uma aplicação que permite buscar filmes e séries, baixar imagens e gerar banners (BETA), utilizando fontes de dados confiáveis.</p>
                   </div>
                   
                   <div>
@@ -47,14 +47,14 @@ const TermsModal: React.FC<TermsModalProps> = ({ onClose }) => {
                   
                   <div>
                     <h4 className="font-medium mb-2">4. Propriedade Intelectual</h4>
-                    <p>As imagens disponibilizadas são fornecidas pelo TMDB e estão sujeitas aos termos de uso deles. Você deve respeitar os direitos autorais das imagens baixadas.</p>
+                    <p>As imagens disponibilizadas são fornecidas por fontes de dados confiáveis e estão sujeitas aos termos de uso dessas fontes. Você deve respeitar os direitos autorais das imagens baixadas.</p>
                   </div>
                   
                   <div>
                     <h4 className="font-medium mb-2">5. Dados da Marca</h4>
                     <ul className="list-disc list-inside space-y-1 ml-4">
-                      <li>Nome da marca e logo podem ser alterados no máximo 2 vezes</li>
-                      <li>Após as 2 alterações, há período de carência de 15 dias entre mudanças</li>
+                      <li>O nome da marca pode ser alterado, com carência de 15 dias entre mudanças</li>
+                      <li>A logo pode ser substituída a qualquer momento</li>
                       <li>Dados da marca são utilizados apenas para personalização da interface</li>
                     </ul>
                   </div>
@@ -89,7 +89,7 @@ const TermsModal: React.FC<TermsModalProps> = ({ onClose }) => {
                   
                   <div>
                     <h4 className="font-medium mb-2">3. Armazenamento</h4>
-                    <p>Os dados são armazenados de forma segura e não são compartilhados com terceiros, exceto quando necessário para o funcionamento do serviço (ex: processamento de pagamentos).</p>
+                    <p>Os dados são armazenados de forma segura para permitir acesso à conta em diferentes dispositivos. Não compartilhamos seus dados com terceiros, exceto quando necessário para o funcionamento do serviço (ex: processamento de pagamentos).</p>
                   </div>
                   
                   <div>
@@ -105,7 +105,7 @@ const TermsModal: React.FC<TermsModalProps> = ({ onClose }) => {
                   
                   <div>
                     <h4 className="font-medium mb-2">5. Cookies e Tecnologias</h4>
-                    <p>Utilizamos localStorage para manter suas preferências e sessão. Não utilizamos cookies de terceiros para rastreamento.</p>
+                    <p>Utilizamos armazenamento do navegador para manter preferências e acelerar o uso. Não utilizamos cookies de terceiros para rastreamento.</p>
                   </div>
                 </div>
               </section>

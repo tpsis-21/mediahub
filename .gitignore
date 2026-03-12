@@ -11,6 +11,9 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+*.tsbuildinfo
+.trae/
 
 # Editor directories and files
 .vscode/*
@@ -22,3 +25,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Large local assets (keep only the images needed by the app)
+anexos/*.mp4
+anexos/*.webm

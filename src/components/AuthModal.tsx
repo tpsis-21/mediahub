@@ -1,22 +1,24 @@
 
 import React, { useState } from 'react';
-import { X } from 'lucide-react';
+import { Info } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useI18n } from '../contexts/I18nContext';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { Card, CardHeader, CardTitle, CardContent } from './ui/card';
 import { Checkbox } from './ui/checkbox';
+import { Tabs, TabsList, TabsTrigger } from './ui/tabs';
+import { Alert, AlertDescription, AlertTitle } from './ui/alert';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 
 interface AuthModalProps {
   onClose: () => void;
 }
 
 const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
-  const { login, register, isLoading } = useAuth();
+  const { login, register, isLoading, authError } = useAuth();
   const { t } = useI18n();
-  const [isLogin, setIsLogin] = useState(true);
+  const [mode, setMode] = useState<'login' | 'register'>('login');
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -27,12 +29,17 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
     acceptTerms: false
   });
   const [error, setError] = useState('');
+  const [showReset, setShowReset] = useState(false);
+  const [resetStage, setResetStage] = useState<'request' | 'confirm'>('request');
+  const [resetToken, setResetToken] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
-    if (!isLogin) {
+    if (mode === 'register') {
       if (formData.password !== formData.confirmPassword) {
         setError('As senhas não coincidem');
         return;
@@ -51,7 +58,7 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
 
     try {
       let success = false;
-      if (isLogin) {
+      if (mode === 'login') {
         success = await login(formData.email, formData.password);
       } else {
         success = await register({
@@ -66,38 +73,68 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
       if (success) {
         onClose();
       } else {
-        setError('Credenciais inválidas');
+        setError(authError || 'Credenciais inválidas');
       }
     } catch (err) {
-      setError('Erro no sistema');
+      setError('Não foi possível concluir. Tente novamente.');
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-md max-h-[90vh] overflow-y-auto">
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>{isLogin ? t('auth.login') : t('auth.register')}</CardTitle>
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            <X className="h-4 w-4" />
-          </Button>
-        </CardHeader>
-        <CardContent>
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{mode === 'login' ? t('auth.login') : t('auth.register')}</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <Tabs
+            value={mode}
+            onValueChange={(value) => {
+              setMode(value === 'register' ? 'register' : 'login');
+              setError('');
+            }}
+          >
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="login">{t('auth.login')}</TabsTrigger>
+              <TabsTrigger value="register">{t('auth.register')}</TabsTrigger>
+            </TabsList>
+          </Tabs>
+
+          {mode === 'login' && showReset && (
+            <Alert>
+              <Info className="h-4 w-4" />
+              <AlertTitle>{resetStage === 'request' ? 'Recuperação de senha' : 'Digite o código recebido'}</AlertTitle>
+              <AlertDescription>
+                {resetStage === 'request'
+                  ? <p>Informe seu e‑mail e enviaremos o link de redefinição.</p>
+                  : <p>Insira o código do email e defina sua nova senha.</p>}
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {error && (
+            <Alert variant="destructive">
+              <AlertTitle>Não foi possível concluir</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+
           <form onSubmit={handleSubmit} className="space-y-4">
-            {!isLogin && (
-              <>
-                <div>
+            {mode === 'register' && (
+              <div className="space-y-4">
+                <div className="grid gap-2">
                   <Label htmlFor="name">{t('auth.name')} *</Label>
                   <Input
                     id="name"
                     type="text"
                     value={formData.name}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    required={!isLogin}
+                    required
                   />
                 </div>
-                
-                <div>
+
+                <div className="grid gap-2">
                   <Label htmlFor="phone">{t('auth.phone')} *</Label>
                   <Input
                     id="phone"
@@ -105,11 +142,11 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
                     value={formData.phone}
                     onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                     placeholder="(11) 99999-9999"
-                    required={!isLogin}
+                    required
                   />
                 </div>
-                
-                <div>
+
+                <div className="grid gap-2">
                   <Label htmlFor="brandName">{t('auth.brandName')} *</Label>
                   <Input
                     id="brandName"
@@ -117,25 +154,25 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
                     value={formData.brandName}
                     onChange={(e) => setFormData({ ...formData, brandName: e.target.value })}
                     placeholder="Digite o nome da sua marca"
-                    required={!isLogin}
+                    required
                   />
                 </div>
-              </>
+              </div>
             )}
-            
-            <div>
+
+            <div className="grid gap-2">
               <Label htmlFor="email">{t('auth.email')} *</Label>
               <Input
                 id="email"
                 type="email"
                 value={formData.email}
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                placeholder={isLogin ? "Digite seu email" : "seu@email.com"}
+                placeholder={mode === 'login' ? 'Digite seu email' : 'seu@email.com'}
                 required
               />
             </div>
-            
-            <div>
+
+            <div className="grid gap-2">
               <Label htmlFor="password">{t('auth.password')} *</Label>
               <Input
                 id="password"
@@ -144,11 +181,121 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                 required
               />
+              {mode === 'login' && (
+                <div className="flex items-center justify-between">
+                  <button
+                    type="button"
+                    className="text-xs text-primary hover:underline"
+                    onClick={() => setShowReset((v) => !v)}
+                  >
+                    Esqueci minha senha
+                  </button>
+                  {showReset && (
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground hover:underline"
+                      onClick={async () => {
+                        try {
+                          const email = formData.email.trim();
+                          if (!email) {
+                            setError('Informe seu e‑mail para solicitar recuperação.');
+                            return;
+                          }
+                          const { apiRequest } = await import('../services/apiClient');
+                          await apiRequest<{ ok: boolean }>({
+                            path: '/api/auth/password-reset/start',
+                            method: 'POST',
+                            body: { email },
+                          });
+                          setResetStage('confirm');
+                          setShowReset(true);
+                          setError('');
+                        } catch (e) {
+                          setError('Não foi possível solicitar recuperação agora.');
+                        }
+                      }}
+                    >
+                      Solicitar recuperação
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
-            {!isLogin && (
-              <>
-                <div>
+            {mode === 'login' && showReset && resetStage === 'confirm' && (
+              <div className="space-y-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="resetToken">Código</Label>
+                  <Input
+                    id="resetToken"
+                    value={resetToken}
+                    onChange={(e) => setResetToken(e.target.value)}
+                    placeholder="Cole o código do email"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="newPassword">Nova senha</Label>
+                  <Input
+                    id="newPassword"
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Defina sua nova senha"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="confirmNewPassword">Confirmar nova senha</Label>
+                  <Input
+                    id="confirmNewPassword"
+                    type="password"
+                    value={confirmNewPassword}
+                    onChange={(e) => setConfirmNewPassword(e.target.value)}
+                    placeholder="Repita a nova senha"
+                  />
+                </div>
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={async () => {
+                      try {
+                        setError('');
+                        const token = resetToken.trim();
+                        const pass = newPassword.trim();
+                        const pass2 = confirmNewPassword.trim();
+                        if (!token || !pass || !pass2) {
+                          setError('Preencha código e senhas.');
+                          return;
+                        }
+                        if (pass !== pass2) {
+                          setError('As senhas não coincidem.');
+                          return;
+                        }
+                        const { apiRequest } = await import('../services/apiClient');
+                        await apiRequest<{ ok: boolean }>({
+                          path: '/api/auth/password-reset/confirm',
+                          method: 'POST',
+                          body: { token, password: pass },
+                        });
+                        setShowReset(false);
+                        setResetStage('request');
+                        setResetToken('');
+                        setNewPassword('');
+                        setConfirmNewPassword('');
+                      } catch (e) {
+                        setError('Não foi possível redefinir a senha. Verifique o código e tente novamente.');
+                      }
+                    }}
+                  >
+                    Redefinir senha
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {mode === 'register' && (
+              <div className="space-y-4">
+                <div className="grid gap-2">
                   <Label htmlFor="confirmPassword">{t('auth.confirmPassword')} *</Label>
                   <Input
                     id="confirmPassword"
@@ -159,54 +306,28 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
                   />
                 </div>
 
-                <div className="flex items-start space-x-2">
+                <div className="flex items-start gap-2">
                   <Checkbox
                     id="acceptTerms"
                     checked={formData.acceptTerms}
-                    onCheckedChange={(checked) => 
-                      setFormData({ ...formData, acceptTerms: checked as boolean })
+                    onCheckedChange={(checked) =>
+                      setFormData({ ...formData, acceptTerms: checked === true })
                     }
                   />
-                  <label htmlFor="acceptTerms" className="text-sm text-gray-600 dark:text-gray-400">
+                  <Label htmlFor="acceptTerms" className="text-sm font-normal leading-5">
                     {t('auth.terms')} *
-                  </label>
+                  </Label>
                 </div>
-              </>
-            )}
-
-            {error && (
-              <div className="text-red-600 text-sm">{error}</div>
+              </div>
             )}
 
             <Button type="submit" className="w-full" disabled={isLoading}>
-              {isLoading ? 'Carregando...' : (isLogin ? t('auth.login') : t('auth.register'))}
+              {isLoading ? 'Carregando...' : mode === 'login' ? t('auth.login') : t('auth.register')}
             </Button>
           </form>
-
-          <div className="mt-4 text-center">
-            <Button
-              variant="link"
-              onClick={() => setIsLogin(!isLogin)}
-              className="text-sm"
-            >
-              {isLogin ? 'Criar conta' : 'Já tenho conta'}
-            </Button>
-          </div>
-
-          {isLogin && (
-            <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-950 rounded-lg">
-              <h4 className="font-semibold text-sm mb-2">💡 Dicas de Login:</h4>
-              <div className="text-xs space-y-1 text-gray-600 dark:text-gray-400">
-                <p>• <strong>Primeira vez?</strong> Clique em "Criar conta"</p>
-                <p>• <strong>Teste Premium:</strong> use "premium" no email</p>
-                <p>• <strong>Demo Admin:</strong> admin@capturecapas.com</p>
-                <p>• Qualquer senha funciona para demonstração</p>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 };
 

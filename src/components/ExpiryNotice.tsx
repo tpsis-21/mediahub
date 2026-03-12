@@ -6,17 +6,22 @@ import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
 
 const ExpiryNotice: React.FC = () => {
-  const { user, getDaysUntilExpiry, isNearExpiry } = useAuth();
+  const { user, getDaysUntilExpiry, isNearExpiry, isPremiumExpired } = useAuth();
 
-  if (!user || user.type !== 'premium' || !isNearExpiry()) {
+  if (!user || user.type !== 'premium') {
     return null;
   }
 
   const daysLeft = getDaysUntilExpiry();
-  const isExpired = daysLeft < 0;
+  const isExpired = isPremiumExpired();
+  const shouldShow = isExpired || isNearExpiry();
+
+  if (!Number.isFinite(daysLeft) || !shouldShow) {
+    return null;
+  }
 
   return (
-    <Alert className={`mb-6 ${isExpired ? 'border-red-500 bg-red-50 dark:bg-red-950' : 'border-yellow-500 bg-yellow-50 dark:bg-yellow-950'}`}>
+    <Alert className={`${isExpired ? 'border-red-500 bg-red-50 dark:bg-red-950' : 'border-yellow-500 bg-yellow-50 dark:bg-yellow-950'}`}>
       <div className="flex items-start space-x-3">
         {isExpired ? (
           <AlertTriangle className="h-5 w-5 text-red-500 mt-0.5" />
@@ -47,6 +52,7 @@ const ExpiryNotice: React.FC = () => {
             <Button 
               size="sm" 
               className="mt-2 bg-gradient-to-r from-yellow-500 to-yellow-600 hover:from-yellow-600 hover:to-yellow-700 text-white"
+              onClick={() => window.dispatchEvent(new Event("mediahub:openUserAreaModal"))}
             >
               {isExpired ? 'Renovar Agora' : 'Renovar Premium'}
             </Button>

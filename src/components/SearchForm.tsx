@@ -1,8 +1,8 @@
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Search, List, User, Film, Tv, Globe } from 'lucide-react';
 import { useI18n } from '../contexts/I18nContext';
-import { MediaType } from '../services/tmdbService';
+import { MediaType } from '../services/searchService';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Textarea } from './ui/textarea';
@@ -14,13 +14,28 @@ import { Label } from './ui/label';
 interface SearchFormProps {
   onSearch: (queries: string[], type: 'individual' | 'bulk', mediaType: MediaType) => void;
   isLoading: boolean;
+  bulkPreset?: { text: string; token: number } | null;
+  bulkEnabled?: boolean;
+  onBlockedBulk?: () => void;
 }
 
-const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading }) => {
+const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading, bulkPreset, bulkEnabled = false, onBlockedBulk }) => {
   const { t } = useI18n();
+  const [tab, setTab] = useState<'individual' | 'bulk'>('individual');
   const [individualQuery, setIndividualQuery] = useState('');
   const [bulkQuery, setBulkQuery] = useState('');
   const [mediaType, setMediaType] = useState<MediaType>('multi');
+
+  useEffect(() => {
+    if (!bulkPreset) return;
+    if (!bulkEnabled) {
+      onBlockedBulk?.();
+      setTab('individual');
+      return;
+    }
+    setBulkQuery(bulkPreset.text);
+    setTab('bulk');
+  }, [bulkEnabled, bulkPreset, onBlockedBulk]);
 
   const handleIndividualSearch = () => {
     if (individualQuery.trim()) {
@@ -29,6 +44,10 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading }) => {
   };
 
   const handleBulkSearch = () => {
+    if (!bulkEnabled) {
+      onBlockedBulk?.();
+      return;
+    }
     if (bulkQuery.trim()) {
       const queries = bulkQuery
         .split('\n')
@@ -50,7 +69,7 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading }) => {
           <RadioGroup
             value={mediaType}
             onValueChange={(value) => setMediaType(value as MediaType)}
-            className="flex flex-row space-x-6"
+            className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6"
           >
             <div className="flex items-center space-x-2">
               <RadioGroupItem value="multi" id="multi" />
@@ -76,16 +95,30 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading }) => {
           </RadioGroup>
         </div>
 
-        <Tabs defaultValue="individual" className="w-full">
-          <TabsList className="grid w-full grid-cols-2">
+        <Tabs
+          value={tab}
+          onValueChange={(value) => {
+            const next = value === 'bulk' ? 'bulk' : 'individual';
+            if (next === 'bulk' && !bulkEnabled) {
+              onBlockedBulk?.();
+              setTab('individual');
+              return;
+            }
+            setTab(next);
+          }}
+          className="w-full"
+        >
+          <TabsList className={`grid w-full ${bulkEnabled ? 'grid-cols-2' : 'grid-cols-1'}`}>
             <TabsTrigger value="individual" className="flex items-center space-x-2">
               <User className="h-4 w-4" />
               <span>{t('search.individual')}</span>
             </TabsTrigger>
-            <TabsTrigger value="bulk" className="flex items-center space-x-2">
-              <List className="h-4 w-4" />
-              <span>{t('search.bulk')}</span>
-            </TabsTrigger>
+            {bulkEnabled && (
+              <TabsTrigger value="bulk" className="flex items-center space-x-2">
+                <List className="h-4 w-4" />
+                <span>{t('search.bulk')}</span>
+              </TabsTrigger>
+            )}
           </TabsList>
           
           <TabsContent value="individual" className="space-y-4">

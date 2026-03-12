@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npx tsc -p tsconfig.json --noEmit
+
+      - name: UI guardrails (secrets/urls)
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+
+          const projectRoot = process.cwd();
+          const roots = [
+            'src/components',
+            'src/pages',
+            'src/contexts',
+            'src/hooks',
+            'src/lib',
+            'src/utils',
+            'src/services'
+          ].map((p) => path.join(projectRoot, p));
+
+          const allowedExt = new Set(['.ts', '.tsx', '.js', '.jsx']);
+
+          const forbidden = [
+            { label: 'External image host', re: /https?:\/\/image\.tmdb\.org\b/i },
+            { label: 'External API host', re: /https?:\/\/api\.themoviedb\.org\b/i },
+            { label: 'External provider link', re: /themoviedb\.org\b/i },
+            { label: 'Stored secret key name', re: /\btmdb_api_key_(primary|secondary)\b/i },
+            { label: 'Stored secret token name', re: /\btelegram_bot_token\b/i },
+            { label: 'Telegram bot token format', re: /\bbot\d{5,}:[A-Za-z0-9_-]{30,}\b/ },
+            { label: 'OpenAI key format', re: /\bsk-[A-Za-z0-9]{20,}\b/ },
+            { label: 'AWS access key format', re: /\bAKIA[0-9A-Z]{16}\b/ },
+            { label: 'Slack token format', re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/ }
+          ];
+
+          const walk = (dir, out) => {
+            if (!fs.existsSync(dir)) return;
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const ent of entries) {
+              if (ent.name === 'node_modules' || ent.name === 'dist') continue;
+              const full = path.join(dir, ent.name);
+              if (ent.isDirectory()) walk(full, out);
+              else if (ent.isFile() && allowedExt.has(path.extname(ent.name))) out.push(full);
+            }
+          };
+
+          const files = [];
+          for (const root of roots) walk(root, files);
+
+          const violations = [];
+          for (const file of files) {
+            const text = fs.readFileSync(file, 'utf8');
+            const lines = text.split(/\r?\n/);
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i];
+              for (const rule of forbidden) {
+                if (rule.re.test(line)) {
+                  violations.push({
+                    file: path.relative(projectRoot, file),
+                    line: i + 1,
+                    label: rule.label,
+                    snippet: line.trim().slice(0, 240)
+                  });
+                }
+              }
+            }
+          }
+
+          if (violations.length > 0) {
+            console.error('UI guardrails failed. Violations:');
+            for (const v of violations) {
+              console.error(`- ${v.file}:${v.line} [${v.label}] ${v.snippet}`);
+            }
+            process.exit(1);
+          }
+
+          console.log('UI guardrails OK.');
+          NODE
+
+      - name: Build
+        run: npm run build

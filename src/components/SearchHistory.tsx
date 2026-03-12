@@ -23,8 +23,8 @@ const SearchHistory: React.FC<SearchHistoryProps> = ({ history, onRerun, onRefre
 
   if (history.length === 0) {
     return (
-      <Card>
-        <CardContent className="p-6 text-center text-gray-500 dark:text-gray-400">
+      <Card className="glass-effect">
+        <CardContent className="p-6 text-center text-muted-foreground">
           <History className="h-12 w-12 mx-auto mb-4 opacity-50" />
           <p>Nenhum histórico de busca encontrado</p>
         </CardContent>
@@ -33,7 +33,7 @@ const SearchHistory: React.FC<SearchHistoryProps> = ({ history, onRerun, onRefre
   }
 
   return (
-    <Card>
+    <Card className="glass-effect">
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="flex items-center space-x-2">
           <History className="h-5 w-5" />
@@ -53,21 +53,21 @@ const SearchHistory: React.FC<SearchHistoryProps> = ({ history, onRerun, onRefre
         {history.map((item) => (
           <div
             key={item.id}
-            className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg"
+            className="flex items-center justify-between rounded-lg border bg-muted/20 p-3"
           >
             <div className="flex-1 min-w-0">
               <div className="flex items-center space-x-2 mb-1">
                 <Badge variant={item.type === 'individual' ? 'default' : 'secondary'}>
                   {item.type === 'individual' ? 'Individual' : 'Em Massa'}
                 </Badge>
-                <span className="text-xs text-gray-500">
+                <span className="text-xs text-muted-foreground">
                   {new Date(item.timestamp).toLocaleDateString()}
                 </span>
               </div>
-              <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
+              <p className="text-sm font-medium text-foreground truncate">
                 {item.query}
               </p>
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-muted-foreground">
                 {item.results.length} resultado(s) encontrado(s)
               </p>
             </div>

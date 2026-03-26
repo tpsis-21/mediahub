@@ -2539,6 +2539,8 @@ const refreshFootballSchedule = async ({ scheduleDateIso, timeZone }) => {
 
 const footballScheduleAutoRefreshCache = new Map()
 
+const footballScheduleCrestDebugLogCache = new Map()
+
 const shouldRefreshFootballScheduleBecauseTooFew = ({ merged, scheduleDateIso }) => {
   const matchesCount = Array.isArray(merged) ? merged.length : 0
   if (matchesCount >= 24) return false
@@ -6007,6 +6009,45 @@ app.get('/api/football/schedule', requireAuth, requirePremiumOrAdmin, async (req
       shouldRefreshFootballScheduleBecauseCrestsMissing({ merged, scheduleDateIso: responseDate })
     ) {
       void refreshFootballSchedule({ scheduleDateIso: responseDate, timeZone: settings.timeZone }).catch(() => undefined)
+    }
+
+    const isMissingCrest = (url) => !String(url || '').trim() || isPlaceholderFootballTeamCrestUrl(String(url || ''))
+    const totalMatches = Array.isArray(merged) ? merged.length : 0
+    const missingHome = merged.filter((m) => isMissingCrest(m.homeCrestUrl)).length
+    const missingAway = merged.filter((m) => isMissingCrest(m.awayCrestUrl)).length
+    const missingBoth = merged.filter((m) => isMissingCrest(m.homeCrestUrl) && isMissingCrest(m.awayCrestUrl)).length
+    const missingAny = merged.filter((m) => isMissingCrest(m.homeCrestUrl) || isMissingCrest(m.awayCrestUrl)).length
+
+    const dateKey = typeof responseDate === 'string' ? responseDate.trim() : ''
+    const shouldLogCrestsDebug =
+      dateKey &&
+      (missingAny >= Math.max(6, Math.floor(totalMatches * 0.7))) &&
+      (Date.now() - (footballScheduleCrestDebugLogCache.get(dateKey) || 0) > 10 * 60_000)
+
+    if (shouldLogCrestsDebug) {
+      const sample = merged
+        .filter((m) => isMissingCrest(m.homeCrestUrl) || isMissingCrest(m.awayCrestUrl))
+        .slice(0, 3)
+        .map((m) => ({
+          time: m.time,
+          home: m.home,
+          away: m.away,
+          href: m.href,
+          homeCrestUrl: m.homeCrestUrl,
+          awayCrestUrl: m.awayCrestUrl,
+        }))
+
+      console.log('football_schedule_crests_debug', {
+        date: dateKey,
+        totalMatches,
+        missingHome,
+        missingAway,
+        missingBoth,
+        missingAny,
+        missingAnyRatio: totalMatches ? missingAny / totalMatches : 0,
+        sample,
+      })
+      footballScheduleCrestDebugLogCache.set(dateKey, Date.now())
     }
 
     const publicMatches = merged.map((m) => ({

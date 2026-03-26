@@ -3,12 +3,13 @@ providers = ["node"]
 [variables]
 NIXPACKS_NODE_VERSION = "20"
 YOUTUBE_DL_SKIP_PYTHON_CHECK = "1"
+NPM_CONFIG_PRODUCTION = "false"
 
 [phases.setup]
 nixPkgs = ["nodejs_20", "bun", "python3"]
 
 [phases.install]
-cmds = ["npm ci"]
+cmds = ["npm ci --include=dev"]
 
 [phases.build]
 cmds = ["npm run build"]

@@ -1,3 +1,5 @@
+providers = ["node"]
+
 [variables]
 NIXPACKS_NODE_VERSION = "20"
 YOUTUBE_DL_SKIP_PYTHON_CHECK = "1"
@@ -5,5 +7,11 @@ YOUTUBE_DL_SKIP_PYTHON_CHECK = "1"
 [phases.setup]
 nixPkgs = ["nodejs_20", "bun", "python3"]
 
+[phases.install]
+cmds = ["npm ci"]
+
+[phases.build]
+cmds = ["npm run build"]
+
 [start]
-cmd = "node server/server.mjs"
+cmd = "npm run start"

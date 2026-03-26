@@ -5987,20 +5987,27 @@ app.get('/api/football/schedule', requireAuth, requirePremiumOrAdmin, async (req
 
     merged = merged.filter((match) => !shouldExcludeFootballMatch(match, settings))
 
-    // Se a cobertura de escudos estiver baixa, força refresh síncrono
-    // para evitar responder dados antigos sem href/escudos.
+    // Se a cobertura de escudos estiver baixa, tenta enriquecer agora,
+    // mas sem bloquear demais a resposta (evita timeout no frontend).
     const shouldEnrichNow = shouldRefreshFootballScheduleBecauseCrestsMissing({ merged, scheduleDateIso: responseDate })
-    if (shouldEnrichNow) {
-      try {
-        await refreshFootballSchedule({ scheduleDateIso: responseDate, timeZone: settings.timeZone })
-        const refreshedRows = await loadRows(responseDate)
-        const refreshed = mergeRows(refreshedRows.rows)
-        merged = refreshed.merged.filter((match) => !shouldExcludeFootballMatch(match, settings))
-        updatedAt = refreshed.updatedAt || updatedAt
-      } catch {
+    if (shouldEnrichNow && merged.length > 0) {
+      const timeoutMs = 8_000
+      const withTimeout = async (p) => {
+        let timer = null
+        const timeout = new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs)
+        })
+        try {
+          const out = await Promise.race([p, timeout])
+          return out
+        } finally {
+          if (timer) clearTimeout(timer)
+        }
       }
-      if (merged.length > 0) {
-        merged = await enrichFutebolNaTvMatchesWithCrests(merged)
+      try {
+        const enriched = await withTimeout(enrichFutebolNaTvMatchesWithCrests(merged))
+        if (Array.isArray(enriched) && enriched.length > 0) merged = enriched
+      } catch {
       }
     }
 

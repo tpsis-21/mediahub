@@ -7257,7 +7257,7 @@ app.post('/api/tickets', requireAuth, async (req, res) => {
 })
 
 // Get Ticket Details (User/Admin)
-app.get('/api/tickets/:id', requireAuth, async (req, res) => {
+app.get('/api/tickets/:id(\\d+)', requireAuth, async (req, res) => {
   try {
     const { id } = req.params
     const ticketRes = await query('SELECT t.*, u.email as user_email FROM tickets t JOIN app_users u ON t.user_id = u.id WHERE t.id = $1', [id])
@@ -7288,7 +7288,7 @@ app.get('/api/tickets/:id', requireAuth, async (req, res) => {
 })
 
 // Add Message (User/Admin)
-app.post('/api/tickets/:id/messages', requireAuth, async (req, res) => {
+app.post('/api/tickets/:id(\\d+)/messages', requireAuth, async (req, res) => {
   try {
     const { id } = req.params
     const { message } = req.body
@@ -7343,7 +7343,7 @@ app.get('/api/admin/tickets', requireAuth, requireAdmin, async (req, res) => {
 })
 
 // Admin Update Status
-app.put('/api/admin/tickets/:id/status', requireAuth, requireAdmin, async (req, res) => {
+app.put('/api/admin/tickets/:id(\\d+)/status', requireAuth, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params
     const { status } = req.body

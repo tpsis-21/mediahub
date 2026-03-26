@@ -1,5 +1,6 @@
 [variables]
 NIXPACKS_NODE_VERSION = "20"
+YOUTUBE_DL_SKIP_PYTHON_CHECK = "1"
 
 [phases.setup]
-nixPkgs = ["nodejs_20", "bun"]
+nixPkgs = ["nodejs_20", "bun", "python3"]

@@ -247,7 +247,7 @@ Permitir gerar artes “Jogos do dia” com:
 - Confronto (Time A vs Time B)
 - Horário (Brasília)
 - Canais/plataformas de transmissão (um ou mais)
-- Classificação opcional: transmissão gratuita vs paga (quando a fonte indicar)
+- Dados pré-carregados diariamente às 19h (Brasília) para o dia seguinte, garantindo que o “dia atual” já esteja disponível no início do dia
 
 ### Premissas e riscos
 
@@ -260,7 +260,8 @@ Permitir gerar artes “Jogos do dia” com:
 - Confirmar se a fonte publica um formato estruturado (ex.: JSON-LD, microdados, endpoints internos) que evite scraping “por HTML”.
 - Verificar robots/termos de uso e definir política de cache/intervalo de atualização para não sobrecarregar o site.
 - Definir escopo inicial:
-  - “Jogos do dia” apenas (data atual), ou permitir escolher data?
+  - “Jogos do dia” (data atual), sem seleção manual de data no client.
+  - Atualização diária às 19h (Brasília) buscando e armazenando os jogos do dia seguinte.
   - Filtrar por campeonatos (opcional) e/ou destacar principais jogos?
 
 ### Fase 1 — Modelo de dados (contrato interno)
@@ -275,8 +276,33 @@ Definir um DTO único para o client (independente da fonte), por exemplo:
   - `homeTeam` / `awayTeam` (string)
   - `kickoffTime` (HH:mm)
   - `channels[]` (string)
-  - `isPaid` (boolean | null) — quando a fonte indicar (pago/grátis)
   - `source` (metadado interno para auditoria)
+
+### Persistência (armazenamento)
+
+Objetivo: garantir que o app sirva “Jogos do dia” sempre do banco (dados pré-carregados), sem depender da fonte no momento de uso.
+
+Modelo sugerido (Postgres):
+
+- `football_sources`:
+  - `id` (PK)
+  - `name` (ex.: “Fonte A”)
+  - `url` (link da página)
+  - `is_active` (bool) — fonte padrão
+  - `created_at`, `updated_at`
+- `football_schedules`:
+  - `id` (PK)
+  - `date` (YYYY-MM-DD) — data alvo do schedule
+  - `source_id` (FK -> `football_sources.id`)
+  - `payload` (JSON) — o `ScheduleDTO` completo
+  - `fetched_at` (timestamp) — quando foi coletado
+  - `status` (ok|error) — para auditoria operacional
+  - `error_message` (texto opcional)
+
+Regras:
+
+- Índice/unique: (`date`, `source_id`) para impedir duplicidade.
+- O endpoint público serve sempre o registro do `date=today` (data atual em `America/Sao_Paulo`) da fonte ativa.
 
 ### Fase 2 — Abstração do provedor (baixo acoplamento)
 
@@ -289,14 +315,57 @@ Implementações:
 - `ProviderA` (primeira fonte): busca e converte para o `ScheduleDTO`.
 - Futuro: trocar/adicionar fontes sem alterar o resto do sistema.
 
+Configuração (Admin):
+
+- Permitir cadastrar/editar fontes (ex.: nome + URL) e definir a fonte ativa.
+- Permitir configurar o horário diário de atualização (default 19:00 em `America/Sao_Paulo`).
+
+### Admin (UI + endpoints)
+
+No painel Admin:
+
+- “Fontes — Futebol”
+  - Listar fontes cadastradas (nome, URL, ativa/inativa)
+  - Adicionar nova fonte
+  - Editar fonte existente
+  - Definir fonte ativa (apenas uma ativa por vez)
+- “Agendamento — Futebol”
+  - Editar horário diário de atualização (HH:mm)
+  - Exibir status do último job (data alvo, fetched_at, ok/erro)
+
+Endpoints sugeridos (server):
+
+- `GET /api/admin/football/sources`
+- `POST /api/admin/football/sources`
+- `PUT /api/admin/football/sources/:id`
+- `POST /api/admin/football/sources/:id/activate`
+- `GET /api/admin/football/settings`
+- `PUT /api/admin/football/settings` (ex.: `daily_refresh_time`)
+- `POST /api/admin/football/refresh` (execução manual do job, para testes)
+
 ### Fase 3 — Coleta no backend (scraper controlado)
 
 - Criar endpoint server-side:
-  - `GET /api/football/schedule?date=YYYY-MM-DD`
+  - `GET /api/football/schedule` (por padrão retorna a data atual)
+  - Opcional: `GET /api/football/schedule?date=YYYY-MM-DD` (uso interno/admin)
   - Resposta: `ScheduleDTO`
 - Implementar cache agressivo:
   - Cache em memória por dia (ex.: TTL 5–15 min) + invalidar automaticamente no “virar do dia”.
   - Rate-limit por IP/usuário no endpoint para evitar abuso.
+- Pré-carga diária (persistência):
+  - Job agendado para rodar todos os dias no horário configurado (default 19:00) em `America/Sao_Paulo`.
+  - O job busca e persiste no banco a programação do dia seguinte (data alvo).
+  - O endpoint serve preferencialmente do banco; se não existir dado persistido (primeiro deploy/falha), faz fetch sob demanda e persiste.
+
+Detalhe do job:
+
+- Horário do job: configurável no Admin (HH:mm). Default: `19:00`.
+- Data alvo: “dia seguinte” considerando `America/Sao_Paulo`.
+- Fonte usada: sempre a fonte ativa (com fallback para a última ativa se houver inconsistência).
+- Resiliência:
+  - Timeout e retry curto na requisição externa.
+  - Persistir `status=error` e `error_message` quando falhar.
+  - Manter o último `payload` válido do dia (se existir) em caso de falha parcial.
 - Observabilidade:
   - Logs apenas em dev; em prod, registrar apenas erros e métricas agregadas (sem “debug spam”).
 - Robustez:
@@ -310,14 +379,13 @@ Implementações:
 - Canais:
   - Normalizar nomes (ex.: “ESPN 4” vs “ESPN4”) via dicionário simples no servidor.
   - Suportar múltiplos canais por jogo.
-- Classificação grátis/pago:
-  - Se a fonte usar marcação por cor/legenda, converter para `isPaid`.
 
 ### Fase 5 — UI/UX no client (listagem e seleção)
 
 - Adicionar uma nova opção de “tipo de banner”: “Futebol — Jogos do dia”.
 - Tela/Modal:
-  - Seleção de data (opcional na v1: apenas “hoje”).
+  - Sem seleção de data (v1).
+  - Exibir a data do banner e o horário de última atualização.
   - Lista de jogos (cards) com seleção e ordenação por horário.
   - Preview do layout antes de exportar.
 - A11y:
@@ -347,14 +415,15 @@ Saídas:
 
 - Testes mínimos:
   - Parser: fixtures de HTML para garantir que o extrator não quebre fácil.
-  - Endpoint: validação de query params (`date`) e erros.
+  - Job/endpoint: validação da data alvo (cálculo de “dia seguinte” às 19h em `America/Sao_Paulo`) e comportamento de fallback.
 - Segurança:
   - Sem expor detalhes do provedor no client.
   - Timeouts e limites de tamanho de resposta na requisição externa.
 
 ### Critérios de aceite (v1)
 
-- Buscar jogos do dia no servidor e retornar JSON normalizado com hora + canais.
+- Pré-carregar diariamente às 19h (Brasília) os jogos do dia seguinte e persistir no banco.
+- Servir “Jogos do dia” do armazenamento (banco) e retornar JSON normalizado com hora + canais.
 - Gerar banner 1:1 com pelo menos 6 jogos, mantendo layout “equilibrado”.
 - Cache ativo e sem logs de debug em produção.
 - UI acessível (foco/contraste/labels) e mensagens de erro amigáveis.

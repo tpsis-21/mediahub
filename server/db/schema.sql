@@ -62,3 +62,27 @@ create table if not exists app_password_reset_tokens (
   used_at timestamptz null,
   created_at timestamptz not null default now()
 );
+
+create table if not exists football_sources (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  url text not null,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_football_sources_active on football_sources (is_active);
+
+create table if not exists football_schedules (
+  id uuid primary key default gen_random_uuid(),
+  source_id uuid not null references football_sources(id) on delete cascade,
+  schedule_date date not null,
+  matches jsonb not null default '[]'::jsonb,
+  fetched_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (source_id, schedule_date)
+);
+
+create index if not exists idx_football_schedules_date on football_schedules (schedule_date desc);

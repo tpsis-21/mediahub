@@ -1,7 +1,7 @@
 
 import JSZip from 'jszip';
 import { MovieData } from './searchService';
-import { getApiBaseUrl, getAuthToken } from './apiClient';
+import { buildApiUrl, buildLongRunningApiUrl, getAuthToken } from './apiClient';
 
 export interface ExportData {
   movies: MovieData[];
@@ -53,25 +53,71 @@ export type TrailerBrandingOptions = {
   maxDurationSeconds?: number;
 };
 
+export type TrailerBrandingStage =
+  | 'resolvendo-trailer'
+  | 'gerando-servidor'
+  | 'gerando-local'
+  | 'finalizando';
+
+export type TrailerBrandingRuntimeOptions = {
+  previewSeconds?: number;
+  layout?: 'portrait' | 'feed';
+  signal?: AbortSignal;
+  onStageChange?: (stage: TrailerBrandingStage) => void;
+};
+
 class ExportService {
+  private readonly cancelMessage = 'Operação cancelada pelo usuário.';
+
+  private isNetworkFetchFailureMessage(message: string): boolean {
+    const m = message.toLowerCase();
+    return (
+      m.includes('failed to fetch') ||
+      m.includes('load failed') ||
+      m.includes('networkerror') ||
+      m.includes('network request failed') ||
+      m.includes('econnrefused') ||
+      m.includes('err_failed')
+    );
+  }
+
+  private throwIfAborted(signal?: AbortSignal) {
+    if (signal?.aborted) throw new Error(this.cancelMessage);
+  }
+
+  private createAbortControllerWithTimeout(timeoutMs: number, signal?: AbortSignal) {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    if (signal) {
+      if (signal.aborted) controller.abort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+    return {
+      controller,
+      cleanup: () => {
+        window.clearTimeout(timeoutId);
+        if (signal) signal.removeEventListener('abort', onAbort);
+      },
+    };
+  }
+
   private getPosterProxyUrl(input: { posterPath: string; size: string; filename?: string; download?: boolean }) {
-    const baseUrl = getApiBaseUrl();
     const params = new URLSearchParams();
     params.set('size', input.size);
     params.set('path', input.posterPath);
     if (input.download) params.set('download', '1');
     if (input.filename) params.set('filename', input.filename);
-    return `${baseUrl}/api/search/image?${params.toString()}`;
+    return buildApiUrl(`/api/search/image?${params.toString()}`);
   }
 
   private getSearchImageProxyUrl(input: { path: string; size: string; filename?: string; download?: boolean }) {
-    const baseUrl = getApiBaseUrl();
     const params = new URLSearchParams();
     params.set('size', input.size);
     params.set('path', input.path);
     if (input.download) params.set('download', '1');
     if (input.filename) params.set('filename', input.filename);
-    return `${baseUrl}/api/search/image?${params.toString()}`;
+    return buildApiUrl(`/api/search/image?${params.toString()}`);
   }
 
   private safeFileBaseName(value: string) {
@@ -96,6 +142,107 @@ class ExportService {
     return '';
   }
 
+  private async fetchTrailerVideoBlobFromServer(
+    item: MovieData,
+    trailerId?: string,
+    options: { previewSeconds?: number; signal?: AbortSignal } = {}
+  ): Promise<Blob> {
+    this.throwIfAborted(options.signal);
+    const token = getAuthToken();
+    if (!token) throw new Error('Faça login para usar este recurso.');
+
+    const requestBody = JSON.stringify({
+      mediaType: item.media_type === 'tv' ? 'tv' : 'movie',
+      id: item.id,
+      trailerId: trailerId && trailerId.trim() ? trailerId.trim() : undefined,
+      previewSeconds:
+        typeof options.previewSeconds === 'number' && options.previewSeconds > 0
+          ? Math.min(Math.max(Math.round(options.previewSeconds), 6), 30)
+          : undefined,
+    });
+    const requestAttempts = [0, 900, 2000];
+    let res: Response | null = null;
+    for (let attempt = 0; attempt < requestAttempts.length; attempt++) {
+      this.throwIfAborted(options.signal);
+      if (requestAttempts[attempt] > 0) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, requestAttempts[attempt]));
+      }
+      const timeoutMs =
+        typeof options.previewSeconds === 'number' && options.previewSeconds > 0 ? 240_000 : 900_000;
+      const timeoutControl = this.createAbortControllerWithTimeout(timeoutMs, options.signal);
+      try {
+        res = await fetch(buildLongRunningApiUrl('/api/trailer/download'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: requestBody,
+          signal: timeoutControl.controller.signal,
+        });
+        if (res.ok) break;
+        if (attempt < requestAttempts.length - 1 && res.status >= 500) continue;
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error || '');
+        if ((error instanceof Error && error.name === 'AbortError') || message.toLowerCase().includes('aborted')) {
+          if (options.signal?.aborted) throw new Error(this.cancelMessage);
+        }
+        if (attempt < requestAttempts.length - 1) continue;
+        throw new Error('Não foi possível conectar ao servidor agora. Tente novamente em instantes.');
+      } finally {
+        timeoutControl.cleanup();
+      }
+    }
+    if (!res) throw new Error('Não foi possível conectar ao servidor agora. Tente novamente em instantes.');
+
+    if (!res.ok) {
+      let message = 'Não foi possível baixar o trailer.';
+      if (res.status === 401) {
+        message = 'Faça login para usar este recurso.';
+      } else if (res.status === 403) {
+        message = 'Acesso negado.';
+      } else {
+        try {
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.toLowerCase().includes('application/json')) {
+            const payload = (await res.json()) as unknown;
+            if (payload && typeof payload === 'object') {
+              const o = payload as { message?: string; hint?: string };
+              if (typeof o.message === 'string') message = o.message;
+              if (typeof o.hint === 'string' && o.hint.trim()) {
+                message = `${message} ${o.hint.trim()}`;
+              }
+            }
+          } else {
+            const text = await res.text();
+            try {
+              const payload = JSON.parse(text) as unknown;
+              if (payload && typeof payload === 'object') {
+                const o = payload as { message?: string; hint?: string };
+                if (typeof o.message === 'string') message = o.message;
+                if (typeof o.hint === 'string' && o.hint.trim()) {
+                  message = `${message} ${o.hint.trim()}`;
+                }
+              }
+            } catch {
+              void 0;
+            }
+          }
+        } catch {
+          void 0;
+        }
+      }
+      throw new Error(message);
+    }
+
+    const blob = await res.blob();
+    if (!blob || blob.size === 0) {
+      throw new Error('Não foi possível baixar o trailer.');
+    }
+    return blob;
+  }
+
   private clickDownload(url: string, filename: string) {
     const link = document.createElement('a');
     link.href = url;
@@ -118,6 +265,9 @@ class ExportService {
   private getSupportedVideoMimeType(): string | undefined {
     if (typeof MediaRecorder === 'undefined') return undefined;
     const candidates = [
+      'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+      'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+      'video/mp4',
       'video/webm;codecs=vp9',
       'video/webm;codecs=vp8',
       'video/webm',
@@ -126,6 +276,70 @@ class ExportService {
       if (MediaRecorder.isTypeSupported(type)) return type;
     }
     return undefined;
+  }
+
+  private getVideoExtensionFromMimeType(mimeType?: string) {
+    const raw = String(mimeType || '').toLowerCase();
+    if (raw.includes('mp4')) return 'mp4';
+    if (raw.includes('webm')) return 'webm';
+    return 'webm';
+  }
+
+  private wrapLinesByWidth(ctx: CanvasRenderingContext2D, text: string, maxWidth: number, maxLines: number) {
+    const safe = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!safe) return [];
+    const words = safe.split(' ');
+    const lines: string[] = [];
+    let current = '';
+    for (const word of words) {
+      const test = current ? `${current} ${word}` : word;
+      if (ctx.measureText(test).width <= maxWidth) {
+        current = test;
+      } else {
+        if (current) lines.push(current);
+        current = word;
+      }
+      if (lines.length >= maxLines) break;
+    }
+    if (lines.length < maxLines && current) lines.push(current);
+    if (lines.length === maxLines && words.join(' ') !== lines.join(' ')) {
+      lines[maxLines - 1] = `${lines[maxLines - 1]}…`;
+    }
+    return lines.slice(0, maxLines);
+  }
+
+  private wrapLinesByWidthNoEllipsis(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
+    const safe = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!safe) return [];
+    const words = safe.split(' ');
+    const lines: string[] = [];
+    let current = '';
+    for (const word of words) {
+      const test = current ? `${current} ${word}` : word;
+      if (ctx.measureText(test).width <= maxWidth) {
+        current = test;
+      } else {
+        if (current) lines.push(current);
+        current = word;
+      }
+    }
+    if (current) lines.push(current);
+    return lines;
+  }
+
+  private drawRoundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+    const radius = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + w - radius, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+    ctx.lineTo(x + w, y + h - radius);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+    ctx.lineTo(x + radius, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
   }
 
   private async decodeImage(blob: Blob): Promise<{ width: number; height: number; draw: (ctx: CanvasRenderingContext2D, rect: { x: number; y: number; w: number; h: number }) => void }> {
@@ -824,63 +1038,11 @@ class ExportService {
     if (!trailerId) {
       throw new Error('Trailer indisponível no momento');
     }
-
-    const baseUrl = getApiBaseUrl();
-    const token = getAuthToken();
-    if (!token) throw new Error('Faça login para usar este recurso.');
-
-    const res = await fetch(`${baseUrl}/api/trailer/download`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        mediaType: item.media_type === 'tv' ? 'tv' : 'movie',
-        id: item.id,
-        trailerId,
-      }),
-    });
-
-    if (!res.ok) {
-      let message = 'Não foi possível baixar o trailer.';
-      if (res.status === 401) {
-        message = 'Faça login para usar este recurso.';
-      } else if (res.status === 403) {
-        message = 'Acesso negado.';
-      } else {
-        try {
-          const contentType = res.headers.get('content-type') || '';
-          if (contentType.toLowerCase().includes('application/json')) {
-            const payload = (await res.json()) as unknown;
-            if (payload && typeof payload === 'object' && typeof (payload as { message?: unknown }).message === 'string') {
-              message = (payload as { message: string }).message;
-            }
-          } else {
-            const text = await res.text();
-            try {
-              const payload = JSON.parse(text) as unknown;
-              if (payload && typeof payload === 'object' && typeof (payload as { message?: unknown }).message === 'string') {
-                message = (payload as { message: string }).message;
-              }
-            } catch {
-              void 0;
-            }
-          }
-        } catch {
-          void 0;
-        }
-      }
-      throw new Error(message);
-    }
-
-    const blob = await res.blob();
-    if (!blob || blob.size === 0) {
-      throw new Error('Não foi possível baixar o trailer.');
-    }
+    const blob = await this.fetchTrailerVideoBlobFromServer(item, trailerId);
 
     const title = item.title || item.name || 'trailer';
-    const filename = `${this.safeFileBaseName(title)}_trailer.mp4`;
+    const extension = this.getVideoExtensionFromMimeType(blob.type);
+    const filename = `${this.safeFileBaseName(title)}_trailer.${extension}`;
     const url = URL.createObjectURL(blob);
     this.clickDownload(url, filename);
   }
@@ -889,145 +1051,949 @@ class ExportService {
     return navigator.clipboard.writeText(text);
   }
 
+  private async renderTrailerBrandingBlobClient(
+    item: MovieData,
+    input: TrailerBrandingOptions,
+    options: TrailerBrandingRuntimeOptions = {}
+  ): Promise<Blob> {
+    this.throwIfAborted(options.signal);
+    options.onStageChange?.('resolvendo-trailer');
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+      throw new Error('Geração local indisponível.');
+    }
+    if (typeof MediaRecorder === 'undefined') {
+      throw new Error('Seu navegador não suporta gerar vídeo automaticamente.');
+    }
+    const mimeType = this.getSupportedVideoMimeType();
+    if (!mimeType) throw new Error('Seu navegador não suporta exportar vídeo neste formato.');
+
+    const trailerId = this.extractTrailerIdFromInput(String(input.trailerId || input.trailerUrl || '').trim());
+    const trailerBlob = await this.fetchTrailerVideoBlobFromServer(item, trailerId || undefined, {
+      previewSeconds: options.previewSeconds,
+      signal: options.signal,
+    });
+    this.throwIfAborted(options.signal);
+    const trailerUrl = URL.createObjectURL(trailerBlob);
+
+    const video = document.createElement('video');
+    video.preload = 'auto';
+    video.muted = true;
+    video.playsInline = true;
+    video.src = trailerUrl;
+
+    let stream: MediaStream | null = null;
+    let recorder: MediaRecorder | null = null;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        if (options.signal?.aborted) {
+          reject(new Error(this.cancelMessage));
+          return;
+        }
+        const onLoaded = () => {
+          cleanup();
+          resolve();
+        };
+        const onError = () => {
+          cleanup();
+          reject(new Error('Não foi possível carregar o trailer.'));
+        };
+        const cleanup = () => {
+          video.removeEventListener('loadedmetadata', onLoaded);
+          video.removeEventListener('error', onError);
+          if (options.signal) options.signal.removeEventListener('abort', onAbort);
+        };
+        const onAbort = () => {
+          cleanup();
+          reject(new Error(this.cancelMessage));
+        };
+        video.addEventListener('loadedmetadata', onLoaded);
+        video.addEventListener('error', onError);
+        if (options.signal) options.signal.addEventListener('abort', onAbort, { once: true });
+      });
+      this.throwIfAborted(options.signal);
+      options.onStageChange?.('gerando-local');
+
+      const layout = options.layout === 'feed' ? 'feed' : 'portrait';
+      const width = layout === 'feed' ? 864 : 720;
+      const height = layout === 'feed' ? 1080 : 1280;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Não foi possível preparar o vídeo.');
+
+      stream = new MediaStream();
+      const canvasStream = canvas.captureStream(24);
+      for (const track of canvasStream.getVideoTracks()) stream.addTrack(track);
+      try {
+        const capture = (video as HTMLVideoElement & { captureStream?: () => MediaStream; mozCaptureStream?: () => MediaStream }).captureStream?.()
+          || (video as HTMLVideoElement & { captureStream?: () => MediaStream; mozCaptureStream?: () => MediaStream }).mozCaptureStream?.();
+        if (capture) {
+          for (const track of capture.getAudioTracks()) stream.addTrack(track);
+        }
+      } catch {
+        void 0;
+      }
+
+      recorder = new MediaRecorder(stream, { mimeType });
+      const chunks: BlobPart[] = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) chunks.push(event.data);
+      };
+
+      const logoDataUrl = typeof input.brandLogo === 'string' ? input.brandLogo.trim() : '';
+      const logoDecoded =
+        input.includeLogo !== false && logoDataUrl.startsWith('data:')
+          ? await this.decodeImage(await (await fetch(logoDataUrl)).blob())
+          : null;
+
+      const primary = input.brandColors?.primary || '#3b82f6';
+      const secondary = input.brandColors?.secondary || '#8b5cf6';
+      const title = (item.title || item.name || 'Título').trim();
+      const synopsis = String(item.overview || '').replace(/\s+/g, ' ').trim();
+      const cta = (input.ctaText || 'Dica de Conteúdo').trim() || 'Dica de Conteúdo';
+      const brandName = (input.brandName || '').trim() || 'MediaHub';
+      const website = input.includeWebsite === false ? '' : String(input.website || '').trim();
+      const phone = input.includePhone === false ? '' : String(input.phone || '').trim();
+
+      const previewSecondsRaw = Number(options.previewSeconds);
+      const previewSeconds = Number.isFinite(previewSecondsRaw) && previewSecondsRaw > 0 ? Math.min(Math.round(previewSecondsRaw), 30) : 0;
+      const maxDurationRaw = Number(input.maxDurationSeconds);
+      const customMaxDuration =
+        Number.isFinite(maxDurationRaw) && maxDurationRaw > 0
+          ? Math.min(Math.max(Math.round(maxDurationRaw), 10), 180)
+          : null;
+      const sourceDuration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+      let targetDurationSec = sourceDuration > 0 ? sourceDuration : customMaxDuration || 45;
+      if (input.limitDuration === true) {
+        targetDurationSec = Math.min(targetDurationSec, 90);
+      } else if (customMaxDuration) {
+        targetDurationSec = Math.min(targetDurationSec, customMaxDuration);
+      }
+      if (previewSeconds > 0) {
+        targetDurationSec = Math.min(targetDurationSec, previewSeconds);
+      }
+      targetDurationSec = Math.max(6, targetDurationSec);
+      const targetDurationMs = Math.round(targetDurationSec * 1000);
+
+      const pad = Math.round(width * 0.05);
+      const yearText = (() => {
+        const raw = (item.media_type === 'tv' ? item.first_air_date : item.release_date) || '';
+        const match = /^(\d{4})-/.exec(String(raw));
+        return match ? match[1] : '';
+      })();
+      const ratingText = typeof item.vote_average === 'number' && item.vote_average > 0 ? item.vote_average.toFixed(1) : '';
+      const headerText = 'Assista agora';
+      const mediaLabel = item.media_type === 'tv' ? 'SÉRIE' : 'FILME';
+      const genreText = (() => {
+        const genresUnknown = (item as unknown as { genres?: Array<{ name?: string }>; genre_names?: string[] });
+        const fromGenres = Array.isArray(genresUnknown.genres) ? genresUnknown.genres.map((g) => String(g?.name || '').trim()).filter(Boolean) : [];
+        if (fromGenres.length) return fromGenres.slice(0, 2).join(' • ');
+        const fromNames = Array.isArray(genresUnknown.genre_names) ? genresUnknown.genre_names.map((g) => String(g || '').trim()).filter(Boolean) : [];
+        if (fromNames.length) return fromNames.slice(0, 2).join(' • ');
+        return '';
+      })();
+      const seasonsText = (() => {
+        if (item.media_type !== 'tv') return '';
+        const maybe = item as unknown as {
+          number_of_seasons?: unknown;
+          season_count?: unknown;
+          seasons?: unknown;
+        };
+        const fromNumber =
+          typeof maybe.number_of_seasons === 'number'
+            ? maybe.number_of_seasons
+            : typeof maybe.season_count === 'number'
+              ? maybe.season_count
+              : NaN;
+        const seasonsCount =
+          Number.isFinite(fromNumber) && fromNumber > 0
+            ? Math.round(fromNumber)
+            : Array.isArray(maybe.seasons)
+              ? maybe.seasons.length
+              : 0;
+        if (!seasonsCount) return '';
+        return `${seasonsCount} ${seasonsCount === 1 ? 'TEMPORADA' : 'TEMPORADAS'}`;
+      })();
+      const synopsisAccent =
+        input.synopsisTheme === 'highlight-yellow'
+          ? '#facc15'
+          : input.synopsisTheme === 'elegant-black'
+            ? '#0f172a'
+            : primary;
+      let posterDecoded: Awaited<ReturnType<typeof this.decodeImage>> | null = null;
+      if (item.poster_path) {
+        try {
+          const posterBlob = await this.fetchPosterBlob(item.poster_path, ['w780', 'w500', 'w342']);
+          posterDecoded = await this.decodeImage(posterBlob);
+        } catch {
+          posterDecoded = null;
+        }
+      }
+      let headerBackgroundDecoded: Awaited<ReturnType<typeof this.decodeImage>> | null = null;
+      try {
+        const headerBgBlob = await (await fetch('/anexos/bg.jpg')).blob();
+        if (headerBgBlob && headerBgBlob.size > 0) {
+          headerBackgroundDecoded = await this.decodeImage(headerBgBlob);
+        }
+      } catch {
+        headerBackgroundDecoded = null;
+      }
+      let whatsappIconDecoded: Awaited<ReturnType<typeof this.decodeImage>> | null = null;
+      try {
+        const waIconBlob = await (await fetch('/anexos/pngtree-whatsapp-icon-png-image_6315990.png')).blob();
+        if (waIconBlob && waIconBlob.size > 0) {
+          whatsappIconDecoded = await this.decodeImage(waIconBlob);
+        }
+      } catch {
+        whatsappIconDecoded = null;
+      }
+
+      const drawFrame = () => {
+        const isFeed = layout === 'feed';
+        const headerH = isFeed ? Math.round(height * 0.15) : Math.round(height * 0.13);
+        const videoH = isFeed ? Math.round(height * 0.48) : Math.round(height * 0.34);
+        const videoY = headerH;
+        const bottomY = videoY + videoH;
+        const bottomH = height - bottomY;
+
+        ctx.clearRect(0, 0, width, height);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, width, height);
+
+        if (headerBackgroundDecoded) {
+          const bgScale = Math.max(width / Math.max(1, headerBackgroundDecoded.width), headerH / Math.max(1, headerBackgroundDecoded.height));
+          const bgW = Math.round(Math.max(1, headerBackgroundDecoded.width) * bgScale);
+          const bgH = Math.round(Math.max(1, headerBackgroundDecoded.height) * bgScale);
+          const bgX = Math.round((width - bgW) / 2);
+          const bgY = Math.round((headerH - bgH) / 2);
+          headerBackgroundDecoded.draw(ctx, { x: bgX, y: bgY, w: bgW, h: bgH });
+        } else {
+          ctx.save();
+          try {
+            ctx.filter = 'blur(18px)';
+          } catch {
+            void 0;
+          }
+          const hdrSrcW = Math.max(1, video.videoWidth || width);
+          const hdrSrcH = Math.max(1, video.videoHeight || height);
+          const hdrScale = Math.max(width / hdrSrcW, headerH / hdrSrcH);
+          const hdrDw = Math.round(hdrSrcW * hdrScale);
+          const hdrDh = Math.round(hdrSrcH * hdrScale);
+          const hdrDx = Math.round((width - hdrDw) / 2);
+          const hdrDy = Math.round((headerH - hdrDh) / 2);
+          ctx.drawImage(video, hdrDx, hdrDy, hdrDw, hdrDh);
+          ctx.restore();
+        }
+
+        ctx.save();
+        const headerTheme = ctx.createLinearGradient(0, 0, width, headerH);
+        headerTheme.addColorStop(0, primary);
+        headerTheme.addColorStop(1, secondary);
+        ctx.globalAlpha = 0.5;
+        ctx.fillStyle = headerTheme;
+        ctx.fillRect(0, 0, width, headerH);
+        ctx.restore();
+
+        const hdrOverlay = ctx.createLinearGradient(0, 0, width, headerH);
+        hdrOverlay.addColorStop(0, 'rgba(0,0,0,0.62)');
+        hdrOverlay.addColorStop(1, 'rgba(0,0,0,0.35)');
+        ctx.fillStyle = hdrOverlay;
+        ctx.fillRect(0, 0, width, headerH);
+
+        const headerPadX = pad;
+        const headerCenterY = Math.round(headerH * 0.5);
+        const iconSize = Math.round(headerH * 0.38);
+        const iconX = headerPadX;
+        const iconY = Math.round(headerCenterY - iconSize / 2);
+        const iconR = Math.round(iconSize / 2);
+        ctx.save();
+        ctx.fillStyle = 'rgba(255,255,255,0.08)';
+        ctx.strokeStyle = secondary;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(iconX + iconR, iconY + iconR, iconR, 0, Math.PI * 2);
+        ctx.globalAlpha = 0.85;
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        const triPad = Math.round(iconSize * 0.3);
+        ctx.moveTo(iconX + triPad, iconY + triPad);
+        ctx.lineTo(iconX + triPad, iconY + iconSize - triPad);
+        ctx.lineTo(iconX + iconSize - triPad * 0.9, iconY + iconR);
+        ctx.closePath();
+        ctx.globalAlpha = 0.9;
+        ctx.fill();
+        ctx.restore();
+
+        ctx.save();
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor = 'rgba(0,0,0,0.6)';
+        ctx.shadowBlur = 10;
+        ctx.font = `800 ${Math.round(width * (layout === 'feed' ? 0.06 : 0.055))}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+        ctx.fillText(headerText, iconX + iconSize + Math.round(width * 0.03), headerCenterY);
+        ctx.restore();
+
+        if (logoDecoded && input.includeLogo !== false) {
+          const logoMax = Math.round(headerH * 0.62);
+          const ratio = Math.min(logoMax / logoDecoded.height, 1);
+          const lw = Math.max(1, Math.round(logoDecoded.width * ratio));
+          const lh = Math.max(1, Math.round(logoDecoded.height * ratio));
+          const lx = width - pad - lw;
+          const ly = Math.round(headerCenterY - lh / 2);
+          ctx.save();
+          ctx.shadowColor = 'rgba(0,0,0,0.65)';
+          ctx.shadowBlur = 14;
+          logoDecoded.draw(ctx, { x: lx, y: ly, w: lw, h: lh });
+          ctx.restore();
+        } else {
+          ctx.save();
+          ctx.fillStyle = 'rgba(255,255,255,0.92)';
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'middle';
+          ctx.shadowColor = 'rgba(0,0,0,0.6)';
+          ctx.shadowBlur = 10;
+          ctx.font = `700 ${Math.round(width * 0.036)}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+          ctx.fillText(brandName, width - pad, headerCenterY);
+          ctx.restore();
+        }
+
+        ctx.fillStyle = 'rgba(0,0,0,0.92)';
+        ctx.fillRect(0, headerH - Math.round(height * 0.01), width, Math.round(height * 0.01));
+
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, videoY, width, videoH);
+        const srcW = Math.max(1, video.videoWidth || width);
+        const srcH = Math.max(1, video.videoHeight || height);
+        const scale = Math.min(width / srcW, videoH / srcH);
+        const dw = Math.round(srcW * scale);
+        const dh = Math.round(srcH * scale);
+        const dx = Math.round((width - dw) / 2);
+        const dy = Math.round(videoY + (videoH - dh) / 2);
+        ctx.drawImage(video, dx, dy, dw, dh);
+
+        if (posterDecoded) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(0, bottomY, width, bottomH);
+          ctx.clip();
+          try {
+            ctx.filter = 'blur(20px)';
+          } catch {
+            void 0;
+          }
+          const pScale = Math.max(width / Math.max(1, posterDecoded.width), bottomH / Math.max(1, posterDecoded.height));
+          const pW = Math.round(Math.max(1, posterDecoded.width) * pScale);
+          const pH = Math.round(Math.max(1, posterDecoded.height) * pScale);
+          const pX = Math.round((width - pW) / 2);
+          const pY = Math.round(bottomY + (bottomH - pH) / 2);
+          ctx.globalAlpha = 0.72;
+          posterDecoded.draw(ctx, { x: pX, y: pY, w: pW, h: pH });
+          ctx.restore();
+        } else {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(0, bottomY, width, bottomH);
+          ctx.clip();
+          try {
+            ctx.filter = 'blur(26px)';
+          } catch {
+            void 0;
+          }
+          const bScale = Math.max(width / srcW, bottomH / srcH);
+          const bDw = Math.round(srcW * bScale);
+          const bDh = Math.round(srcH * bScale);
+          const bDx = Math.round((width - bDw) / 2);
+          const bDy = Math.round(bottomY + (bottomH - bDh) / 2);
+          ctx.drawImage(video, bDx, bDy, bDw, bDh);
+          ctx.restore();
+        }
+        const bottomOverlay = ctx.createLinearGradient(0, bottomY, 0, height);
+        bottomOverlay.addColorStop(0, 'rgba(0,0,0,0.14)');
+        bottomOverlay.addColorStop(1, 'rgba(0,0,0,0.58)');
+        ctx.fillStyle = bottomOverlay;
+        ctx.fillRect(0, bottomY, width, bottomH);
+        const bottomTheme = ctx.createLinearGradient(0, bottomY, width, height);
+        bottomTheme.addColorStop(0, `${primary}4D`);
+        bottomTheme.addColorStop(1, `${secondary}26`);
+        ctx.fillStyle = bottomTheme;
+        ctx.globalAlpha = 0.24;
+        ctx.fillRect(0, bottomY, width, bottomH);
+        ctx.globalAlpha = 1;
+
+        const titleX = pad;
+        const phoneRowY = height - Math.round(pad * 0.32);
+
+        if (layout === 'feed') {
+          const posterH = Math.round(bottomH * 0.82);
+          const posterW = Math.round(posterH * 0.66);
+          const posterX = pad;
+          const posterY = bottomY + Math.round(bottomH * 0.08);
+          const posterRadius = Math.round(posterW * 0.08);
+
+          if (posterDecoded) {
+            ctx.save();
+            ctx.shadowColor = 'rgba(0,0,0,0.55)';
+            ctx.shadowBlur = 22;
+            ctx.shadowOffsetY = 10;
+            this.drawRoundRectPath(ctx, posterX, posterY, posterW, posterH, posterRadius);
+            ctx.clip();
+            posterDecoded.draw(ctx, { x: posterX, y: posterY, w: posterW, h: posterH });
+            ctx.restore();
+            ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+            ctx.lineWidth = 2;
+            this.drawRoundRectPath(ctx, posterX, posterY, posterW, posterH, posterRadius);
+            ctx.stroke();
+          } else {
+            ctx.fillStyle = 'rgba(255,255,255,0.1)';
+            this.drawRoundRectPath(ctx, posterX, posterY, posterW, posterH, posterRadius);
+            ctx.fill();
+          }
+
+          const infoX = posterX + posterW + Math.round(pad * 0.7);
+          const infoW = width - infoX - pad;
+          ctx.save();
+          ctx.shadowColor = 'rgba(0,0,0,0.65)';
+          ctx.shadowBlur = 14;
+          ctx.fillStyle = '#ffffff';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'top';
+          ctx.font = `900 ${Math.round(width * 0.058)}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+          const titleLines = this.wrapLinesByWidth(ctx, title, infoW, 2);
+          let ty = posterY + Math.round(posterH * 0.06);
+          for (const line of titleLines) {
+            ctx.fillText(line, infoX, ty);
+            ty += Math.round(width * 0.066);
+          }
+          const meta = [
+            mediaLabel,
+            yearText,
+            seasonsText,
+            ratingText ? `NOTA ${ratingText}/10` : '',
+          ].filter(Boolean).join(' • ');
+          ctx.font = `700 ${Math.round(width * 0.026)}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+          ctx.fillStyle = 'rgba(255,255,255,0.85)';
+          ctx.fillText(meta, infoX, ty + Math.round(width * 0.01));
+          ctx.restore();
+
+          const synopsisY = posterY + Math.round(posterH * 0.46);
+          const synopsisH = posterY + posterH - synopsisY - Math.round(pad * 0.9);
+          const synopsisX = infoX;
+          const synopsisW = infoW;
+          const tagW = Math.max(52, Math.round(width * 0.06));
+
+          if (synopsis && input.includeSynopsis !== false && synopsisH > 70) {
+            ctx.fillStyle = 'rgba(0,0,0,0.45)';
+            this.drawRoundRectPath(ctx, synopsisX, synopsisY, synopsisW, synopsisH, 22);
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+            ctx.lineWidth = 1;
+            this.drawRoundRectPath(ctx, synopsisX, synopsisY, synopsisW, synopsisH, 22);
+            ctx.stroke();
+
+            ctx.fillStyle = synopsisAccent;
+            this.drawRoundRectPath(ctx, synopsisX, synopsisY, tagW, synopsisH, 22);
+            ctx.fill();
+
+            ctx.save();
+            ctx.translate(synopsisX + Math.round(tagW / 2), synopsisY + Math.round(synopsisH / 2));
+            ctx.rotate(-Math.PI / 2);
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = `900 ${Math.round(width * 0.022)}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+            ctx.fillText('SINOPSE', 0, 0);
+            ctx.restore();
+
+            ctx.save();
+            ctx.fillStyle = 'rgba(255,255,255,0.92)';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.font = `650 ${Math.round(width * 0.024)}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+            const sx = synopsisX + tagW + Math.round(pad * 0.45);
+            const sy = synopsisY + Math.round(pad * 0.25);
+            const lines = this.wrapLinesByWidth(ctx, synopsis, synopsisW - tagW - Math.round(pad * 0.8), 5);
+            let lY = sy;
+            for (const line of lines) {
+              ctx.fillText(line, sx, lY);
+              lY += Math.round(width * 0.032);
+            }
+            ctx.restore();
+          }
+        } else {
+          const posterW = Math.round(width * 0.215);
+          const posterH = Math.round(posterW * 1.45);
+          const posterX = pad;
+          const posterY = bottomY + Math.round(bottomH * 0.06);
+          const posterRadius = Math.round(width * 0.025);
+
+          if (posterDecoded) {
+            ctx.save();
+            this.drawRoundRectPath(ctx, posterX, posterY, posterW, posterH, posterRadius);
+            ctx.clip();
+            posterDecoded.draw(ctx, { x: posterX, y: posterY, w: posterW, h: posterH });
+            ctx.restore();
+            ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+            ctx.lineWidth = 2;
+            this.drawRoundRectPath(ctx, posterX, posterY, posterW, posterH, posterRadius);
+            ctx.stroke();
+          } else {
+            ctx.fillStyle = 'rgba(255,255,255,0.1)';
+            this.drawRoundRectPath(ctx, posterX, posterY, posterW, posterH, posterRadius);
+            ctx.fill();
+          }
+
+          const infoX = posterX + posterW + Math.round(width * 0.03);
+          const infoW = width - infoX - pad;
+          ctx.save();
+          ctx.shadowColor = 'rgba(0,0,0,0.6)';
+          ctx.shadowBlur = 14;
+          ctx.fillStyle = '#ffffff';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'top';
+          ctx.font = `900 ${Math.round(width * 0.078)}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+          const titleLines = this.wrapLinesByWidth(ctx, title, infoW, 2);
+          let infoY = posterY + Math.round(width * 0.01);
+          for (const line of titleLines) {
+            ctx.fillText(line, infoX, infoY);
+            infoY += Math.round(width * 0.083);
+          }
+
+          const meta = [
+            mediaLabel,
+            genreText,
+            yearText,
+            seasonsText,
+            ratingText ? `NOTA ${ratingText}/10` : '',
+          ].filter(Boolean).join(' • ');
+          ctx.font = `800 ${Math.round(width * 0.035)}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+          ctx.fillStyle = synopsisAccent;
+          ctx.fillText(meta, infoX, infoY + Math.round(width * 0.006));
+          ctx.restore();
+
+          const synopsisY = posterY + posterH + Math.round(height * 0.016);
+          const footerReserve = (phone || website) ? Math.round(height * 0.165) : Math.round(height * 0.06);
+          const synopsisH = height - synopsisY - footerReserve;
+          const synopsisX = pad;
+          const synopsisW = width - pad * 2;
+          const tagW = Math.max(56, Math.round(width * 0.085));
+
+          if (synopsis && input.includeSynopsis !== false && synopsisH > 120) {
+            ctx.fillStyle = 'rgba(0,0,0,0.42)';
+            this.drawRoundRectPath(ctx, synopsisX, synopsisY, synopsisW, synopsisH, 24);
+            ctx.fill();
+            ctx.strokeStyle = `${secondary}80`;
+            ctx.lineWidth = 1.4;
+            this.drawRoundRectPath(ctx, synopsisX, synopsisY, synopsisW, synopsisH, 24);
+            ctx.stroke();
+
+            const synTagGradient = ctx.createLinearGradient(synopsisX, synopsisY, synopsisX + tagW, synopsisY + synopsisH);
+            synTagGradient.addColorStop(0, primary);
+            synTagGradient.addColorStop(1, secondary);
+            ctx.fillStyle = synTagGradient;
+            this.drawRoundRectPath(ctx, synopsisX, synopsisY, tagW, synopsisH, 24);
+            ctx.fill();
+
+            ctx.save();
+            ctx.translate(synopsisX + Math.round(tagW / 2), synopsisY + Math.round(synopsisH / 2));
+            ctx.rotate(-Math.PI / 2);
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = `900 ${Math.round(width * 0.03)}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+            ctx.fillText('SINOPSE', 0, 0);
+            ctx.restore();
+
+            ctx.save();
+            ctx.fillStyle = 'rgba(255,255,255,0.94)';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            let synopsisFont = Math.round(width * 0.026);
+            let lineHeight = Math.round(synopsisFont * 1.42);
+            const sx = synopsisX + tagW + Math.round(pad * 0.45);
+            const sy = synopsisY + Math.round(pad * 0.22);
+            const textWidth = synopsisW - tagW - Math.round(pad * 0.7);
+            const textHeight = synopsisH - Math.round(pad * 0.4);
+            let lines = this.wrapLinesByWidthNoEllipsis(ctx, synopsis, textWidth);
+            for (let fs = Math.round(width * 0.026); fs >= Math.round(width * 0.02); fs--) {
+              synopsisFont = fs;
+              lineHeight = Math.round(fs * 1.4);
+              ctx.font = `500 ${fs}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+              lines = this.wrapLinesByWidthNoEllipsis(ctx, synopsis, textWidth);
+              if (lines.length * lineHeight <= textHeight) break;
+            }
+            ctx.font = `500 ${synopsisFont}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+            let lY = sy;
+            for (const line of lines) {
+              if (lY + lineHeight > sy + textHeight) break;
+              ctx.fillText(line, sx, lY);
+              lY += lineHeight;
+            }
+            ctx.restore();
+          }
+        }
+
+        if (phone || website) {
+          const value = phone || website;
+          if (value) {
+            const icon = Math.round(width * 0.045);
+            const iconR = Math.round(icon / 2);
+            const fontPx = Math.round(width * 0.038);
+            const gap = Math.round(width * 0.02);
+            ctx.save();
+            ctx.font = `800 ${fontPx}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+            const textW = Math.round(ctx.measureText(value).width);
+            const groupW = icon + gap + textW;
+            const groupX = Math.round((width - groupW) / 2);
+            const iconCx = groupX + iconR;
+            const iconCy = phoneRowY - iconR - Math.round(height * 0.02);
+
+            const hasPhone = Boolean(phone);
+            if (hasPhone) {
+              if (whatsappIconDecoded) {
+                const iconSize = Math.round(icon * 1.06);
+                whatsappIconDecoded.draw(ctx, {
+                  x: Math.round(iconCx - iconSize / 2),
+                  y: Math.round(iconCy - iconSize / 2),
+                  w: iconSize,
+                  h: iconSize,
+                });
+              } else {
+                ctx.fillStyle = input.brandColors?.secondary || '#22c55e';
+                ctx.beginPath();
+                ctx.arc(iconCx, iconCy, iconR, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#ffffff';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.font = `900 ${Math.round(width * 0.024)}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+                ctx.fillText('W', iconCx, iconCy);
+              }
+            }
+
+            ctx.fillStyle = 'rgba(255,255,255,0.92)';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'bottom';
+            ctx.shadowColor = 'rgba(0,0,0,0.65)';
+            ctx.shadowBlur = 10;
+            ctx.font = `800 ${fontPx}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+            ctx.fillText(value, groupX + (hasPhone ? icon + gap : 0), phoneRowY - Math.round(height * 0.02));
+            ctx.restore();
+          }
+        }
+      };
+
+      const renderPromise = new Promise<Blob>((resolve, reject) => {
+        recorder.onstop = () => {
+          const blob = new Blob(chunks, { type: mimeType });
+          if (!blob || blob.size === 0) {
+            reject(new Error('Não foi possível gerar o vídeo. Tente novamente.'));
+            return;
+          }
+          resolve(blob);
+        };
+        recorder.onerror = () => reject(new Error('Não foi possível gerar o vídeo. Tente novamente.'));
+      });
+
+      drawFrame();
+      video.currentTime = 0;
+      try {
+        await video.play();
+      } catch {
+        throw new Error('Não foi possível iniciar o trailer no navegador. Tente novamente.');
+      }
+      recorder.start(250);
+
+      const startedAt = performance.now();
+      await new Promise<void>((resolve, reject) => {
+        const tick = () => {
+          if (options.signal?.aborted) {
+            reject(new Error(this.cancelMessage));
+            return;
+          }
+          drawFrame();
+          const elapsed = performance.now() - startedAt;
+          if (elapsed >= targetDurationMs || video.ended) {
+            resolve();
+            return;
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+      this.throwIfAborted(options.signal);
+      options.onStageChange?.('finalizando');
+
+      recorder.stop();
+      const output = await renderPromise;
+      return output;
+    } finally {
+      try {
+        if (recorder && recorder.state !== 'inactive') recorder.stop();
+      } catch {
+        void 0;
+      }
+      try {
+        video.pause();
+      } catch {
+        void 0;
+      }
+      try {
+        stream?.getTracks().forEach((track) => track.stop());
+      } catch {
+        void 0;
+      }
+      try {
+        URL.revokeObjectURL(trailerUrl);
+      } catch {
+        void 0;
+      }
+    }
+  }
+
   async downloadTrailerBranding(
     item: MovieData,
-    input: TrailerBrandingOptions
+    input: TrailerBrandingOptions,
+    runtime: TrailerBrandingRuntimeOptions = {}
   ): Promise<void> {
-    const blob = await this.generateTrailerBrandingBlob(item, input);
-    this.downloadTrailerBrandingBlob(item, blob);
+    const token = getAuthToken();
+    if (!token) throw new Error('Faça login para usar este recurso.');
+    const payload: Record<string, string> = {
+      mediaType: (item.media_type || 'movie') === 'tv' ? 'tv' : 'movie',
+      id: String(item.id),
+      trailerId: String(input.trailerId || ''),
+      layout: String(runtime.layout || input.layout || 'portrait'),
+      includeLogo: input.includeLogo === false ? '0' : '1',
+      includeCta: input.includeCta === false ? '0' : '1',
+      includePhone: input.includePhone ? '1' : '0',
+      includeWebsite: input.includeWebsite ? '1' : '0',
+      ctaText: String(input.ctaText || ''),
+      synopsisTheme: String(input.synopsisTheme || ''),
+      limitDuration: input.limitDuration ? '1' : '0',
+      maxDurationSeconds:
+        typeof input.maxDurationSeconds === 'number' && Number.isFinite(input.maxDurationSeconds)
+          ? String(Math.round(input.maxDurationSeconds))
+          : '',
+      previewSeconds:
+        typeof runtime.previewSeconds === 'number' && runtime.previewSeconds > 0
+          ? String(Math.min(Math.round(runtime.previewSeconds), 30))
+          : '',
+      download: '1',
+    };
+
+    // Para submit de form (sem header Authorization), usamos cookie de sessão curta.
+    // Mantém duração alinhada ao login padrão para não "deslogar" visualmente após downloads longos.
+    document.cookie = `auth_token=${encodeURIComponent(token)}; Path=/; Max-Age=${30 * 24 * 60 * 60}; SameSite=Lax`;
+
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = buildLongRunningApiUrl('/api/video-branding/trailer');
+    form.style.display = 'none';
+    Object.entries(payload).forEach(([key, value]) => {
+      const inputEl = document.createElement('input');
+      inputEl.type = 'hidden';
+      inputEl.name = key;
+      inputEl.value = value;
+      form.appendChild(inputEl);
+    });
+    document.body.appendChild(form);
+    try {
+      form.submit();
+    } finally {
+      try {
+        form.remove();
+      } catch {
+        void 0;
+      }
+    }
   }
 
-  async generateTrailerBrandingBlob(item: MovieData, input: TrailerBrandingOptions): Promise<Blob> {
-    return await this.fetchTrailerBrandingBlob(item, input, { layout: input.layout });
+  async generateTrailerBrandingBlob(
+    item: MovieData,
+    input: TrailerBrandingOptions,
+    runtime: TrailerBrandingRuntimeOptions = {}
+  ): Promise<Blob> {
+    return await this.fetchTrailerBrandingBlob(item, input, { ...runtime, layout: runtime.layout || input.layout });
   }
 
-  async generateTrailerBrandingPreviewBlob(item: MovieData, input: TrailerBrandingOptions): Promise<Blob> {
-    return await this.fetchTrailerBrandingBlob(item, input, { layout: input.layout });
+  async generateTrailerBrandingPreviewBlob(
+    item: MovieData,
+    input: TrailerBrandingOptions,
+    runtime: TrailerBrandingRuntimeOptions = {}
+  ): Promise<Blob> {
+    const previewSeconds =
+      typeof runtime.previewSeconds === 'number' && runtime.previewSeconds > 0
+        ? Math.min(Math.round(runtime.previewSeconds), 30)
+        : 12;
+    return await this.fetchTrailerBrandingBlob(item, input, {
+      ...runtime,
+      previewSeconds,
+      layout: runtime.layout || input.layout,
+    });
   }
 
   downloadTrailerBrandingBlob(item: MovieData, blob: Blob): void {
     const titleValue = item.title || item.name || 'video';
-    const filename = `${this.safeFileBaseName(titleValue)}_video_branding_trailer.mp4`;
+    const extension = this.getVideoExtensionFromMimeType(blob.type);
+    const filename = `${this.safeFileBaseName(titleValue)}_video_branding_trailer.${extension}`;
     const url = URL.createObjectURL(blob);
     this.clickDownload(url, filename);
   }
 
-  private async fetchTrailerBrandingBlob(
+  private async fetchTrailerBrandingBlobFromServer(
     item: MovieData,
     input: TrailerBrandingOptions,
-    options: { previewSeconds?: number; layout?: 'portrait' | 'feed' } = {}
+    options: TrailerBrandingRuntimeOptions = {}
   ): Promise<Blob> {
-    const trailerId = this.extractTrailerIdFromInput(String(input.trailerId || input.trailerUrl || '').trim());
-    if (!trailerId) throw new Error('Trailer indisponível no momento.');
-
-    const baseUrl = getApiBaseUrl();
+    this.throwIfAborted(options.signal);
+    options.onStageChange?.('gerando-servidor');
     const token = getAuthToken();
     if (!token) throw new Error('Faça login para usar este recurso.');
 
-    const previewSecondsRaw = Number(options.previewSeconds);
-    const previewSeconds =
-      Number.isFinite(previewSecondsRaw) && previewSecondsRaw > 0 ? Math.round(previewSecondsRaw) : 0;
-    const layout = options.layout === 'feed' ? 'feed' : 'portrait';
-
-    const payload = {
-      mediaType: item.media_type === 'tv' ? 'tv' : 'movie',
+    const timeoutMs = options.previewSeconds && options.previewSeconds > 0 ? 180_000 : 900_000;
+    const requestBody = JSON.stringify({
+      mediaType: (item.media_type || 'movie') === 'tv' ? 'tv' : 'movie',
       id: item.id,
-      trailerId,
-      includeLogo: input.includeLogo !== false,
-      includeSynopsis: input.includeSynopsis !== false,
-      includeCta: input.includeCta !== false,
-      includePhone: input.includePhone !== false,
-      includeWebsite: input.includeWebsite !== false,
-      ctaText: input.ctaText,
-      synopsisTheme: input.synopsisTheme,
+      voteAverage: typeof item.vote_average === 'number' ? item.vote_average : undefined,
+      trailerId: input.trailerId,
+      layout: options.layout || input.layout,
       brandName: input.brandName,
       brandColors: input.brandColors,
+      brandLogo: input.brandLogo,
       website: input.website,
       phone: input.phone,
-      layout,
-      preview: previewSeconds > 0,
-      previewSeconds: previewSeconds > 0 ? previewSeconds : undefined,
-      limitDuration: input.limitDuration === true ? true : undefined,
-      maxDurationSeconds: typeof input.maxDurationSeconds === 'number' ? input.maxDurationSeconds : undefined,
-    };
+      includeLogo: input.includeLogo,
+      includeSynopsis: true,
+      includeCta: input.includeCta,
+      includePhone: input.includePhone,
+      includeWebsite: input.includeWebsite,
+      ctaText: input.ctaText,
+      synopsisTheme: input.synopsisTheme,
+      limitDuration: input.limitDuration,
+      maxDurationSeconds: input.maxDurationSeconds,
+      previewSeconds: options.previewSeconds,
+    });
 
-    const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
-
-    let res: Response | null = null;
-    const isNetworkError = (message: string) => {
-      const m = message.toLowerCase();
-      return m.includes('failed to fetch') || m.includes('network') || m.includes('load failed');
-    };
-
-    const attemptDelaysMs = [0, 900, 1800];
-    for (let attempt = 0; attempt < attemptDelaysMs.length; attempt++) {
-      if (attemptDelaysMs[attempt] > 0) await sleep(attemptDelaysMs[attempt]);
+    const requestAttempts = [0, 1200];
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < requestAttempts.length; attempt++) {
+      this.throwIfAborted(options.signal);
+      if (requestAttempts[attempt] > 0) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, requestAttempts[attempt]));
+      }
+      const timeoutControl = this.createAbortControllerWithTimeout(timeoutMs, options.signal);
       try {
-        res = await fetch(`${baseUrl}/api/video-branding/trailer`, {
+        const res = await fetch(buildLongRunningApiUrl('/api/video-branding/trailer'), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify(payload),
+          body: requestBody,
+          signal: timeoutControl.controller.signal,
         });
 
-        if (res.ok) break;
-        if (res.status >= 500 && attempt < attemptDelaysMs.length - 1) continue;
-        break;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : '';
-        if (isNetworkError(message) && attempt < attemptDelaysMs.length - 1) continue;
-        if (isNetworkError(message)) {
-          throw new Error('Não foi possível conectar ao servidor agora. Tente novamente em instantes.');
+        if (!res.ok) {
+          let message = 'Não foi possível gerar o vídeo com trailer agora.';
+          try {
+            const payload = (await res.json()) as { message?: string };
+            if (payload && typeof payload.message === 'string') message = payload.message;
+          } catch {
+            void 0;
+          }
+          if (res.status === 401) message = 'Faça login para usar este recurso.';
+          if (res.status === 403 && (!message || message.toLowerCase().includes('acesso negado'))) {
+            message = 'Disponível apenas para Premium. Atualize seu plano para usar este recurso.';
+          }
+          throw new Error(message);
         }
-        throw new Error('Não foi possível gerar o vídeo agora. Tente novamente.');
+
+        const blob = await res.blob();
+        if (!blob || blob.size === 0) throw new Error('Não foi possível gerar o vídeo com trailer agora.');
+        return blob;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error || '');
+        if ((error instanceof Error && error.name === 'AbortError') || message.toLowerCase().includes('aborted')) {
+          if (options.signal?.aborted) throw new Error(this.cancelMessage);
+          throw new Error('Tempo excedido ao gerar o vídeo com trailer. Tente novamente.');
+        }
+        const normalized = error instanceof Error ? error : new Error(message);
+        if (attempt < requestAttempts.length - 1 && this.isNetworkFetchFailureMessage(message)) {
+          lastError = normalized;
+          continue;
+        }
+        throw normalized;
+      } finally {
+        timeoutControl.cleanup();
       }
     }
+    throw lastError || new Error('Não foi possível gerar o vídeo com trailer agora.');
+  }
 
-    if (!res) {
-      throw new Error('Não foi possível conectar ao servidor agora. Tente novamente em instantes.');
+  private async fetchTrailerBrandingBlob(
+    item: MovieData,
+    input: TrailerBrandingOptions,
+    options: TrailerBrandingRuntimeOptions = {}
+  ): Promise<Blob> {
+    this.throwIfAborted(options.signal);
+    let serverSideError: Error | null = null;
+    try {
+      return await this.fetchTrailerBrandingBlobFromServer(item, input, options);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error || '');
+      if (message.toLowerCase().includes('cancelada')) {
+        throw error instanceof Error ? error : new Error(message);
+      }
+      const shouldFallback = this.isNetworkFetchFailureMessage(message);
+      if (!shouldFallback) throw error instanceof Error ? error : new Error(message);
+      serverSideError = error instanceof Error ? error : new Error(message);
     }
 
-    if (!res.ok) {
-      let message = 'Não foi possível gerar o vídeo com trailer agora.';
+    const delays = [0, 900];
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < delays.length; attempt++) {
+      this.throwIfAborted(options.signal);
+      if (delays[attempt] > 0) await new Promise<void>((resolve) => window.setTimeout(resolve, delays[attempt]));
       try {
-        const payload = (await res.json()) as unknown;
-        if (payload && typeof payload === 'object' && typeof (payload as { message?: unknown }).message === 'string') {
-          message = (payload as { message: string }).message;
-        }
+        return await this.renderTrailerBrandingBlobClient(item, input, options);
       } catch (error) {
-        void error;
+        lastError = error;
       }
-      if (res.status === 401) {
-        message = 'Faça login para usar este recurso.';
-      } else if (res.status === 403) {
-        if (!message || message.toLowerCase().includes('acesso negado')) {
-          message = 'Disponível apenas para Premium. Atualize seu plano para gerar o vídeo.';
-        }
-      }
-      throw new Error(message);
     }
-
-    const blob = await res.blob();
-    if (!blob || blob.size === 0) throw new Error('Não foi possível gerar o vídeo. Tente novamente.');
-    return blob;
+    if (lastError instanceof Error) {
+      if (serverSideError && !this.isNetworkFetchFailureMessage(lastError.message)) {
+        throw serverSideError;
+      }
+      if (this.isNetworkFetchFailureMessage(lastError.message)) {
+        throw new Error(
+          import.meta.env.DEV
+            ? 'Conexão interrompida durante a geração do vídeo (download longo ou API reiniciou). Veja o terminal do servidor; em seguida tente de novo.'
+            : 'Não foi possível concluir a geração do vídeo. Tente novamente em instantes.'
+        );
+      }
+      throw lastError;
+    }
+    throw new Error('Não foi possível gerar o vídeo com trailer agora.');
   }
 
   async sendVideoToTelegram(blob: Blob, caption?: string): Promise<void> {
-    const baseUrl = getApiBaseUrl();
     const token = getAuthToken();
     if (!token) throw new Error('Faça login para usar este recurso.');
 
     const formData = new FormData();
-    formData.append('video', blob, 'video.mp4');
+    const extension = this.getVideoExtensionFromMimeType(blob.type);
+    formData.append('video', blob, `video.${extension}`);
     if (caption) formData.append('caption', caption);
 
     let res: Response;
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 120_000);
     try {
-      res = await fetch(`${baseUrl}/api/telegram/send-video-upload`, {
+      res = await fetch(buildApiUrl('/api/telegram/send-video-upload'), {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,

@@ -8,7 +8,7 @@ import { Card, CardHeader, CardTitle, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
 import { RadioGroup, RadioGroupItem } from './ui/radio-group';
 import { Label } from './ui/label';
-import { getApiBaseUrl } from '../services/apiClient';
+import { buildApiUrl } from '../services/apiClient';
 
 interface BannerModalProps {
   movie: MovieData;
@@ -26,11 +26,10 @@ const BannerModal: React.FC<BannerModalProps> = ({ movie, onClose }) => {
     : '';
   const imageUrl = (() => {
     if (!movie.poster_path) return '/placeholder.svg';
-    const baseUrl = getApiBaseUrl();
     const params = new URLSearchParams();
     params.set('size', 'w500');
     params.set('path', movie.poster_path);
-    return `${baseUrl}/api/search/image?${params.toString()}`;
+    return buildApiUrl(`/api/search/image?${params.toString()}`);
   })();
 
   const templates = [
@@ -193,7 +192,8 @@ const BannerModal: React.FC<BannerModalProps> = ({ movie, onClose }) => {
             <Label className="text-lg font-semibold mb-3 block">Escolha um Template</Label>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {templates.map((template) => (
-                <div
+                <button
+                  type="button"
                   key={template.id}
                   className={`cursor-pointer border-2 rounded-lg p-2 transition-all ${
                     selectedTemplate === template.id
@@ -207,7 +207,7 @@ const BannerModal: React.FC<BannerModalProps> = ({ movie, onClose }) => {
                       {template.name}
                     </div>
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           </div>

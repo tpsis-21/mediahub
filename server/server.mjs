@@ -1,10 +1,14 @@
+import dotenv from 'dotenv'
 import crypto from 'node:crypto'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+const __rootDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
+dotenv.config({ path: path.join(__rootDir, '.env') })
 
 import express from 'express'
 import helmet from 'helmet'
@@ -14,15 +18,158 @@ import multer from 'multer'
 import nodemailer from 'nodemailer'
 
 const { Pool } = pg
+import * as cheerio from 'cheerio';
 const require = createRequire(import.meta.url)
-const { createCanvas, GlobalFonts, loadImage } = require('@napi-rs/canvas')
+
+const resolveCanvasIcuPath = () => {
+  const fromEnv = typeof process.env.ICU_DATA === 'string' ? process.env.ICU_DATA.trim() : ''
+  if (fromEnv && fs.existsSync(fromEnv)) return fromEnv
+  try {
+    const canvasPkg = require.resolve('@napi-rs/canvas/package.json')
+    const pkgDir = path.dirname(canvasPkg)
+    const candidate = path.join(pkgDir, 'icudtl.dat')
+    if (fs.existsSync(candidate)) return candidate
+  } catch {
+    void 0
+  }
+  const nodeDirCandidate = path.join(path.dirname(process.execPath), 'icudtl.dat')
+  if (fs.existsSync(nodeDirCandidate)) return nodeDirCandidate
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
+    const findIcuByPrefix = (baseDir, prefix) => {
+      try {
+        if (!baseDir || !fs.existsSync(baseDir)) return ''
+        const entries = fs.readdirSync(baseDir, { withFileTypes: true })
+          .filter((entry) => entry && entry.isDirectory() && entry.name.toLowerCase().startsWith(prefix.toLowerCase()))
+          .map((entry) => entry.name)
+          .sort((a, b) => (a > b ? -1 : 1))
+        for (const name of entries) {
+          const candidate = path.join(baseDir, name, 'icudtl.dat')
+          if (fs.existsSync(candidate)) return candidate
+        }
+      } catch {
+        void 0
+      }
+      return ''
+    }
+    const candidates = [
+      path.join(localAppData, 'Programs', 'cursor', 'icudtl.dat'),
+      path.join(localAppData, 'Programs', 'Cursor', 'icudtl.dat'),
+    ]
+    for (const candidate of candidates) {
+      try {
+        if (candidate && fs.existsSync(candidate)) return candidate
+      } catch {
+        void 0
+      }
+    }
+    const dynamicCandidates = [
+      findIcuByPrefix(path.join(localAppData, 'Discord'), 'app-'),
+      findIcuByPrefix(path.join(localAppData, 'Programs', 'Microsoft VS Code'), ''),
+      findIcuByPrefix(path.join(localAppData, 'Programs', 'Opera'), ''),
+    ].filter(Boolean)
+    for (const candidate of dynamicCandidates) {
+      if (candidate && fs.existsSync(candidate)) return candidate
+    }
+  }
+  return ''
+}
+
+const verifyCanvasRuntimeHealth = (icuPath) => {
+  if (process.platform !== 'win32') return true
+  if (!icuPath || !fs.existsSync(icuPath)) return false
+  try {
+    const script = [
+      "const { createCanvas } = require('@napi-rs/canvas');",
+      "const c = createCanvas(128, 128);",
+      "const ctx = c.getContext('2d');",
+      "ctx.fillStyle = '#111'; ctx.fillRect(0,0,128,128);",
+      "ctx.font = '700 24px Arial';",
+      "ctx.fillStyle = '#fff';",
+      "ctx.fillText('OK', 12, 64);",
+      "process.exit(0);",
+    ].join(' ')
+    const result = spawnSync(process.execPath, ['-e', script], {
+      cwd: __rootDir,
+      env: { ...process.env, ICU_DATA: icuPath },
+      encoding: 'utf8',
+      timeout: 12000,
+    })
+    return result.status === 0
+  } catch {
+    return false
+  }
+}
+
+const ensureCanvasIcuNearBinary = (icuPath) => {
+  if (!icuPath || !fs.existsSync(icuPath)) return
+  const targets = []
+  try {
+    const canvasNativePkg = require.resolve('@napi-rs/canvas-win32-x64-msvc/package.json')
+    targets.push(path.join(path.dirname(canvasNativePkg), 'icudtl.dat'))
+  } catch {
+    void 0
+  }
+  targets.push(path.join(path.dirname(process.execPath), 'icudtl.dat'))
+  for (const target of targets) {
+    try {
+      if (!target || fs.existsSync(target)) continue
+      fs.copyFileSync(icuPath, target)
+    } catch {
+      void 0
+    }
+  }
+}
+
+const canvasIcuDataPath = resolveCanvasIcuPath()
+let isCanvasRuntimeHealthy = process.platform !== 'win32' || Boolean(canvasIcuDataPath)
+let hasWarnedCanvasRuntimeUnhealthy = false
+if (canvasIcuDataPath && !process.env.ICU_DATA) {
+  process.env.ICU_DATA = canvasIcuDataPath
+}
+if (canvasIcuDataPath) {
+  ensureCanvasIcuNearBinary(canvasIcuDataPath)
+}
+if (process.platform === 'win32' && isCanvasRuntimeHealthy) {
+  isCanvasRuntimeHealthy = verifyCanvasRuntimeHealth(canvasIcuDataPath)
+}
+if (process.platform === 'win32') {
+  if (canvasIcuDataPath) {
+    console.log('[video-branding] ICU_DATA carregado para canvas:', canvasIcuDataPath)
+  } else {
+    console.warn('[video-branding] ICU_DATA não encontrado no Windows; fallback degradado será usado.')
+  }
+  if (!isCanvasRuntimeHealthy) {
+    console.warn('[video-branding] Canvas desativado no Windows (healthcheck falhou). Usando fallback.')
+  }
+}
+
+let createCanvas = (..._args) => {
+  throw new Error('Canvas runtime indisponível.')
+}
+let GlobalFonts = {
+  registerFromPath: () => false,
+}
+let loadImage = async () => {
+  throw new Error('Canvas runtime indisponível.')
+}
+if (isCanvasRuntimeHealthy) {
+  try {
+    const canvasApi = require('@napi-rs/canvas')
+    createCanvas = canvasApi.createCanvas
+    GlobalFonts = canvasApi.GlobalFonts
+    loadImage = canvasApi.loadImage
+  } catch {
+    isCanvasRuntimeHealthy = false
+  }
+}
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 } // 50MB
 })
 
-const PORT = Number(process.env.PORT || 8080)
+const PORT = Number(process.env.PORT || 8081)
 const DATABASE_URL = process.env.DATABASE_URL || ''
 const JWT_SECRET = process.env.JWT_SECRET || ''
 const ALLOWED_ORIGINS_RAW = process.env.ALLOWED_ORIGIN || ''
@@ -68,6 +215,11 @@ const pool = new Pool({ connectionString: DATABASE_URL })
 
 const initDb = async () => {
   try {
+    try {
+      await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`)
+    } catch {
+    }
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS tickets (
         id SERIAL PRIMARY KEY,
@@ -90,24 +242,59 @@ const initDb = async () => {
 
       CREATE TABLE IF NOT EXISTS app_settings (
         key TEXT PRIMARY KEY,
-        value JSONB
+        value TEXT NOT NULL,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
       );
       
       INSERT INTO app_settings (key, value) VALUES ('tickets_enabled', 'true') ON CONFLICT DO NOTHING;
+
+      CREATE TABLE IF NOT EXISTS football_sources (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name TEXT NOT NULL,
+        url TEXT NOT NULL,
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS football_schedules (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        source_id UUID NOT NULL REFERENCES football_sources(id) ON DELETE CASCADE,
+        schedule_date DATE NOT NULL,
+        matches JSONB NOT NULL DEFAULT '[]'::jsonb,
+        fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        UNIQUE (source_id, schedule_date)
+      );
+
+      INSERT INTO football_sources (name, url, is_active)
+      SELECT 'Futebol na TV', 'https://www.futebolnatv.com.br/', true
+      WHERE NOT EXISTS (SELECT 1 FROM football_sources WHERE url ILIKE '%futebolnatv.com.br%');
     `)
     console.log('DB Init: Tabelas de tickets verificadas.')
   } catch (e) {
     console.error('DB Init Error:', e)
   }
 }
-initDb()
+// initDb()
 
 const app = express()
 app.disable('x-powered-by')
 app.use(helmet({ contentSecurityPolicy: false }))
 app.use(express.json({ limit: '6mb' }))
+app.use(express.urlencoded({ extended: false, limit: '1mb' }))
 
 const isDev = process.env.NODE_ENV !== 'production'
+if (isDev) {
+  process.on('uncaughtException', (err) => {
+    console.error('[MediaHub] uncaughtException:', err)
+  })
+  process.on('unhandledRejection', (reason) => {
+    console.error('[MediaHub] unhandledRejection:', reason)
+  })
+}
+
 const isAllowedOrigin = (origin) => {
   if (!origin) return false
   if (ALLOWED_ORIGINS.length === 0) return true
@@ -116,6 +303,39 @@ const isAllowedOrigin = (origin) => {
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true
   if (/^https?:\/\/192\.168\.\d+\.\d+(:\d+)?$/.test(origin)) return true
   return false
+}
+
+const isSafeExternalHttpUrl = (raw) => {
+  try {
+    const url = new URL(String(raw || ''))
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+    const host = (url.hostname || '').toLowerCase()
+    if (!host) return false
+    if (host === 'localhost') return false
+    if (host === '127.0.0.1') return false
+    if (host === '::1') return false
+
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+      const [a, b] = host.split('.').map((n) => Number(n))
+      if (a === 10) return false
+      if (a === 127) return false
+      if (a === 169 && b === 254) return false
+      if (a === 192 && b === 168) return false
+      if (a === 172 && b >= 16 && b <= 31) return false
+    }
+
+    if (host.includes(':')) {
+      const normalized = host.replace(/^\[|\]$/g, '')
+      const compact = normalized.toLowerCase()
+      if (compact === '::1') return false
+      if (compact.startsWith('fe80:')) return false
+      if (compact.startsWith('fc') || compact.startsWith('fd')) return false
+    }
+
+    return true
+  } catch {
+    return false
+  }
 }
 
 app.use((req, res, next) => {
@@ -232,6 +452,7 @@ const requireAuth = async (req, res, next) => {
       res.status(401).json({ message: 'Não autenticado.' })
       return
     }
+    await deactivateExpiredPremiumByUserId(userId)
     const result = await query('select is_active from app_users where id = $1 limit 1', [userId])
     const row = result.rows[0]
     if (!row || !row.is_active) {
@@ -364,7 +585,7 @@ const runProcess = async ({ command, args, cwd, timeoutMs }) => {
 
 const hasBinary = async (name, args) => {
   try {
-    const result = await runProcess({ command: name, args, timeoutMs: 4000 })
+    const result = await runProcess({ command: name, args, timeoutMs: 12000 })
     return result.code === 0
   } catch {
     return false
@@ -401,16 +622,28 @@ const resolveYtdl = () => {
 
 const resolveYtdlpExec = () => {
   const resolved = safeRequire('youtube-dl-exec')
-  return resolved && typeof resolved === 'function' ? resolved : null
+  if (resolved && typeof resolved === 'function') return resolved
+  if (resolved && typeof resolved === 'object' && typeof resolved.default === 'function') return resolved.default
+  return null
 }
 
 const resolveBundledYtdlpCommand = () => {
-  const pkgPath = safeResolve('youtube-dl-exec/package.json')
-  if (!pkgPath) return null
-  const binDir = path.join(path.dirname(pkgPath), 'bin')
   const filename = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'
-  const fullPath = path.join(binDir, filename)
-  if (fs.existsSync(fullPath)) return fullPath
+  const candidates = []
+  candidates.push(path.join(process.cwd(), 'server', 'bin', filename))
+  const pkgPath = safeResolve('youtube-dl-exec/package.json')
+  if (pkgPath) {
+    candidates.push(path.join(path.dirname(pkgPath), 'bin', filename))
+  }
+  const modPath = safeResolve('youtube-dl-exec')
+  if (modPath) {
+    candidates.push(path.join(path.dirname(modPath), '..', 'bin', filename))
+  }
+  candidates.push(path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', filename))
+
+  for (const fullPath of candidates) {
+    if (fullPath && fs.existsSync(fullPath)) return fullPath
+  }
   return null
 }
 
@@ -453,6 +686,70 @@ const stripYouTubeUrlsFromText = (value) => {
   return stripped.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 }
 
+const resolveTrailerUrlFromProvider = async ({ mediaType, id, userKey }) => {
+  if (!Number.isFinite(id) || id <= 0) return ''
+  const settingsKeys = await getSearchProviderSettingsKeys()
+  const apiKeys = uniqStrings([userKey, ...settingsKeys])
+  if (apiKeys.length === 0) return ''
+
+  const pickBestTrailerId = (videos) => {
+    const normalized = Array.isArray(videos)
+      ? videos
+          .map((video) => ({
+            key: typeof video?.key === 'string' ? video.key.trim() : '',
+            site: typeof video?.site === 'string' ? video.site.trim().toLowerCase() : '',
+            type: typeof video?.type === 'string' ? video.type.trim().toLowerCase() : '',
+            name: typeof video?.name === 'string' ? video.name.trim().toLowerCase() : '',
+          }))
+          .filter((video) => video.site === 'youtube' && isYouTubeTrailerId(video.key))
+      : []
+    if (normalized.length === 0) return ''
+
+    const scored = normalized
+      .map((video) => {
+        let score = 0
+        if (video.type === 'trailer') score += 100
+        else if (video.type === 'teaser') score += 70
+        else if (video.type === 'clip') score += 55
+        else if (video.type === 'featurette') score += 45
+        else score += 20
+        if (video.name.includes('official') || video.name.includes('oficial')) score += 20
+        if (video.name.includes('trailer')) score += 10
+        if (video.name.includes('teaser')) score += 6
+        return { key: video.key, score }
+      })
+      .sort((a, b) => b.score - a.score)
+    return scored[0]?.key || ''
+  }
+
+  const languages = ['pt-BR', 'en-US']
+  for (const language of languages) {
+    try {
+      const payload = await fetchSearchProviderJson({
+        path: `/${mediaType}/${id}/videos`,
+        params: { language },
+        apiKeys,
+      })
+      const trailerId = pickBestTrailerId(payload?.results)
+      if (trailerId) return buildYouTubeTrailerUrlFromId(trailerId)
+    } catch {
+      // tenta próximo idioma
+    }
+  }
+  try {
+    const payload = await fetchSearchProviderJson({
+      path: `/${mediaType}/${id}/videos`,
+      params: {},
+      apiKeys,
+    })
+    const trailerId = pickBestTrailerId(payload?.results)
+    if (trailerId) return buildYouTubeTrailerUrlFromId(trailerId)
+  } catch {
+    // sem fallback extra
+  }
+  return ''
+}
+
 const downloadToFile = async ({ stream, filePath, timeoutMs }) => {
   return await new Promise((resolve, reject) => {
     const out = fs.createWriteStream(filePath)
@@ -488,12 +785,69 @@ const escapeFfmpegText = (value) =>
   String(value || '')
     .replace(/\\/g, '\\\\')
     .replace(/:/g, '\\:')
+    .replace(/,/g, '\\,')
+    .replace(/%/g, '\\%')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]')
     .replace(/'/g, "\\'")
+    .replace(/\r/g, ' ')
     .replace(/\n/g, ' ')
+
+const escapeFfmpegPath = (value) =>
+  String(value || '')
+    .replace(/\\/g, '/')
+    .replace(/:/g, '\\:')
+    .replace(/'/g, "\\'")
+
+const resolveFfmpegDrawtextFont = () => {
+  const candidates = process.platform === 'win32'
+    ? [
+        'C:\\Windows\\Fonts\\segoeui.ttf',
+        'C:\\Windows\\Fonts\\arial.ttf',
+      ]
+    : [
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+      ]
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate
+    } catch {
+      void 0
+    }
+  }
+  return ''
+}
 
 const safeRm = (targetPath) => {
   try {
     fs.rmSync(targetPath, { recursive: true, force: true })
+  } catch {
+    // ignore
+  }
+}
+
+const cleanupStaleTempFiles = () => {
+  try {
+    const tmpRoot = os.tmpdir()
+    const entries = fs.readdirSync(tmpRoot, { withFileTypes: true })
+    const now = Date.now()
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const name = entry.name
+      const isMediahub = name.startsWith('mediahub-')
+      const isPyInstaller = name.startsWith('_MEI')
+      if (!isMediahub && !isPyInstaller) continue
+      const fullPath = path.join(tmpRoot, name)
+      let stale = true
+      try {
+        const stat = fs.statSync(fullPath)
+        stale = now - stat.mtimeMs > 15 * 60_000
+      } catch {
+        stale = true
+      }
+      if (stale) safeRm(fullPath)
+    }
   } catch {
     // ignore
   }
@@ -715,6 +1069,1546 @@ const getAllowRegistrations = async () => {
   } catch {
   }
   return allow
+}
+
+const getAppSettingValue = async (key) => {
+  try {
+    const result = await query('select value from app_settings where key = $1 limit 1', [key])
+    const row = result.rows[0]
+    if (!row) return null
+    if (typeof row.value === 'string') return row.value
+    if (row.value === null || row.value === undefined) return null
+    return String(row.value)
+  } catch {
+    return null
+  }
+}
+
+const setAppSettingValue = async ({ key, value }) => {
+  await query(
+    `
+    insert into app_settings (key, value, updated_at)
+    values ($1, $2, now())
+    on conflict (key) do update set value = excluded.value, updated_at = now()
+    `,
+    [key, value]
+  )
+}
+
+const parseBooleanSettingValue = (rawValue, fallback = true) => {
+  if (typeof rawValue === 'boolean') return rawValue
+  if (rawValue === null || rawValue === undefined) return fallback
+  const normalized = String(rawValue).trim().toLowerCase()
+  if (!normalized) return fallback
+  if (normalized === 'true' || normalized === '"true"' || normalized === '1' || normalized === 'yes' || normalized === 'on') return true
+  if (normalized === 'false' || normalized === '"false"' || normalized === '0' || normalized === 'no' || normalized === 'off') return false
+  return fallback
+}
+
+const getTicketsEnabled = async () => {
+  try {
+    const result = await query("select value from app_settings where key = 'tickets_enabled' limit 1")
+    const row = result.rows[0]
+    if (!row) {
+      await setAppSettingValue({ key: 'tickets_enabled', value: 'true' })
+      return true
+    }
+    return parseBooleanSettingValue(row.value, true)
+  } catch {
+    return true
+  }
+}
+
+const deactivateExpiredPremiumByUserId = async (userId) => {
+  if (!userId) return
+  try {
+    await query(
+      `
+      update app_users
+      set is_active = false, updated_at = now()
+      where id = $1
+        and type = 'premium'
+        and is_active = true
+        and subscription_end is not null
+        and subscription_end < now()
+      `,
+      [userId]
+    )
+  } catch {
+  }
+}
+
+let ensureSearchHistorySchemaPromise = null
+let ensureSearchHistorySchemaOk = false
+const ensureSearchHistorySchema = async () => {
+  if (ensureSearchHistorySchemaOk) return true
+  if (ensureSearchHistorySchemaPromise) return ensureSearchHistorySchemaPromise
+  ensureSearchHistorySchemaPromise = (async () => {
+    try {
+      await query(`
+        create table if not exists app_search_history (
+          id uuid primary key default gen_random_uuid(),
+          user_id uuid not null references app_users(id) on delete cascade,
+          query text not null,
+          results jsonb not null,
+          timestamp bigint not null,
+          type text not null check (type in ('individual','bulk')),
+          created_at timestamptz not null default now()
+        )
+      `)
+      await query(`create index if not exists idx_app_search_history_user_time on app_search_history (user_id, timestamp desc)`)
+      ensureSearchHistorySchemaOk = true
+      return true
+    } catch {
+      return false
+    } finally {
+      ensureSearchHistorySchemaPromise = null
+    }
+  })()
+  return ensureSearchHistorySchemaPromise
+}
+
+const FOOTBALL_SETTINGS_KEYS = {
+  readTime: 'football_read_time',
+  readWindowStart: 'football_read_window_start',
+  readWindowEnd: 'football_read_window_end',
+  timeZone: 'football_time_zone',
+  lastRunDate: 'football_last_run_date',
+  excludedChannels: 'football_excluded_channels',
+  excludedCompetitions: 'football_excluded_competitions',
+}
+
+const DEFAULT_FOOTBALL_TIME_ZONE = 'America/Sao_Paulo'
+const DEFAULT_FOOTBALL_READ_TIME = '19:00'
+const DEFAULT_FOOTBALL_READ_WINDOW_START = '19:30'
+const DEFAULT_FOOTBALL_READ_WINDOW_END = '20:00'
+const DEFAULT_FOOTBALL_EXCLUDED_CHANNELS = [
+  'ppv onefootball',
+  'ppv-onefootball',
+  'ppv/onefootball',
+  'onefootball ppv',
+]
+const DEFAULT_FOOTBALL_EXCLUDED_COMPETITIONS = [
+  'ingles 5 divisao',
+  'inglês 5ª divisão',
+  'english 5th division',
+  'national league',
+  'vanarama national league',
+]
+
+const normalizeFootballFilterToken = (value) =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+
+const parseFootballSettingList = (rawValue, defaults) => {
+  const fallback = Array.isArray(defaults) ? defaults.map((v) => normalizeFootballFilterToken(v)).filter(Boolean) : []
+  if (typeof rawValue !== 'string') return fallback
+  const raw = rawValue.trim()
+  if (!raw) return fallback
+  let values = []
+  try {
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) values = parsed
+  } catch {
+    values = raw.split(/\r?\n|[,;]+/g)
+  }
+  const normalized = values.map((v) => normalizeFootballFilterToken(v)).filter(Boolean)
+  return normalized.length ? [...new Set(normalized)] : fallback
+}
+
+const parseClockTime = (value) => {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (!raw) return null
+  const m = raw.match(/^(\d{1,2})(?::|h|H)(\d{2})$/)
+  if (!m) return null
+  const hours = Number(m[1])
+  const minutes = Number(m[2])
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null
+  if (hours < 0 || hours > 23) return null
+  if (minutes < 0 || minutes > 59) return null
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+}
+
+const getZonedNowParts = ({ timeZone }) => {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+  const parts = fmt.formatToParts(new Date())
+  const map = new Map(parts.map((p) => [p.type, p.value]))
+  const date = `${map.get('year')}-${map.get('month')}-${map.get('day')}`
+  const time = `${map.get('hour')}:${map.get('minute')}`
+  return { date, time }
+}
+
+const addDaysToIsoDate = (isoDate, days) => {
+  const base = new Date(`${isoDate}T12:00:00.000Z`)
+  const next = new Date(base.getTime() + days * 24 * 60 * 60 * 1000)
+  return next.toISOString().slice(0, 10)
+}
+
+const stripHtml = (html) => {
+  const pre = String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|tr|li|div|h1|h2|h3|h4|h5|h6)>/gi, '\n')
+  return pre
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+\n/g, '\n')
+    .replace(/\n\s+/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .trim()
+}
+
+const parseFootballLine = (line) => {
+  const normalized = String(line || '').replace(/\s+/g, ' ').trim()
+  if (!normalized) return null
+  const timeMatch = normalized.match(/\b(\d{1,2}[:hH]\d{2})\b/)
+  if (!timeMatch) return null
+  const time = parseClockTime(timeMatch[1])
+  if (!time) return null
+
+  const rest = normalized.slice((timeMatch.index || 0) + timeMatch[0].length).trim()
+  if (!rest) return null
+
+  const parts = rest.split(/\s[-–—]\s/).map((p) => p.trim()).filter(Boolean)
+  const teamsPart = parts[0] || rest
+  const channelsPart = parts.length > 1 ? parts.slice(1).join(' - ') : ''
+
+  const teamsMatch = teamsPart.match(/^(.+?)\s+(?:x|X|vs\.?|VS\.?)\s+(.+?)$/)
+  if (!teamsMatch) return null
+
+  const home = teamsMatch[1].trim()
+  const away = teamsMatch[2].trim()
+  if (!home || !away) return null
+
+  const channels = channelsPart
+    ? channelsPart.split(/[,/|•]+/).map((c) => c.trim()).filter(Boolean)
+    : []
+
+  return { time, home, away, channels }
+}
+
+const parseFutebolNaTvSchedule = ({ html, targetDateIso }) => {
+  const text = stripHtml(html)
+  const targetDdMm = (() => {
+    const [y, m, d] = targetDateIso.split('-')
+    return `${d}/${m}`
+  })()
+
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean)
+  let inDate = false
+  const matches = []
+  for (const line of lines) {
+    const dateMatch = line.match(/\b(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?\b/)
+    if (dateMatch) {
+      const dd = String(dateMatch[1]).padStart(2, '0')
+      const mm = String(dateMatch[2]).padStart(2, '0')
+      const ddMm = `${dd}/${mm}`
+      inDate = ddMm === targetDdMm
+      continue
+    }
+    if (!inDate) continue
+    const parsed = parseFootballLine(line)
+    if (parsed) matches.push(parsed)
+  }
+  return matches
+}
+
+const prettifyFootballTeamFromSlug = (slug) => {
+  const raw = String(slug || '').trim().replace(/^-+/, '').replace(/-+$/, '')
+  if (!raw) return ''
+  return raw
+    .split('-')
+    .filter(Boolean)
+    .map((part) => {
+      const lowered = part.toLowerCase()
+      if (lowered === 'fc' || lowered === 'sc' || lowered === 'mg' || lowered === 'sp' || lowered === 'rj') {
+        return lowered.toUpperCase()
+      }
+      if (part.length <= 2) return part.toUpperCase()
+      return part.charAt(0).toUpperCase() + part.slice(1)
+    })
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const normalizeFootballCompetitionLabel = (value) => {
+  const raw = String(value || '').replace(/\s+/g, ' ').trim()
+  if (!raw) return ''
+  return raw
+    .replace(/\s*[-–—]\s*rodada.*$/i, '')
+    .replace(/\s+rodada.*$/i, '')
+    .replace(/\s*[-–—]\s*\d+ª?\s+rodada.*$/i, '')
+    .trim()
+}
+
+const extractFootballCompetitionFromHref = (absHref) => {
+  const m = String(absHref || '').match(/\/aovivo\/([^?#]+)$/i)
+  const path = m ? m[1] : ''
+  if (!path) return ''
+  const parts = path
+    .replace(/\.html$/i, '')
+    .split('/')
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+  if (parts.length < 2) return ''
+  const competitionSlug = parts[0]
+  if (!competitionSlug || competitionSlug.includes('-x-')) return ''
+  return normalizeFootballCompetitionLabel(prettifyFootballTeamFromSlug(competitionSlug))
+}
+
+const normalizeFootballSearchText = (value) => {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const isPlaceholderFootballTeamCrestUrl = (value) => String(value || '').includes('/assets/img/loadteam.png')
+
+const parseFutebolNaTvBrSchedule = ({ html }) => {
+  const rawHtml = String(html || '')
+  const anchorRe = /<a\b[^>]*href="([^"]*\/aovivo\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi
+  const byHref = new Map()
+
+  const toAbsHref = (href) => {
+    const raw = String(href || '')
+      .trim()
+      .replace(/^[\[(<"']+/, '')
+      .replace(/[\])>,"'.;:!?]+$/, '')
+    if (!raw) return ''
+    if (raw.startsWith('http://') || raw.startsWith('https://')) return raw
+    if (raw.startsWith('/')) return `https://www.futebolnatv.com.br${raw}`
+    return `https://www.futebolnatv.com.br/${raw}`
+  }
+
+  const parseTeamsFromHref = (absHref) => {
+    const m = String(absHref || '').match(/\/aovivo\/([^?#]+)$/i)
+    const last = m ? m[1] : ''
+    const base = last.replace(/\.html$/i, '')
+    const sep = base.indexOf('-x-')
+    if (sep === -1) return { home: '', away: '' }
+    const homeSlug = base.slice(0, sep)
+    let awaySlug = base.slice(sep + 3)
+    awaySlug = awaySlug
+      .replace(/-\d{2}-\d{2}-\d{4}$/i, '')
+      .replace(/-\d{4}-\d{2}-\d{2}$/i, '')
+      .replace(/-[a-f0-9]{8,}$/i, '')
+    return { home: prettifyFootballTeamFromSlug(homeSlug), away: prettifyFootballTeamFromSlug(awaySlug) }
+  }
+
+  const maybeSetChannels = (entry, text) => {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim()
+    if (!normalized) return
+    if (normalized.length > 140) return
+    const looksLikeChannels = normalized === normalized.toUpperCase() && /[A-Z]/.test(normalized) && !/\b\d{1,2}[:hH]\d{2}\b/.test(normalized)
+    if (!looksLikeChannels) return
+    entry.channels = [normalized]
+  }
+
+  const toAbsAssetUrl = (href) => {
+    const raw = String(href || '').trim()
+    if (!raw) return ''
+    if (raw.startsWith('http://') || raw.startsWith('https://')) return raw
+    if (raw.startsWith('//')) return `https:${raw}`
+    if (raw.startsWith('/')) return `https://www.futebolnatv.com.br${raw}`
+    return `https://www.futebolnatv.com.br/${raw}`
+  }
+
+  const extractTeamCrestsFromAnchorHtml = (value) => {
+    const raw = String(value || '')
+    if (!raw) return { homeCrestUrl: '', awayCrestUrl: '' }
+    const urls = []
+    const re = /<img\b[^>]*\b(?:data-src|src|data-original|data-lazy-src|data-lazy)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*>/gi
+    let m
+    while ((m = re.exec(raw)) !== null) {
+      const src = String(m[1] || m[2] || m[3] || '').trim()
+      if (src) urls.push(toAbsAssetUrl(src))
+    }
+    const unique = uniqStrings(urls)
+    const teamUrls = unique.filter((u) => u.includes('/upload/teams/') || u.includes('/assets/img/loadteam.png'))
+    return { homeCrestUrl: teamUrls[0] || '', awayCrestUrl: teamUrls[1] || '' }
+  }
+
+  const parseTableMatches = () => {
+    let selectedTableHtml = ''
+
+    const parseTableMatchesFromHtml = (tableHtml) => {
+      const rows = String(tableHtml || '').match(/<tr\b[\s\S]*?<\/tr>/gi) || []
+      const out = []
+      for (const rowHtml of rows) {
+        const hrefMatch = String(rowHtml || '').match(/href="([^"]*\/aovivo\/[^"]+)"/i)
+        const href = hrefMatch ? toAbsHref(hrefMatch[1]) : ''
+        const cells = []
+        const cellRe = /<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi
+        let m
+        while ((m = cellRe.exec(rowHtml)) !== null) {
+          cells.push(m[1])
+        }
+        if (cells.length < 4) continue
+
+        const timeCell = stripHtml(cells[0]).replace(/\s+/g, ' ').trim()
+        const timeToken = (timeCell.match(/\b(\d{1,2}[:hH]\d{2})\b/) || [])[1] || timeCell
+        const time = parseClockTime(timeToken)
+        if (!time) continue
+
+        const normalizeCellText = (html) => stripHtml(html).replace(/\s+/g, ' ').trim()
+        const competitionCell = normalizeFootballCompetitionLabel(cells[1] ? normalizeCellText(cells[1]) : '')
+        const competitionHref = normalizeFootballCompetitionLabel(extractFootballCompetitionFromHref(href))
+        const competition = competitionCell || competitionHref
+        const separatorIdx = cells.findIndex((cellHtml) => {
+          const value = normalizeCellText(cellHtml).toLowerCase()
+          return value === 'x' || value === '×' || value === 'vs' || value === 'vs.'
+        })
+
+        let homeHtml = ''
+        let awayHtml = ''
+        let home = ''
+        let away = ''
+        if (separatorIdx > 1 && separatorIdx < cells.length - 2) {
+          homeHtml = cells[separatorIdx - 1]
+          awayHtml = cells[separatorIdx + 1]
+          home = normalizeCellText(homeHtml)
+          away = normalizeCellText(awayHtml)
+        } else {
+          const gameHtml = cells.slice(2, -1).join(' ')
+          const gameText = normalizeCellText(gameHtml)
+          const teamsMatch = gameText.match(/^(.+?)\s*(?:x|X|×|vs\.?|VS\.?)\s*(.+?)$/)
+          if (!teamsMatch) continue
+          home = teamsMatch[1].trim()
+          away = teamsMatch[2].trim()
+          homeHtml = gameHtml
+          awayHtml = gameHtml
+        }
+        if (!home || !away) continue
+
+        const channelHtml = cells[cells.length - 1] || ''
+        const channelTextRaw = stripHtml(channelHtml).replace(/\s+/g, ' ').trim()
+        const isNoBroadcast = /sem\s+transmiss/i.test(channelTextRaw)
+        const channels = isNoBroadcast || !channelTextRaw
+          ? []
+          : channelTextRaw
+              .split(/\s*(?:,|\/|\||•|\be\b)\s*/i)
+              .map((c) => c.trim())
+              .filter(Boolean)
+
+        const firstImgSrc = (html) => {
+          const value = String(html || '')
+          const imgMatch = value.match(/<img\b[^>]*\b(?:data-src|src|data-original|data-lazy-src|data-lazy)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*>/i)
+          const src = imgMatch ? (imgMatch[1] || imgMatch[2] || imgMatch[3] || '') : ''
+          return src ? toAbsAssetUrl(src) : ''
+        }
+        const homeCrestUrl = firstImgSrc(homeHtml)
+        const awayCrestUrl = firstImgSrc(awayHtml)
+
+        out.push({ time, home, away, competition, channels, homeCrestUrl, awayCrestUrl, href })
+      }
+      return out
+    }
+
+    const tables = rawHtml.match(/<table\b[\s\S]*?<\/table>/gi) || []
+    const candidates = tables.length > 0 ? tables : [rawHtml]
+    let bestMatches = []
+    let bestScore = -1
+    for (const candidate of candidates) {
+      const headerText = stripHtml(candidate).replace(/\s+/g, ' ').toLowerCase()
+      const hasHeader = headerText.includes('hora') && headerText.includes('jogo') && headerText.includes('canal')
+      const parsed = parseTableMatchesFromHtml(candidate)
+      const score = parsed.length * 10 + (hasHeader ? 50 : 0)
+      if (score > bestScore) {
+        bestScore = score
+        bestMatches = parsed
+        selectedTableHtml = candidate
+      }
+    }
+
+    parseTableMatches.selectedTableHtml = selectedTableHtml
+    return bestMatches
+  }
+
+  let match
+  while ((match = anchorRe.exec(rawHtml)) !== null) {
+    const absHref = toAbsHref(match[1])
+    if (!absHref) continue
+    const inner = match[2]
+    const text = stripHtml(inner).replace(/\s+/g, ' ').trim()
+    if (!text) continue
+
+    const existing = byHref.get(absHref) || {
+      href: absHref,
+      time: null,
+      home: '',
+      away: '',
+      competition: '',
+      channels: [],
+      homeCrestUrl: '',
+      awayCrestUrl: '',
+    }
+    if (!existing.href) existing.href = absHref
+    if (!existing.homeCrestUrl || !existing.awayCrestUrl) {
+      const crests = extractTeamCrestsFromAnchorHtml(inner)
+      if (!existing.homeCrestUrl && crests.homeCrestUrl) existing.homeCrestUrl = crests.homeCrestUrl
+      if (!existing.awayCrestUrl && crests.awayCrestUrl) existing.awayCrestUrl = crests.awayCrestUrl
+    }
+    const timeMatch = text.match(/\b(\d{1,2}[:hH]\d{2})\b/)
+    if (timeMatch) {
+      const time = parseClockTime(timeMatch[1])
+      if (time) existing.time = time
+      if (!existing.home || !existing.away) {
+        const teams = parseTeamsFromHref(absHref)
+        if (teams.home && teams.away) {
+          existing.home = teams.home
+          existing.away = teams.away
+        }
+      }
+    } else {
+      maybeSetChannels(existing, text)
+    }
+    byHref.set(absHref, existing)
+  }
+
+  const matches = []
+  for (const entry of byHref.values()) {
+    const time = parseClockTime(entry?.time)
+    const home = typeof entry?.home === 'string' ? entry.home.trim() : ''
+    const away = typeof entry?.away === 'string' ? entry.away.trim() : ''
+    const competition = typeof entry?.competition === 'string' ? entry.competition.trim() : ''
+    const channels = Array.isArray(entry?.channels) ? entry.channels.map((c) => String(c || '').trim()).filter(Boolean) : []
+    const homeCrestUrl = typeof entry?.homeCrestUrl === 'string' ? entry.homeCrestUrl.trim() : ''
+    const awayCrestUrl = typeof entry?.awayCrestUrl === 'string' ? entry.awayCrestUrl.trim() : ''
+    const href = typeof entry?.href === 'string' ? entry.href.trim() : ''
+    if (!time || !home || !away) continue
+    matches.push({ time, home, away, competition, channels, homeCrestUrl, awayCrestUrl, href })
+  }
+
+  const tableMatches = parseTableMatches()
+  const selectedTableHtml = typeof parseTableMatches.selectedTableHtml === 'string' ? parseTableMatches.selectedTableHtml : ''
+  const looseMatches = tableMatches.length > 0
+    ? []
+    : (() => {
+        const text = stripHtml(selectedTableHtml || rawHtml)
+        const lines = text.split('\n').map((l) => l.trim()).filter(Boolean)
+        const out = []
+        for (const line of lines) {
+          const parsed = parseFootballLine(line)
+          if (!parsed) continue
+          out.push(parsed)
+        }
+        return out
+      })()
+
+  const mergedMap = new Map()
+  const buildKey = (m) => `${m.time}::${String(m.home || '').toLowerCase()}::${String(m.away || '').toLowerCase()}`
+  for (const m of [...matches, ...tableMatches, ...looseMatches]) {
+    const time = parseClockTime(m?.time)
+    const home = typeof m?.home === 'string' ? m.home.trim() : ''
+    const away = typeof m?.away === 'string' ? m.away.trim() : ''
+    const competition = typeof m?.competition === 'string' ? m.competition.trim() : ''
+    const channels = Array.isArray(m?.channels) ? m.channels.map((c) => String(c || '').trim()).filter(Boolean) : []
+    const homeCrestUrl = typeof m?.homeCrestUrl === 'string' ? m.homeCrestUrl.trim() : ''
+    const awayCrestUrl = typeof m?.awayCrestUrl === 'string' ? m.awayCrestUrl.trim() : ''
+    const href = typeof m?.href === 'string' ? m.href.trim() : ''
+    if (!time || !home || !away) continue
+    const key = buildKey({ time, home, away })
+    const existing = mergedMap.get(key)
+    if (!existing) {
+      mergedMap.set(key, { time, home, away, competition, channels, homeCrestUrl, awayCrestUrl, href })
+      continue
+    }
+    if (!existing.competition && competition) existing.competition = competition
+    if (existing.channels.length === 0 && channels.length > 0) {
+      existing.channels = channels
+    } else if (channels.length > 0) {
+      const nextChannels = uniqStrings([...existing.channels, ...channels])
+      existing.channels = nextChannels
+    }
+    if (!existing.homeCrestUrl && homeCrestUrl) existing.homeCrestUrl = homeCrestUrl
+    if (!existing.awayCrestUrl && awayCrestUrl) existing.awayCrestUrl = awayCrestUrl
+    if (!existing.href && href) existing.href = href
+  }
+
+  const merged = [...mergedMap.values()]
+  merged.sort((a, b) => a.time.localeCompare(b.time))
+  return merged
+}
+
+const parseFutebolNaTvBrMarkdownSchedule = ({ markdown }) => {
+  const raw = String(markdown || '')
+  const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean)
+  const byHref = new Map()
+  const pipeMatches = []
+
+  const toAbsHref = (href) => {
+    const raw = String(href || '')
+      .trim()
+      .replace(/^[\[(<"']+/, '')
+      .replace(/[\])>,"'.;:!?]+$/, '')
+    if (!raw) return ''
+    if (raw.startsWith('http://') || raw.startsWith('https://')) return raw
+    if (raw.startsWith('//')) return `https:${raw}`
+    if (raw.startsWith('/')) return `https://www.futebolnatv.com.br${raw}`
+    return `https://www.futebolnatv.com.br/${raw}`
+  }
+
+  const toAbsAssetUrl = (href) => {
+    const raw = String(href || '').trim()
+    if (!raw) return ''
+    if (raw.startsWith('http://') || raw.startsWith('https://')) return raw
+    if (raw.startsWith('//')) return `https:${raw}`
+    if (raw.startsWith('/')) return `https://www.futebolnatv.com.br${raw}`
+    return `https://www.futebolnatv.com.br/${raw}`
+  }
+
+  const ensureEntry = (absHref) => {
+    const existing = byHref.get(absHref)
+    if (existing) return existing
+    const next = { href: absHref, time: null, home: '', away: '', competition: '', channels: [], homeCrestUrl: '', awayCrestUrl: '' }
+    byHref.set(absHref, next)
+    return next
+  }
+
+  const parseTeamsFromHref = (absHref) => {
+    const m = String(absHref || '').match(/\/aovivo\/([^?#]+)$/i)
+    const last = m ? m[1] : ''
+    const base = last.replace(/\.html$/i, '')
+    const sep = base.indexOf('-x-')
+    if (sep === -1) return { home: '', away: '' }
+    const homeSlug = base.slice(0, sep)
+    let awaySlug = base.slice(sep + 3)
+    awaySlug = awaySlug
+      .replace(/-\d{2}-\d{2}-\d{4}$/i, '')
+      .replace(/-\d{4}-\d{2}-\d{2}$/i, '')
+      .replace(/-[a-f0-9]{8,}$/i, '')
+    return { home: prettifyFootballTeamFromSlug(homeSlug), away: prettifyFootballTeamFromSlug(awaySlug) }
+  }
+
+  const extractGameHrefsFromLine = (line) => {
+    const hrefs = []
+    const re = /\]\(((?:https?:\/\/(?:www\.)?futebolnatv\.com\.br)?\/aovivo\/[^)\s]+|https?:\/\/(?:www\.)?futebolnatv\.com\.br\/aovivo\/[^)\s]+)\)/gi
+    let m
+    while ((m = re.exec(line)) !== null) {
+      const abs = toAbsHref(m[1])
+      if (abs) hrefs.push(abs)
+    }
+    const fallbackRe = /(https?:\/\/(?:www\.)?futebolnatv\.com\.br\/aovivo\/[^\s)\]>"]+)/gi
+    while ((m = fallbackRe.exec(String(line || ''))) !== null) {
+      const abs = toAbsHref(m[1])
+      if (abs) hrefs.push(abs)
+    }
+    if (hrefs.length === 0) return hrefs
+    return uniqStrings(hrefs)
+  }
+
+  const extractChannelLabelFromLine = (line, absHref) => {
+    const escaped = String(absHref || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const re = new RegExp(`\\[([^\\]]{1,80})\\]\\(${escaped}\\)`, 'gi')
+    const labels = []
+    let m
+    while ((m = re.exec(line)) !== null) {
+      labels.push(String(m[1] || '').trim())
+    }
+    return labels.filter(Boolean)
+  }
+
+  const extractTeamCrestsFromLine = (line) => {
+    const rawLine = String(line || '')
+    if (!rawLine) return { homeCrestUrl: '', awayCrestUrl: '' }
+    const urls = []
+    const re = /!\[[^\]]*\]\(([^)\s]+)\)/gi
+    let m
+    while ((m = re.exec(rawLine)) !== null) {
+      const abs = toAbsAssetUrl(String(m[1] || '').trim())
+      if (abs) urls.push(abs)
+    }
+    const htmlImgRe = /<img\b[^>]*\b(?:data-src|src|data-original|data-lazy-src|data-lazy)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*>/gi
+    while ((m = htmlImgRe.exec(rawLine)) !== null) {
+      const src = String(m[1] || m[2] || m[3] || '').trim()
+      const abs = toAbsAssetUrl(src)
+      if (abs) urls.push(abs)
+    }
+    const teamUrls = urls
+      .filter(Boolean)
+      .filter((u) => u.includes('/upload/teams/') || u.includes('/assets/img/loadteam.png'))
+    const unique = uniqStrings(teamUrls)
+    const homeCrestUrl = unique[0] || ''
+    const awayCrestUrl = unique[1] || ''
+    return { homeCrestUrl, awayCrestUrl }
+  }
+
+  const normalizeChannelListFromCell = (value) => {
+    const normalized = String(value || '').replace(/\s+/g, ' ').trim()
+    if (!normalized) return []
+    if (/sem\s+transmiss/i.test(normalized)) return []
+    return normalized
+      .split(/\s*(?:,|\/|\||•|\be\b)\s*/i)
+      .map((c) => c.trim())
+      .filter(Boolean)
+  }
+
+  const stripMarkdownInline = (value) => {
+    const raw = String(value || '')
+    if (!raw) return ''
+    const withoutLinks = raw.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    const withoutHtml = stripHtml(withoutLinks)
+    return withoutHtml
+      .replace(/[`*_~]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+
+  const parsePipeRow = (line) => {
+    if (!line.includes('|')) return null
+    const cells = line
+      .split('|')
+      .map((c) => stripMarkdownInline(c))
+      .filter(Boolean)
+    if (cells.length < 3) return null
+    const timeToken = (cells[0].match(/\b(\d{1,2}[:hH]\d{2})\b/) || [])[1] || cells[0]
+    const time = parseClockTime(timeToken)
+    if (!time) return null
+
+    const separatorIdx = cells.findIndex((c) => {
+      const v = c.toLowerCase()
+      return v === 'x' || v === '×' || v === 'vs' || v === 'vs.'
+    })
+    let home = ''
+    let away = ''
+    if (separatorIdx > 0 && separatorIdx < cells.length - 1) {
+      home = String(cells[separatorIdx - 1] || '').trim()
+      away = String(cells[separatorIdx + 1] || '').trim()
+    } else {
+      const gameCell = cells.find((c) => /(?:\bx\b|×|\bvs\.?\b)/i.test(c)) || ''
+      const match = String(gameCell).match(/^(.+?)\s*(?:x|X|×|vs\.?|VS\.?)\s*(.+?)$/)
+      if (match) {
+        home = String(match[1] || '').trim()
+        away = String(match[2] || '').trim()
+      }
+    }
+    if (!home || !away) return null
+
+    const href = extractGameHrefsFromLine(line)[0] || ''
+    const competitionCell = normalizeFootballCompetitionLabel(cells[1] || '')
+    const competitionHref = normalizeFootballCompetitionLabel(extractFootballCompetitionFromHref(href))
+    const competition = competitionCell || competitionHref
+    const channels = normalizeChannelListFromCell(cells[cells.length - 1])
+    const crests = extractTeamCrestsFromLine(line)
+    return { time, home, away, competition, channels, homeCrestUrl: crests.homeCrestUrl, awayCrestUrl: crests.awayCrestUrl, href }
+  }
+
+  const extractCompetitionFromMarkdownLine = (line) => {
+    const raw = String(line || '')
+    if (!raw) return ''
+    const boldMatch = raw.match(/\*\*([^*]+)\*\s*(?:-\s*rodada[^\]\n]*)?/i)
+    const fromBold = normalizeFootballCompetitionLabel(boldMatch ? boldMatch[1] : '')
+    if (fromBold) return fromBold
+    const inlineMatch = raw.match(/\b((?:campeonato|copa|liga|divisão|superliga)[^–—\-\n]{0,120})\s*(?:[-–—]\s*rodada.*)?/i)
+    return normalizeFootballCompetitionLabel(inlineMatch ? inlineMatch[1] : '')
+  }
+
+  const headerIdx = lines.findIndex((line) => {
+    if (!line.includes('|')) return false
+    const normalized = stripMarkdownInline(line).toLowerCase()
+    return normalized.includes('hora') && normalized.includes('jogo') && normalized.includes('canal')
+  })
+
+  const pipeScanLines = headerIdx >= 0 ? lines.slice(headerIdx + 1) : lines
+  let hasParsedPipe = false
+  for (const line of pipeScanLines) {
+    let allowPipeParse = true
+    if (headerIdx >= 0) {
+      const normalized = stripMarkdownInline(line)
+      if (!normalized.includes('|') && hasParsedPipe) break
+      if (/\b:?-{3,}:?\b/.test(normalized)) continue
+      if (!normalized.includes('|')) allowPipeParse = false
+    }
+    if (allowPipeParse) {
+      const parsedPipe = parsePipeRow(line)
+      if (parsedPipe) {
+        pipeMatches.push(parsedPipe)
+        hasParsedPipe = true
+      }
+    }
+
+    const hrefs = extractGameHrefsFromLine(line)
+    if (hrefs.length === 0) continue
+
+    const timeMatch = line.match(/\b(\d{1,2}[:hH]\d{2})\b/)
+    const crests = extractTeamCrestsFromLine(line)
+    const lineCompetition = extractCompetitionFromMarkdownLine(line)
+    for (const absHref of hrefs) {
+      const entry = ensureEntry(absHref)
+
+      if (!entry.homeCrestUrl && crests.homeCrestUrl) entry.homeCrestUrl = crests.homeCrestUrl
+      if (!entry.awayCrestUrl && crests.awayCrestUrl) entry.awayCrestUrl = crests.awayCrestUrl
+      if (!entry.competition && lineCompetition) entry.competition = lineCompetition
+      if (!entry.competition) {
+        const fromHref = normalizeFootballCompetitionLabel(extractFootballCompetitionFromHref(absHref))
+        if (fromHref) entry.competition = fromHref
+      }
+
+      if (timeMatch) {
+        const time = parseClockTime(timeMatch[1])
+        if (time) entry.time = time
+        if (!entry.home || !entry.away) {
+          const teams = parseTeamsFromHref(absHref)
+          if (teams.home && teams.away) {
+            entry.home = teams.home
+            entry.away = teams.away
+          }
+        }
+        continue
+      }
+
+      const labels = extractChannelLabelFromLine(line, absHref)
+      if (labels.length > 0) {
+        entry.channels = labels
+        continue
+      }
+
+      if (entry.channels.length === 0) {
+        const normalized = String(line || '').replace(/\s+/g, ' ').trim()
+        const looksLikeChannels = normalized === normalized.toUpperCase() && /[A-Z]/.test(normalized) && normalized.length <= 140
+        if (looksLikeChannels) entry.channels = [normalized]
+      }
+    }
+  }
+
+  const matches = []
+  for (const entry of byHref.values()) {
+    const time = parseClockTime(entry?.time)
+    const home = typeof entry?.home === 'string' ? entry.home.trim() : ''
+    const away = typeof entry?.away === 'string' ? entry.away.trim() : ''
+    const competition = typeof entry?.competition === 'string' ? entry.competition.trim() : ''
+    const channels = Array.isArray(entry?.channels) ? entry.channels.map((c) => String(c || '').trim()).filter(Boolean) : []
+    const homeCrestUrl = typeof entry?.homeCrestUrl === 'string' ? entry.homeCrestUrl.trim() : ''
+    const awayCrestUrl = typeof entry?.awayCrestUrl === 'string' ? entry.awayCrestUrl.trim() : ''
+    const href = typeof entry?.href === 'string' ? entry.href.trim() : ''
+    if (!time || !home || !away) continue
+    matches.push({ time, home, away, competition, channels, homeCrestUrl, awayCrestUrl, href })
+  }
+  const mergedMap = new Map()
+  const buildKey = (m) => `${m.time}::${String(m.home || '').toLowerCase()}::${String(m.away || '').toLowerCase()}`
+  for (const m of [...matches, ...pipeMatches]) {
+    const time = parseClockTime(m?.time)
+    const home = typeof m?.home === 'string' ? m.home.trim() : ''
+    const away = typeof m?.away === 'string' ? m.away.trim() : ''
+    const competition = typeof m?.competition === 'string' ? m.competition.trim() : ''
+    const channels = Array.isArray(m?.channels) ? m.channels.map((c) => String(c || '').trim()).filter(Boolean) : []
+    const homeCrestUrl = typeof m?.homeCrestUrl === 'string' ? m.homeCrestUrl.trim() : ''
+    const awayCrestUrl = typeof m?.awayCrestUrl === 'string' ? m.awayCrestUrl.trim() : ''
+    const href = typeof m?.href === 'string' ? m.href.trim() : ''
+    if (!time || !home || !away) continue
+    const key = buildKey({ time, home, away })
+    const existing = mergedMap.get(key)
+    if (!existing) {
+      mergedMap.set(key, { time, home, away, competition, channels, homeCrestUrl, awayCrestUrl, href })
+      continue
+    }
+    if (!existing.competition && competition) existing.competition = competition
+    if (existing.channels.length === 0 && channels.length > 0) {
+      existing.channels = channels
+    } else if (channels.length > 0) {
+      existing.channels = uniqStrings([...existing.channels, ...channels])
+    }
+    if (!existing.homeCrestUrl && homeCrestUrl) existing.homeCrestUrl = homeCrestUrl
+    if (!existing.awayCrestUrl && awayCrestUrl) existing.awayCrestUrl = awayCrestUrl
+    if (!existing.href && href) existing.href = href
+  }
+  const merged = [...mergedMap.values()]
+  merged.sort((a, b) => a.time.localeCompare(b.time))
+  return merged
+}
+
+const isLikelyBlockedHtml = (html) => {
+  const raw = String(html || '')
+  if (!raw) return false
+  const lower = raw.toLowerCase()
+  if (lower.includes('cf-browser-verification')) return true
+  if (lower.includes('cloudflare')) return true
+  if (lower.includes('attention required')) return true
+  if (lower.includes('just a moment')) return true
+  if (lower.includes('enable javascript')) return true
+  if (lower.includes('checking your browser')) return true
+  return false
+}
+
+const toJinaReaderUrl = (absUrl) => {
+  const raw = String(absUrl || '').trim()
+  if (!raw) return ''
+  try {
+    const u = new URL(raw)
+    return `https://r.jina.ai/${u.protocol}//${u.host}${u.pathname}${u.search}${u.hash}`
+  } catch {
+    return `https://r.jina.ai/https://${raw.replace(/^\/+/, '')}`
+  }
+}
+
+const fetchTextWithHeaders = async (url) => {
+  let origin = ''
+  try {
+    origin = new URL(String(url || '')).origin
+  } catch {
+    origin = ''
+  }
+  const response = await fetch(url, {
+    headers: {
+      'user-agent': 'Mozilla/5.0',
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'accept-language': 'pt-BR,pt;q=0.9,en-US;q=0.7,en;q=0.6',
+      ...(origin ? { referer: `${origin}/`, origin } : {}),
+    },
+  })
+  const text = await response.text()
+  return { ok: response.ok, status: response.status, text }
+}
+
+const resolveFootballSourceFetchUrl = ({ sourceUrl, scheduleDateIso, timeZone }) => {
+  try {
+    const url = new URL(String(sourceUrl || ''))
+    const host = (url.hostname || '').toLowerCase()
+    if (!host.endsWith('futebolnatv.com.br')) return sourceUrl
+
+    const nowParts = getZonedNowParts({ timeZone: timeZone || DEFAULT_FOOTBALL_TIME_ZONE })
+    const today = nowParts.date
+    if (scheduleDateIso === today) return 'https://www.futebolnatv.com.br/jogos-hoje/'
+    if (scheduleDateIso === addDaysToIsoDate(today, 1)) return 'https://www.futebolnatv.com.br/jogos-amanha/'
+    if (scheduleDateIso === addDaysToIsoDate(today, -1)) return 'https://www.futebolnatv.com.br/jogos-ontem/'
+    return 'https://www.futebolnatv.com.br/'
+  } catch {
+    return sourceUrl
+  }
+}
+
+const parseFootballScheduleFromSource = ({ sourceUrl, html, targetDateIso }) => {
+  try {
+    const url = new URL(String(sourceUrl || ''))
+    const host = (url.hostname || '').toLowerCase()
+    if (host.endsWith('futebolnatv.com.br')) {
+      return parseFutebolNaTvBrSchedule({ html })
+    }
+  } catch {
+  }
+  return parseFutebolNaTvSchedule({ html, targetDateIso })
+}
+
+const getFootballSettings = async () => {
+  const [readTimeValue, readWindowStartValue, readWindowEndValue, timeZoneValue, lastRunValue, excludedChannelsValue, excludedCompetitionsValue] = await Promise.all([
+    getAppSettingValue(FOOTBALL_SETTINGS_KEYS.readTime),
+    getAppSettingValue(FOOTBALL_SETTINGS_KEYS.readWindowStart),
+    getAppSettingValue(FOOTBALL_SETTINGS_KEYS.readWindowEnd),
+    getAppSettingValue(FOOTBALL_SETTINGS_KEYS.timeZone),
+    getAppSettingValue(FOOTBALL_SETTINGS_KEYS.lastRunDate),
+    getAppSettingValue(FOOTBALL_SETTINGS_KEYS.excludedChannels),
+    getAppSettingValue(FOOTBALL_SETTINGS_KEYS.excludedCompetitions),
+  ])
+
+  const readTime = parseClockTime(readTimeValue) || DEFAULT_FOOTBALL_READ_TIME
+  const readWindowStart = parseClockTime(readWindowStartValue) || DEFAULT_FOOTBALL_READ_WINDOW_START
+  const readWindowEnd = parseClockTime(readWindowEndValue) || DEFAULT_FOOTBALL_READ_WINDOW_END
+  const timeZoneCandidate = typeof timeZoneValue === 'string' ? timeZoneValue.trim() : ''
+  const timeZone = timeZoneCandidate === DEFAULT_FOOTBALL_TIME_ZONE ? timeZoneCandidate : DEFAULT_FOOTBALL_TIME_ZONE
+  const lastRunDate = typeof lastRunValue === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(lastRunValue.trim()) ? lastRunValue.trim() : null
+  const excludedChannels = parseFootballSettingList(excludedChannelsValue, DEFAULT_FOOTBALL_EXCLUDED_CHANNELS)
+  const excludedCompetitions = parseFootballSettingList(excludedCompetitionsValue, DEFAULT_FOOTBALL_EXCLUDED_COMPETITIONS)
+  return { readTime, readWindowStart, readWindowEnd, timeZone, lastRunDate, excludedChannels, excludedCompetitions }
+}
+
+const getDefaultFootballScheduleDate = ({ nowDateIso, nowTime, readTime }) => {
+  const date = typeof nowDateIso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(nowDateIso) ? nowDateIso : ''
+  if (!date) return addDaysToIsoDate(getZonedNowParts({ timeZone: DEFAULT_FOOTBALL_TIME_ZONE }).date, 1)
+  const currentTime = parseClockTime(nowTime) || ''
+  const cutoffTime = parseClockTime(readTime) || DEFAULT_FOOTBALL_READ_TIME
+  if (!currentTime) return date
+  return currentTime >= cutoffTime ? addDaysToIsoDate(date, 1) : date
+}
+
+const toMinutes = (time) => {
+  const parsed = parseClockTime(time)
+  if (!parsed) return null
+  const [hRaw, mRaw] = parsed.split(':')
+  const h = Number(hRaw)
+  const m = Number(mRaw)
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null
+  return h * 60 + m
+}
+
+const getWindowTriggerMinute = ({ dateIso, windowStart, windowEnd }) => {
+  const start = toMinutes(windowStart)
+  const end = toMinutes(windowEnd)
+  if (start === null || end === null) return toMinutes(DEFAULT_FOOTBALL_READ_WINDOW_START)
+  const span = end >= start ? (end - start + 1) : (24 * 60 - start + end + 1)
+  const safeSpan = Math.max(1, span)
+  const seed = String(dateIso || '').split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
+  const offset = seed % safeSpan
+  return (start + offset) % (24 * 60)
+}
+
+const footballMatchCrestLookupCache = new Map()
+const footballMatchCompetitionLookupCache = new Map()
+
+const toAbsFutebolNaTvAssetUrl = (href) => {
+  const raw = String(href || '').trim()
+  if (!raw) return ''
+  if (raw.startsWith('http://') || raw.startsWith('https://')) return raw
+  if (raw.startsWith('//')) return `https:${raw}`
+  if (raw.startsWith('/')) return `https://www.futebolnatv.com.br${raw}`
+  return `https://www.futebolnatv.com.br/${raw}`
+}
+
+const extractFutebolNaTvTeamCrestsFromHtml = (html) => {
+  const raw = String(html || '')
+  if (!raw) return { homeCrestUrl: '', awayCrestUrl: '' }
+
+  const $ = cheerio.load(raw);
+  const urls = [];
+
+  $('img').each((i, elem) => {
+    const src = $(elem).attr('src') || $(elem).attr('data-src') || $(elem).attr('data-original') || $(elem).attr('data-lazy-src') || $(elem).attr('data-lazy');
+    const abs = toAbsFutebolNaTvAssetUrl(src);
+    if (abs) {
+      urls.push(abs);
+    }
+  });
+
+  const unique = uniqStrings(urls);
+  const teamUrls = unique.filter((u) => u.includes('/upload/teams/'));
+  return { homeCrestUrl: teamUrls[0] || '', awayCrestUrl: teamUrls[1] || '' };
+}
+
+const extractFutebolNaTvTeamCrestsFromMarkdown = (markdown) => {
+  const raw = String(markdown || '')
+  if (!raw) return { homeCrestUrl: '', awayCrestUrl: '' }
+  const urls = []
+  const re = /!\[[^\]]*\]\(([^)\s]+)\)/gi
+  let m
+  while ((m = re.exec(raw)) !== null) {
+    const abs = toAbsFutebolNaTvAssetUrl(String(m[1] || '').trim())
+    if (abs) urls.push(abs)
+  }
+  const unique = uniqStrings(urls)
+  const teamUrls = unique.filter((u) => u.includes('/upload/teams/'))
+  return { homeCrestUrl: teamUrls[0] || '', awayCrestUrl: teamUrls[1] || '' }
+}
+
+const fetchFutebolNaTvMatchCrests = async (absHref) => {
+  const href = typeof absHref === 'string' ? absHref.trim() : ''
+  if (!href || !isSafeExternalHttpUrl(href)) return { homeCrestUrl: '', awayCrestUrl: '' }
+  const cached = footballMatchCrestLookupCache.get(href)
+  if (cached && cached.expiresAt && Date.now() < cached.expiresAt) {
+    return { homeCrestUrl: cached.homeCrestUrl || '', awayCrestUrl: cached.awayCrestUrl || '' }
+  }
+  let homeCrestUrl = ''
+  let awayCrestUrl = ''
+  try {
+    const primary = await fetchTextWithHeaders(href)
+    const extracted = extractFutebolNaTvTeamCrestsFromHtml(primary.text)
+    homeCrestUrl = extracted.homeCrestUrl
+    awayCrestUrl = extracted.awayCrestUrl
+    const shouldTryReader = !homeCrestUrl || !awayCrestUrl || !primary.ok || isLikelyBlockedHtml(primary.text)
+    if (shouldTryReader) {
+      const reader = await fetchTextWithHeaders(toJinaReaderUrl(href))
+      if (reader.ok && reader.text) {
+        const fromMd = extractFutebolNaTvTeamCrestsFromMarkdown(reader.text)
+        if (!homeCrestUrl && fromMd.homeCrestUrl) homeCrestUrl = fromMd.homeCrestUrl
+        if (!awayCrestUrl && fromMd.awayCrestUrl) awayCrestUrl = fromMd.awayCrestUrl
+      }
+    }
+  } catch {
+    homeCrestUrl = ''
+    awayCrestUrl = ''
+  }
+  const isEmpty = !String(homeCrestUrl || '').trim() && !String(awayCrestUrl || '').trim()
+  footballMatchCrestLookupCache.set(href, {
+    homeCrestUrl,
+    awayCrestUrl,
+    expiresAt: Date.now() + (isEmpty ? 10 * 60_000 : 12 * 60 * 60_000),
+  })
+  return { homeCrestUrl, awayCrestUrl }
+}
+
+const extractFutebolNaTvCompetitionFromMarkdown = (markdown) => {
+  const raw = String(markdown || '')
+  if (!raw) return ''
+  const strong = raw.match(/\*\*([^*]+)\*\s*(?:-\s*rodada[^\n\]]*)?/i)
+  if (strong) {
+    const normalized = normalizeFootballCompetitionLabel(strong[1])
+    if (normalized) return normalized
+  }
+  const lineMatch = raw.match(/\b((?:campeonato|copa|liga|divisão|superliga)[^\n]{0,120})/i)
+  return normalizeFootballCompetitionLabel(lineMatch ? lineMatch[1] : '')
+}
+
+const fetchFutebolNaTvMatchCompetition = async (absHref) => {
+  const href = typeof absHref === 'string' ? absHref.trim() : ''
+  if (!href || !isSafeExternalHttpUrl(href)) return ''
+  const cached = footballMatchCompetitionLookupCache.get(href)
+  if (cached && cached.expiresAt && Date.now() < cached.expiresAt) {
+    return String(cached.competition || '').trim()
+  }
+  let competition = ''
+  try {
+    const reader = await fetchTextWithHeaders(toJinaReaderUrl(href))
+    if (reader.ok && reader.text) {
+      competition = extractFutebolNaTvCompetitionFromMarkdown(reader.text)
+    }
+    if (!competition) {
+      const primary = await fetchTextWithHeaders(href)
+      if (primary.ok && primary.text) {
+        const fromHtml = stripHtml(primary.text).replace(/\s+/g, ' ').trim()
+        const m = fromHtml.match(/\b((?:campeonato|copa|liga|divisão|superliga)[^–—\-]{0,120})\s*(?:[-–—]\s*rodada.*)?/i)
+        competition = normalizeFootballCompetitionLabel(m ? m[1] : '')
+      }
+    }
+  } catch {
+    competition = ''
+  }
+  const normalized = normalizeFootballCompetitionLabel(competition)
+  footballMatchCompetitionLookupCache.set(href, {
+    competition: normalized,
+    expiresAt: Date.now() + (normalized ? 12 * 60 * 60_000 : 15 * 60_000),
+  })
+  return normalized
+}
+
+const enrichFutebolNaTvMatchesWithCompetition = async (matches) => {
+  const list = Array.isArray(matches) ? matches : []
+  const targets = list.filter((m) => {
+    const href = typeof m?.href === 'string' ? m.href.trim() : ''
+    const competition = typeof m?.competition === 'string' ? m.competition.trim() : ''
+    return href && isSafeExternalHttpUrl(href) && !competition
+  })
+  if (targets.length === 0) return list
+  const queue = [...targets].slice(0, 120)
+  const workerCount = Math.max(1, Math.min(8, queue.length))
+  await Promise.all(
+    Array.from({ length: workerCount }).map(async () => {
+      while (queue.length > 0) {
+        const item = queue.shift()
+        if (!item) return
+        const href = typeof item?.href === 'string' ? item.href.trim() : ''
+        if (!href) continue
+        const value = await fetchFutebolNaTvMatchCompetition(href)
+        if (value && !item.competition) item.competition = value
+      }
+    })
+  )
+  return list
+}
+
+const enrichFutebolNaTvMatchesWithCrests = async (matches) => {
+  const list = Array.isArray(matches) ? matches : []
+  const candidates = list.filter((m) => {
+    const href = typeof m?.href === 'string' ? m.href.trim() : ''
+    if (!href || !isSafeExternalHttpUrl(href)) return false
+    const home = typeof m?.homeCrestUrl === 'string' ? m.homeCrestUrl.trim() : ''
+    const away = typeof m?.awayCrestUrl === 'string' ? m.awayCrestUrl.trim() : ''
+    return !home || !away || isPlaceholderFootballTeamCrestUrl(home) || isPlaceholderFootballTeamCrestUrl(away)
+  })
+  candidates.sort((a, b) => {
+    const ah = typeof a?.homeCrestUrl === 'string' ? a.homeCrestUrl.trim() : ''
+    const aa = typeof a?.awayCrestUrl === 'string' ? a.awayCrestUrl.trim() : ''
+    const bh = typeof b?.homeCrestUrl === 'string' ? b.homeCrestUrl.trim() : ''
+    const ba = typeof b?.awayCrestUrl === 'string' ? b.awayCrestUrl.trim() : ''
+    const aScore = (!ah || isPlaceholderFootballTeamCrestUrl(ah) ? 1 : 0) + (!aa || isPlaceholderFootballTeamCrestUrl(aa) ? 1 : 0)
+    const bScore = (!bh || isPlaceholderFootballTeamCrestUrl(bh) ? 1 : 0) + (!ba || isPlaceholderFootballTeamCrestUrl(ba) ? 1 : 0)
+    return bScore - aScore
+  })
+  const targets = candidates.slice(0, 120)
+  if (targets.length === 0) return list
+
+  const queue = [...targets]
+  const workerCount = Math.max(1, Math.min(6, queue.length))
+  await Promise.all(
+    Array.from({ length: workerCount }).map(async () => {
+      while (queue.length > 0) {
+        const item = queue.shift()
+        if (!item) return
+        const href = typeof item?.href === 'string' ? item.href.trim() : ''
+        if (!href) continue
+        const currentHome = typeof item?.homeCrestUrl === 'string' ? item.homeCrestUrl.trim() : ''
+        const currentAway = typeof item?.awayCrestUrl === 'string' ? item.awayCrestUrl.trim() : ''
+        const fetched = await fetchFutebolNaTvMatchCrests(href)
+        const nextHome = String(fetched.homeCrestUrl || '').trim()
+        const nextAway = String(fetched.awayCrestUrl || '').trim()
+        if ((!currentHome || isPlaceholderFootballTeamCrestUrl(currentHome)) && nextHome) item.homeCrestUrl = nextHome
+        if ((!currentAway || isPlaceholderFootballTeamCrestUrl(currentAway)) && nextAway) item.awayCrestUrl = nextAway
+      }
+    })
+  )
+  return list
+}
+
+const refreshFootballSchedule = async ({ scheduleDateIso, timeZone }) => {
+  // const sources = await query(
+    //   `
+    //   select id, name, url
+    //   from football_sources
+    //   where is_active = true
+    //   order by created_at asc
+    //   `
+    // );
+  const sources = await query(
+    `
+    select id, name, url
+    from football_sources
+    where is_active = true
+    order by created_at asc
+    `
+  );
+  const results = []
+
+  const looksLikeFutebolNaTvScheduleHtml = (html) => {
+    const raw = String(html || '')
+    if (!raw) return false
+    const lowerRaw = raw.toLowerCase()
+    const aovivoCount = (lowerRaw.match(/\/aovivo\//g) || []).length
+    if (aovivoCount >= 8) return true
+    const text = normalizeFootballSearchText(stripHtml(raw))
+    const timeCount = (text.match(/\b\d{1,2}[:h]\d{2}\b/g) || []).length
+    if (timeCount >= 10) return true
+    if (text.includes('hora') && text.includes('canal')) return true
+    return false
+  }
+
+  for (const source of sources.rows) {
+    const urlRaw = typeof source.url === 'string' ? source.url.trim() : ''
+    if (!urlRaw || !isSafeExternalHttpUrl(urlRaw)) continue
+    const fetchUrl = resolveFootballSourceFetchUrl({ sourceUrl: urlRaw, scheduleDateIso, timeZone })
+    if (!fetchUrl || !isSafeExternalHttpUrl(fetchUrl)) continue
+    let isFutebolNaTvBrSource = false
+    try {
+      const host = (new URL(fetchUrl).hostname || '').toLowerCase()
+      isFutebolNaTvBrSource = host.endsWith('futebolnatv.com.br')
+    } catch {
+      isFutebolNaTvBrSource = false
+    }
+    let matches = []
+    let ok = false
+    try {
+      if (isFutebolNaTvBrSource) {
+        try {
+          const readerUrl = toJinaReaderUrl(fetchUrl)
+          const reader = await fetchTextWithHeaders(readerUrl)
+          if (reader.ok && reader.text) {
+            const readerMatches = parseFutebolNaTvBrMarkdownSchedule({ markdown: reader.text })
+            if (readerMatches.length > 0) {
+              matches = readerMatches
+              ok = true
+            }
+          }
+        } catch {
+        }
+      }
+
+      const primary = await fetchTextWithHeaders(fetchUrl)
+      const primarySearchText = normalizeFootballSearchText(stripHtml(primary.text))
+      const primaryParsed = parseFootballScheduleFromSource({ sourceUrl: fetchUrl, html: primary.text, targetDateIso: scheduleDateIso })
+      if (matches.length === 0) {
+        matches = primaryParsed
+      } else if (Array.isArray(primaryParsed) && primaryParsed.length > 0) {
+        const mergedMap = new Map()
+        const buildKey = (m) => `${m.time}::${normalizeFootballSearchText(m.home)}::${normalizeFootballSearchText(m.away)}`
+        for (const m of [...matches, ...primaryParsed]) {
+          const time = parseClockTime(m?.time)
+          const home = typeof m?.home === 'string' ? m.home.trim() : ''
+          const away = typeof m?.away === 'string' ? m.away.trim() : ''
+          const competition = typeof m?.competition === 'string' ? m.competition.trim() : ''
+          const channels = Array.isArray(m?.channels) ? m.channels.map((c) => String(c || '').trim()).filter(Boolean) : []
+          const homeCrestUrl = typeof m?.homeCrestUrl === 'string' ? m.homeCrestUrl.trim() : ''
+          const awayCrestUrl = typeof m?.awayCrestUrl === 'string' ? m.awayCrestUrl.trim() : ''
+          const href = typeof m?.href === 'string' ? m.href.trim() : ''
+          if (!time || !home || !away) continue
+          const key = buildKey({ time, home, away })
+          const existing = mergedMap.get(key)
+          if (!existing) {
+            mergedMap.set(key, { time, home, away, competition, channels, homeCrestUrl, awayCrestUrl, href })
+            continue
+          }
+          if (!existing.competition && competition) existing.competition = competition
+          if (existing.channels.length === 0 && channels.length > 0) {
+            existing.channels = channels
+          } else if (channels.length > 0) {
+            existing.channels = uniqStrings([...existing.channels, ...channels])
+          }
+          const existingHome = typeof existing.homeCrestUrl === 'string' ? existing.homeCrestUrl.trim() : ''
+          const existingAway = typeof existing.awayCrestUrl === 'string' ? existing.awayCrestUrl.trim() : ''
+          if ((!existingHome || isPlaceholderFootballTeamCrestUrl(existingHome)) && homeCrestUrl && !isPlaceholderFootballTeamCrestUrl(homeCrestUrl)) {
+            existing.homeCrestUrl = homeCrestUrl
+          } else if (!existingHome && homeCrestUrl) {
+            existing.homeCrestUrl = homeCrestUrl
+          }
+          if ((!existingAway || isPlaceholderFootballTeamCrestUrl(existingAway)) && awayCrestUrl && !isPlaceholderFootballTeamCrestUrl(awayCrestUrl)) {
+            existing.awayCrestUrl = awayCrestUrl
+          } else if (!existingAway && awayCrestUrl) {
+            existing.awayCrestUrl = awayCrestUrl
+          }
+          if (!existing.href && href) existing.href = href
+        }
+        matches = [...mergedMap.values()]
+        matches.sort((a, b) => a.time.localeCompare(b.time))
+      }
+      ok = Boolean(ok) || primary.ok
+
+      const shouldTryReaderToFillGaps = (() => {
+        try {
+          const url = new URL(fetchUrl)
+          const host = (url.hostname || '').toLowerCase()
+          if (!host.endsWith('futebolnatv.com.br')) return false
+        } catch {
+          return false
+        }
+        return matches.length > 0 && matches.length < 80
+      })()
+
+      const shouldTryReader = (() => {
+        if (matches.length > 0) return false
+        try {
+          const url = new URL(fetchUrl)
+          const host = (url.hostname || '').toLowerCase()
+          if (!host.endsWith('futebolnatv.com.br')) return false
+        } catch {
+          return false
+        }
+        if (primary.status >= 400) return true
+        if (isLikelyBlockedHtml(primary.text)) return true
+        return true
+      })()
+
+      if (shouldTryReader || shouldTryReaderToFillGaps) {
+        const readerUrl = toJinaReaderUrl(fetchUrl)
+        const reader = await fetchTextWithHeaders(readerUrl)
+        if (reader.ok && reader.text) {
+          const readerMatches = parseFutebolNaTvBrMarkdownSchedule({ markdown: reader.text })
+          const canFilterReaderByPrimary =
+            Boolean(primary.ok) &&
+            Boolean(primary.text) &&
+            primarySearchText.length > 400 &&
+            !isLikelyBlockedHtml(primary.text) &&
+            looksLikeFutebolNaTvScheduleHtml(primary.text)
+          const filteredReaderMatches = canFilterReaderByPrimary
+            ? readerMatches.filter((m) => {
+                const home = typeof m?.home === 'string' ? m.home.trim() : ''
+                const away = typeof m?.away === 'string' ? m.away.trim() : ''
+                if (!home || !away) return false
+                const homeNeedle = normalizeFootballSearchText(home)
+                const awayNeedle = normalizeFootballSearchText(away)
+                if (!homeNeedle || !awayNeedle) return false
+                return primarySearchText.includes(homeNeedle) && primarySearchText.includes(awayNeedle)
+              })
+            : []
+          const effectiveReaderMatches =
+            filteredReaderMatches.length >= Math.max(12, Math.min(readerMatches.length, matches.length))
+              ? filteredReaderMatches
+              : readerMatches
+          if (shouldTryReader) {
+            matches = effectiveReaderMatches
+          } else if (effectiveReaderMatches.length > 0) {
+            const mergedMap = new Map()
+            const buildKey = (m) => `${m.time}::${String(m.home || '').toLowerCase()}::${String(m.away || '').toLowerCase()}`
+            for (const m of [...matches, ...effectiveReaderMatches]) {
+              const time = parseClockTime(m?.time)
+              const home = typeof m?.home === 'string' ? m.home.trim() : ''
+              const away = typeof m?.away === 'string' ? m.away.trim() : ''
+              const competition = typeof m?.competition === 'string' ? m.competition.trim() : ''
+              const channels = Array.isArray(m?.channels) ? m.channels.map((c) => String(c || '').trim()).filter(Boolean) : []
+              const homeCrestUrl = typeof m?.homeCrestUrl === 'string' ? m.homeCrestUrl.trim() : ''
+              const awayCrestUrl = typeof m?.awayCrestUrl === 'string' ? m.awayCrestUrl.trim() : ''
+              const href = typeof m?.href === 'string' ? m.href.trim() : ''
+              if (!time || !home || !away) continue
+              const key = buildKey({ time, home, away })
+              const existing = mergedMap.get(key)
+              if (!existing) {
+                mergedMap.set(key, { time, home, away, competition, channels, homeCrestUrl, awayCrestUrl, href })
+                continue
+              }
+              if (!existing.competition && competition) existing.competition = competition
+              if (existing.channels.length === 0 && channels.length > 0) {
+                existing.channels = channels
+              } else if (channels.length > 0) {
+                existing.channels = uniqStrings([...existing.channels, ...channels])
+              }
+              if (!existing.homeCrestUrl && homeCrestUrl) existing.homeCrestUrl = homeCrestUrl
+              if (!existing.awayCrestUrl && awayCrestUrl) existing.awayCrestUrl = awayCrestUrl
+              if (!existing.href && href) existing.href = href
+            }
+            matches = [...mergedMap.values()]
+            matches.sort((a, b) => a.time.localeCompare(b.time))
+          }
+          ok = true
+        }
+      }
+    } catch {
+      matches = []
+      ok = false
+    }
+
+    if (isFutebolNaTvBrSource && matches.length > 0) {
+      matches = await enrichFutebolNaTvMatchesWithCompetition(matches)
+      matches = await enrichFutebolNaTvMatchesWithCrests(matches)
+    }
+
+    await query(
+      `
+      insert into football_schedules (source_id, schedule_date, matches, fetched_at, created_at, updated_at)
+      values ($1, $2, $3::jsonb, now(), now(), now())
+      on conflict (source_id, schedule_date)
+      do update set matches = excluded.matches, fetched_at = now(), updated_at = now()
+      `,
+      [source.id, scheduleDateIso, JSON.stringify(matches)]
+    )
+
+    results.push({ sourceId: source.id, sourceName: source.name, matchesCount: matches.length, ok })
+  }
+  return { date: scheduleDateIso, results }
+}
+
+const footballScheduleAutoRefreshCache = new Map()
+
+const shouldRefreshFootballScheduleBecauseTooFew = ({ merged, scheduleDateIso }) => {
+  const matchesCount = Array.isArray(merged) ? merged.length : 0
+  if (matchesCount >= 24) return false
+  const dateKey = typeof scheduleDateIso === 'string' && scheduleDateIso.trim() ? scheduleDateIso.trim() : ''
+  if (!dateKey) return true
+  const now = Date.now()
+  const last = footballScheduleAutoRefreshCache.get(dateKey) || 0
+  const minCooldownMs = matchesCount < 18 ? 60_000 : 10 * 60_000
+  if (now - last < minCooldownMs) return false
+  footballScheduleAutoRefreshCache.set(dateKey, now)
+  return true
+}
+
+const shouldRefreshFootballScheduleBecauseCrestsMissing = ({ merged, scheduleDateIso }) => {
+  const matches = Array.isArray(merged) ? merged : []
+  if (matches.length < 8) return false
+  const withBoth = matches.filter((m) => {
+    const home = typeof m?.homeCrestUrl === 'string' ? m.homeCrestUrl.trim() : ''
+    const away = typeof m?.awayCrestUrl === 'string' ? m.awayCrestUrl.trim() : ''
+    if (!home || !away) return false
+    if (isPlaceholderFootballTeamCrestUrl(home) || isPlaceholderFootballTeamCrestUrl(away)) return false
+    return true
+  }).length
+  const ratio = withBoth / matches.length
+  if (ratio >= 0.6) return false
+  const dateKey = typeof scheduleDateIso === 'string' && scheduleDateIso.trim() ? scheduleDateIso.trim() : ''
+  if (!dateKey) return true
+  const now = Date.now()
+  const cacheKey = `${dateKey}:crests`
+  const last = footballScheduleAutoRefreshCache.get(cacheKey) || 0
+  const minCooldownMs = ratio < 0.2 ? 60_000 : 10 * 60_000
+  if (now - last < minCooldownMs) return false
+  footballScheduleAutoRefreshCache.set(cacheKey, now)
+  return true
+}
+
+let footballSchedulerTimer = null
+const startFootballScheduler = () => {
+  if (footballSchedulerTimer) return
+  let isRunning = false
+
+  const tick = async () => {
+    if (isRunning) return
+    isRunning = true
+    try {
+      const settings = await getFootballSettings()
+      const nowParts = getZonedNowParts({ timeZone: settings.timeZone })
+      const nowTime = parseClockTime(nowParts.time)
+      const nowMinutes = toMinutes(nowTime)
+      if (!nowTime || nowMinutes === null) return
+
+      const ensureDate = getDefaultFootballScheduleDate({ nowDateIso: nowParts.date, nowTime: nowParts.time, readTime: settings.readWindowEnd || settings.readTime })
+      const ensureCacheKey = `ensure:${ensureDate}`
+      const ensureLast = footballScheduleAutoRefreshCache.get(ensureCacheKey) || 0
+      if (Date.now() - ensureLast > 15 * 60_000) {
+        footballScheduleAutoRefreshCache.set(ensureCacheKey, Date.now())
+        try {
+          const result = await query(
+            `
+            select distinct on (fs.source_id) fs.matches, fs.fetched_at
+            from football_schedules fs
+            join football_sources s on s.id = fs.source_id
+            where fs.schedule_date = $1
+              and s.is_active = true
+            order by fs.source_id, fs.fetched_at desc nulls last
+            `,
+            [ensureDate]
+          )
+          const mergedMap = new Map()
+          for (const row of result.rows) {
+            const list = Array.isArray(row.matches) ? row.matches : []
+            for (const item of list) {
+              const time = parseClockTime(item?.time)
+              const home = typeof item?.home === 'string' ? item.home.trim() : ''
+              const away = typeof item?.away === 'string' ? item.away.trim() : ''
+              const channels = Array.isArray(item?.channels) ? item.channels.map((c) => String(c || '').trim()).filter(Boolean) : []
+              const homeCrestUrl = typeof item?.homeCrestUrl === 'string' ? item.homeCrestUrl.trim() : ''
+              const awayCrestUrl = typeof item?.awayCrestUrl === 'string' ? item.awayCrestUrl.trim() : ''
+              if (!time || !home || !away) continue
+              const key = `${time}::${normalizeFootballSearchText(home)}::${normalizeFootballSearchText(away)}`
+              const existing = mergedMap.get(key)
+              if (!existing) {
+                mergedMap.set(key, { time, home, away, channels, homeCrestUrl, awayCrestUrl })
+                continue
+              }
+              if (existing.channels.length === 0 && channels.length > 0) {
+                existing.channels = channels
+              } else if (channels.length > 0) {
+                existing.channels = uniqStrings([...existing.channels, ...channels])
+              }
+              if ((!existing.homeCrestUrl || isPlaceholderFootballTeamCrestUrl(existing.homeCrestUrl)) && homeCrestUrl) existing.homeCrestUrl = homeCrestUrl
+              if ((!existing.awayCrestUrl || isPlaceholderFootballTeamCrestUrl(existing.awayCrestUrl)) && awayCrestUrl) existing.awayCrestUrl = awayCrestUrl
+            }
+          }
+          const merged = [...mergedMap.values()]
+          merged.sort((a, b) => a.time.localeCompare(b.time))
+          if (
+            merged.length === 0 ||
+            shouldRefreshFootballScheduleBecauseTooFew({ merged, scheduleDateIso: ensureDate }) ||
+            shouldRefreshFootballScheduleBecauseCrestsMissing({ merged, scheduleDateIso: ensureDate })
+          ) {
+            await refreshFootballSchedule({ scheduleDateIso: ensureDate, timeZone: settings.timeZone })
+          }
+        } catch {
+        }
+      }
+
+      if (settings.lastRunDate === nowParts.date) return
+      const triggerMinute = getWindowTriggerMinute({
+        dateIso: nowParts.date,
+        windowStart: settings.readWindowStart || DEFAULT_FOOTBALL_READ_WINDOW_START,
+        windowEnd: settings.readWindowEnd || DEFAULT_FOOTBALL_READ_WINDOW_END,
+      })
+      if (nowMinutes < triggerMinute) return
+
+      const targetDate = addDaysToIsoDate(nowParts.date, 1)
+      await refreshFootballSchedule({ scheduleDateIso: targetDate, timeZone: settings.timeZone })
+      await setAppSettingValue({ key: FOOTBALL_SETTINGS_KEYS.lastRunDate, value: nowParts.date })
+    } catch {
+    } finally {
+      isRunning = false
+    }
+  }
+
+  void tick()
+  footballSchedulerTimer = setInterval(() => void tick(), 60_000)
 }
 
 let telegramTokenCache = { token: '', fetchedAt: 0 }
@@ -974,24 +2868,69 @@ app.get('/api/search/image', async (req, res) => {
 })
 
 app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, async (req, res) => {
+  const asBool = (value, fallback = false) => {
+    if (typeof value === 'boolean') return value
+    if (typeof value === 'number') return value === 1
+    if (typeof value === 'string') {
+      const v = value.trim().toLowerCase()
+      if (v === '1' || v === 'true' || v === 'yes' || v === 'on') return true
+      if (v === '0' || v === 'false' || v === 'no' || v === 'off') return false
+    }
+    return fallback
+  }
+  const startedAt = Date.now()
+  const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+  let responseFinished = false
+  console.log('[video-branding] request:start', { requestId, userId: req.auth?.userId || null })
+  res.on('finish', () => {
+    responseFinished = true
+    console.log('[video-branding] request:finish', {
+      requestId,
+      statusCode: res.statusCode,
+      elapsedMs: Date.now() - startedAt,
+      writableEnded: res.writableEnded,
+    })
+  })
+  res.on('close', () => {
+    console.log('[video-branding] request:close', {
+      requestId,
+      statusCode: res.statusCode,
+      elapsedMs: Date.now() - startedAt,
+      finished: responseFinished,
+      writableEnded: res.writableEnded,
+      destroyed: res.destroyed,
+    })
+  })
+  req.on('aborted', () => {
+    console.warn('[video-branding] request:aborted', {
+      requestId,
+      elapsedMs: Date.now() - startedAt,
+      finished: responseFinished,
+    })
+  })
+
   const mediaType = req.body?.mediaType === 'tv' ? 'tv' : 'movie'
   const id = Number(req.body?.id)
   const trailerId = typeof req.body?.trailerId === 'string' ? req.body.trailerId.trim() : ''
   const trailerUrlRaw = typeof req.body?.trailerUrl === 'string' ? req.body.trailerUrl.trim() : ''
-  const trailerUrl = isYouTubeTrailerId(trailerId) ? buildYouTubeTrailerUrlFromId(trailerId) : trailerUrlRaw
+  let trailerUrl = isYouTubeTrailerId(trailerId) ? buildYouTubeTrailerUrlFromId(trailerId) : trailerUrlRaw
   const layoutRaw = typeof req.body?.layout === 'string' ? req.body.layout.trim() : ''
   const layout = layoutRaw === 'feed' ? 'feed' : 'portrait'
-  const includeLogo = req.body?.includeLogo !== false
+  const includeLogo = asBool(req.body?.includeLogo, true)
   const includeSynopsis = true
-  const includeCta = req.body?.includeCta !== false
-  const includePhone = req.body?.includePhone !== false
-  const includeWebsite = req.body?.includeWebsite !== false
+  const includeCta = asBool(req.body?.includeCta, true)
+  const includePhone = asBool(req.body?.includePhone, false)
+  const includeWebsite = asBool(req.body?.includeWebsite, false)
+  const forceDownload = asBool(req.body?.download, false)
   const ctaText = typeof req.body?.ctaText === 'string' ? req.body.ctaText.replace(/\r/g, '').trim().slice(0, 40) : ''
   const synopsisTheme = typeof req.body?.synopsisTheme === 'string' ? req.body.synopsisTheme.trim().slice(0, 60) : ''
-  const limitDuration = req.body?.limitDuration === true
-  let preview = req.body?.preview === true
+  const limitDuration = asBool(req.body?.limitDuration, false)
+  let preview = asBool(req.body?.preview, false)
+  const voteAverageRaw = Number(req.body?.voteAverage)
+  const requestVoteAverage = Number.isFinite(voteAverageRaw) && voteAverageRaw > 0 ? voteAverageRaw : 0
   const previewSecondsRaw = Number(req.body?.previewSeconds)
   let previewSeconds = Number.isFinite(previewSecondsRaw) && previewSecondsRaw > 0 ? Math.min(Math.round(previewSecondsRaw), 30) : 0
+  if (previewSeconds > 0) preview = true
   const maxDurationRaw = Number(req.body?.maxDurationSeconds)
   const maxDurationSeconds = limitDuration
     ? 90
@@ -1003,13 +2942,8 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
     previewSeconds = 0
   }
 
-  if (!Number.isFinite(id) || id <= 0 || !trailerUrl) {
+  if (!Number.isFinite(id) || id <= 0) {
     res.status(400).json({ message: 'Dados inválidos.' })
-    return
-  }
-
-  if (!isYouTubeTrailerUrl(trailerUrl)) {
-    res.status(400).json({ message: 'Trailer inválido.' })
     return
   }
 
@@ -1053,9 +2987,25 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
         secondary: secondary || brandColors.secondary,
       }
     }
+    if (!trailerUrl || !isYouTubeTrailerUrl(trailerUrl)) {
+      trailerUrl = await resolveTrailerUrlFromProvider({ mediaType, id, userKey: req.auth.userKey })
+    }
   } catch {
     res.status(500).json({ message: 'Não foi possível concluir. Tente novamente.' })
     return
+  }
+  if (!trailerUrl || !isYouTubeTrailerUrl(trailerUrl)) {
+    res.status(404).json({ message: 'Trailer não encontrado para este conteúdo.' })
+    return
+  }
+
+  if (!isCanvasRuntimeHealthy) {
+    if (!hasWarnedCanvasRuntimeUnhealthy) {
+      hasWarnedCanvasRuntimeUnhealthy = true
+      console.warn(
+        '[video-branding] ICU do canvas não encontrado; continuando execução com fallback.'
+      )
+    }
   }
 
   let ffmpegCommand = resolveFfmpegCommand()
@@ -1072,8 +3022,15 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
     return
   }
 
+  cleanupStaleTempFiles()
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mediahub-vb-'))
-  const cleanup = () => safeRm(tmpDir)
+  let cleaned = false
+  const cleanup = () => {
+    if (cleaned) return
+    cleaned = true
+    if (tmpDir) safeRm(tmpDir)
+  }
+  res.on('finish', cleanup)
   res.on('close', cleanup)
 
   try {
@@ -1097,22 +3054,14 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
       return raw
     }
 
-    const getDurationSecondsFromFfmpegProbe = async (filePath) => {
-      const result = await runProcess({ command: ffmpegCommand, args: ['-i', filePath], timeoutMs: 8000 })
-      const out = `${result.stdout || ''}\n${result.stderr || ''}`
-      const match = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(out)
-      if (!match) return null
-      const h = Number(match[1])
-      const m = Number(match[2])
-      const s = Number(match[3])
-      if (!Number.isFinite(h) || !Number.isFinite(m) || !Number.isFinite(s)) return null
-      return h * 3600 + m * 60 + s
-    }
-
     let trailerFile = path.join(tmpDir, 'trailer.mp4')
+    let trailerAcquireErrorText = ''
     const trailerTemplate = path.join(tmpDir, 'trailer.%(ext)s')
+    const bundledYtdlpCommand = resolveBundledYtdlpCommand()
 
-    const ytdl = resolveYtdl()
+    /** ytdl-core quebra com frequência com mudanças do YouTube; nesta rota usamos só yt-dlp (mais estável). */
+    const useYtdlCoreBranding = process.env.MEDIAHUB_VIDEO_BRANDING_USE_YTDL === '1'
+    const ytdl = useYtdlCoreBranding ? resolveYtdl() : null
     if (ytdl) {
       try {
         if (!ytdl.validateURL(trailerUrl)) {
@@ -1127,6 +3076,7 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
         const stream = ytdl.downloadFromInfo(info, { format, requestOptions: { headers: { 'user-agent': 'Mozilla/5.0' } } })
         await downloadToFile({ stream, filePath: trailerFile, timeoutMs: 180_000 })
       } catch (e) {
+        trailerAcquireErrorText = `${trailerAcquireErrorText}\n${String(e?.message || '')}`
         console.error('video-branding: ytdl-core failed, trying yt-dlp', { message: String(e?.message || '') })
       }
     }
@@ -1152,6 +3102,7 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
           })
           console.log('video-branding: yt-dlp-exec completed')
         } catch (ee) {
+          trailerAcquireErrorText = `${trailerAcquireErrorText}\n${String(ee?.message || '')}\n${String(ee?.stderr || '')}`
           console.error('video-branding: yt-dlp-exec failed', {
             message: String(ee?.message || ''),
             stack: String(ee?.stack || ''),
@@ -1170,7 +3121,6 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
     }
 
     if (!fs.existsSync(trailerFile) && isYouTubeTrailerUrl(trailerUrl)) {
-      const bundledYtdlpCommand = resolveBundledYtdlpCommand()
       if (bundledYtdlpCommand) {
         try {
           const downloadResult = await runProcess({
@@ -1192,9 +3142,11 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
             timeoutMs: 180_000,
           })
           if (downloadResult.code !== 0) {
+            trailerAcquireErrorText = `${trailerAcquireErrorText}\n${downloadResult.stderr || ''}`
             console.error('video-branding: bundled yt-dlp failed', { code: downloadResult.code, stderr: downloadResult.stderr.slice(0, 1000) })
           }
         } catch (e) {
+          trailerAcquireErrorText = `${trailerAcquireErrorText}\n${String(e?.message || '')}`
           console.error('video-branding: bundled yt-dlp spawn failed', { message: String(e?.message || '') })
         }
       }
@@ -1210,6 +3162,44 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
     if (!fs.existsSync(trailerFile)) {
       const command = (await hasBinary('yt-dlp', ['--version'])) ? 'yt-dlp' : null
       if (!command) {
+        if (bundledYtdlpCommand) {
+          cleanupStaleTempFiles()
+          const retryResult = await runProcess({
+            command: bundledYtdlpCommand,
+            args: [
+              '--no-progress',
+              '--no-playlist',
+              '--retries',
+              '1',
+              '-f',
+              'bv*+ba/b',
+              '--merge-output-format',
+              'mp4',
+              '-o',
+              trailerTemplate,
+              trailerUrl,
+            ],
+            cwd: tmpDir,
+            timeoutMs: 180_000,
+          })
+          if (retryResult.code === 0) {
+            const files = fs
+              .readdirSync(tmpDir)
+              .filter((name) => name.toLowerCase().startsWith('trailer.') && name.toLowerCase().endsWith('.mp4'))
+            if (files.length > 0) trailerFile = path.join(tmpDir, files[0])
+          } else {
+            trailerAcquireErrorText = `${trailerAcquireErrorText}\n${retryResult.stderr || ''}`
+          }
+        }
+      }
+      if (!fs.existsSync(trailerFile) && !command) {
+        const lower = trailerAcquireErrorText.toLowerCase()
+        const looksLikeNoSpace =
+          lower.includes('failed to extract') || lower.includes('no space') || lower.includes('nospc') || lower.includes('decompression')
+        if (looksLikeNoSpace) {
+          res.status(503).json({ message: 'Servidor sem espaço temporário para gerar com trailer. Tente novamente em instantes.' })
+          return
+        }
         if (userType === 'admin') {
           res.status(503).json({ message: 'Geração com trailer não configurada no servidor.' })
         } else {
@@ -1254,25 +3244,176 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
       return
     }
 
-    let trailerTrimEndSeconds = null
-    if (!preview) {
-      try {
-        const durationSeconds = await getDurationSecondsFromFfmpegProbe(trailerFile)
-        if (typeof durationSeconds === 'number' && durationSeconds > 6) {
-          const end = durationSeconds - 5
-          if (end >= 20) trailerTrimEndSeconds = Number(end.toFixed(3))
-        }
-      } catch {
-        trailerTrimEndSeconds = null
-      }
-    }
-
-    let trailerMaxEndSeconds = trailerTrimEndSeconds
+    let trailerMaxEndSeconds = null
     if (typeof maxDurationSeconds === 'number' && maxDurationSeconds > 0) {
       trailerMaxEndSeconds =
         typeof trailerMaxEndSeconds === 'number' && trailerMaxEndSeconds > 0
           ? Math.min(trailerMaxEndSeconds, maxDurationSeconds)
           : maxDurationSeconds
+    }
+
+    if (!isCanvasRuntimeHealthy) {
+      console.warn('[video-branding] canvas indisponível: usando fallback de branding via ffmpeg.')
+      // Em alguns navegadores a conexão longa é encerrada se os headers demorarem.
+      // Enviamos headers cedo para manter o socket vivo durante o transcode.
+      res.setHeader('Content-Type', 'video/mp4')
+      res.setHeader('Cache-Control', 'no-store')
+      res.setHeader('X-Accel-Buffering', 'no')
+      if (forceDownload) res.setHeader('Content-Disposition', 'attachment; filename="video_branding_trailer.mp4"')
+      res.status(200)
+      if (typeof res.flushHeaders === 'function') {
+        try { res.flushHeaders() } catch { void 0 }
+      }
+      const outFileDegraded = path.join(tmpDir, 'out-degraded.mp4')
+      const outputLimitSeconds = preview && previewSeconds > 0
+        ? previewSeconds
+        : typeof trailerMaxEndSeconds === 'number' && trailerMaxEndSeconds > 1
+          ? trailerMaxEndSeconds
+          : 0
+      const fallbackBrandName = String(brandName || 'MediaHub').trim() || 'MediaHub'
+      const fallbackCta = includeCta ? String(ctaText || 'Dica de Conteúdo').trim() || 'Dica de Conteúdo' : ''
+      const fallbackFooter = includePhone
+        ? formatPhoneForDisplay(phone)
+        : includeWebsite
+          ? String(website || '').trim()
+          : ''
+      const colorRaw = String(brandColors?.primary || '#7c3aed').trim()
+      const normalizedColor = /^#?[0-9a-fA-F]{6}$/.test(colorRaw) ? `#${colorRaw.replace('#', '')}` : '#7c3aed'
+      const secondaryRaw = String(brandColors?.secondary || '#2563eb').trim()
+      const normalizedSecondary = /^#?[0-9a-fA-F]{6}$/.test(secondaryRaw) ? `#${secondaryRaw.replace('#', '')}` : '#2563eb'
+      const escapedName = escapeFfmpegText(fallbackBrandName)
+      const escapedCta = escapeFfmpegText(fallbackCta)
+      const escapedFooter = escapeFfmpegText(fallbackFooter)
+      const fallbackFontFile = resolveFfmpegDrawtextFont()
+      const fontPrefix = fallbackFontFile
+        ? `fontfile='${escapeFfmpegPath(fallbackFontFile)}':`
+        : ''
+
+      const targetW = 1080
+      const targetH = layout === 'feed' ? 1350 : 1920
+      const headerH = layout === 'feed' ? 180 : 220
+      const trailerH = layout === 'feed' ? 520 : 608
+      const trailerY = headerH
+      const infoY = trailerY + trailerH
+      const infoH = Math.max(180, targetH - infoY)
+
+      const buildDegradedArgs = (mode = 'full') => {
+        const args = ['-y', '-i', trailerFile]
+        const parts = [
+          `[0:v]scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH},boxblur=28:2[bg]`,
+          `[0:v]scale=${targetW}:${trailerH}:force_original_aspect_ratio=increase,crop=${targetW}:${trailerH}[main]`,
+          `[bg][main]overlay=0:${trailerY}[v0]`,
+          `[v0]drawbox=x=0:y=0:w=${targetW}:h=${headerH}:color=black@0.42:t=fill[v1]`,
+          `[v1]drawbox=x=0:y=${infoY}:w=${targetW}:h=${infoH}:color=black@0.52:t=fill[v2]`,
+        ]
+
+        if (mode === 'full') {
+          // Topbar (estilo story): CTA forte + barra de marca.
+          parts.push(`[v2]drawbox=x=0:y=${headerH - 12}:w=${targetW}:h=12:color=${normalizedColor}:t=fill[v3]`)
+          parts.push(`[v3]drawtext=${fontPrefix}expansion=none:text='${escapedName}':x=120:y=${Math.max(56, Math.round(headerH * 0.52))}:fontsize=72:fontcolor=white:shadowx=2:shadowy=2[v4]`)
+          parts.push(`[v4]drawtext=${fontPrefix}expansion=none:text='▶':x=52:y=${Math.max(56, Math.round(headerH * 0.52))}:fontsize=42:fontcolor=white:shadowx=1:shadowy=1[v5]`)
+          if (escapedCta) {
+            parts.push(`[v5]drawbox=x=36:y=${targetH - 132}:w=${targetW - 72}:h=68:color=${normalizedSecondary}@0.38:t=fill[v6]`)
+            parts.push(`[v6]drawtext=${fontPrefix}expansion=none:text='${escapedCta}':x=56:y=${targetH - 86}:fontsize=34:fontcolor=white:shadowx=2:shadowy=2[v7]`)
+            if (escapedFooter) {
+              parts.push(`[v7]drawtext=${fontPrefix}expansion=none:text='${escapedFooter}':x=56:y=${targetH - 36}:fontsize=32:fontcolor=white:shadowx=2:shadowy=2[vout]`)
+            } else {
+              parts.push(`[v7]null[vout]`)
+            }
+          } else if (escapedFooter) {
+            parts.push(`[v5]drawtext=${fontPrefix}expansion=none:text='${escapedFooter}':x=56:y=${targetH - 36}:fontsize=32:fontcolor=white:shadowx=2:shadowy=2[vout]`)
+          } else {
+            parts.push(`[v5]null[vout]`)
+          }
+        } else if (mode === 'minimal') {
+          parts.push(`[v2]drawbox=x=0:y=${headerH - 10}:w=${targetW}:h=10:color=${normalizedColor}:t=fill[v3]`)
+          parts.push(`[v3]drawbox=x=0:y=0:w=${targetW}:h=8:color=${normalizedSecondary}:t=fill[vout]`)
+        } else {
+          parts.push(`[v2]null[vout]`)
+        }
+
+        args.push('-filter_complex', parts.join(';'))
+        args.push('-map', '[vout]')
+        args.push('-map', '0:a?')
+        if (outputLimitSeconds > 0) args.push('-t', String(outputLimitSeconds))
+        args.push('-c:v', 'libx264')
+        args.push('-preset', 'veryfast')
+        args.push('-crf', preview ? '24' : '24')
+        args.push('-c:a', 'aac')
+        args.push('-b:a', '128k')
+        args.push('-movflags', '+faststart')
+        args.push(outFileDegraded)
+        return args
+      }
+
+      let degradedResult = await runProcess({
+        command: ffmpegCommand,
+        args: buildDegradedArgs('full'),
+        cwd: tmpDir,
+        timeoutMs: preview ? 90_000 : 900_000,
+      })
+      let degradedModeApplied = 'full'
+      if (degradedResult.code !== 0 || !fs.existsSync(outFileDegraded)) {
+        console.warn('video-branding: fallback com overlay falhou; tentando fallback minimo.', {
+          code: degradedResult.code,
+          stderr: degradedResult.stderr.slice(0, 3000),
+        })
+        degradedResult = await runProcess({
+          command: ffmpegCommand,
+          args: buildDegradedArgs('minimal'),
+          cwd: tmpDir,
+          timeoutMs: preview ? 90_000 : 900_000,
+        })
+        degradedModeApplied = 'minimal'
+      }
+      if (degradedResult.code !== 0 || !fs.existsSync(outFileDegraded)) {
+        console.warn('video-branding: fallback minimo falhou; tentando sem overlay.', {
+          code: degradedResult.code,
+          stderr: degradedResult.stderr.slice(0, 1000),
+        })
+        degradedResult = await runProcess({
+          command: ffmpegCommand,
+          args: buildDegradedArgs('none'),
+          cwd: tmpDir,
+          timeoutMs: preview ? 90_000 : 900_000,
+        })
+        degradedModeApplied = 'none'
+      }
+      if (degradedResult.code !== 0 || !fs.existsSync(outFileDegraded)) {
+        console.error('video-branding: ffmpeg degraded failed', {
+          code: degradedResult.code,
+          stderr: degradedResult.stderr.slice(0, 4000),
+        })
+        // Última barreira: entrega trailer cru para evitar quebra total da funcionalidade.
+        if (fs.existsSync(trailerFile)) {
+          fs.createReadStream(trailerFile).pipe(res)
+          return
+        }
+        try { res.destroy() } catch { void 0 }
+        return
+      }
+      console.log('video-branding: fallback gerado', { mode: degradedModeApplied })
+      const degradedStream = fs.createReadStream(outFileDegraded)
+      degradedStream.on('error', (err) => {
+        console.error('video-branding: degraded stream error', { message: String(err?.message || '') })
+        try {
+          if (!res.headersSent) res.status(503).json({ message: 'Não foi possível gerar com o trailer agora. Tente novamente.' })
+          else res.destroy()
+        } catch {
+          void 0
+        } finally {
+          cleanup()
+        }
+      })
+      res.on('close', () => {
+        try {
+          degradedStream.destroy()
+        } catch {
+          void 0
+        }
+      })
+      degradedStream.pipe(res)
+      return
     }
 
     let posterFile = ''
@@ -1281,7 +3422,8 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
     let yearText = ''
     let runtimeText = ''
     let genresText = ''
-    let ratingValue = 0
+    let seasonsText = ''
+    let ratingValue = requestVoteAverage
 
     // Always fetch details for metadata and poster
     if (true) {
@@ -1301,8 +3443,14 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
              const date = payload.release_date || payload.first_air_date || ''
              yearText = date ? date.split('-')[0] : ''
              runtimeText = payload.runtime ? `${payload.runtime} min` : ''
+             const seasonCount = Number(payload.number_of_seasons)
+             seasonsText = mediaType === 'tv' && Number.isFinite(seasonCount) && seasonCount > 0
+               ? `${Math.round(seasonCount)} ${Math.round(seasonCount) === 1 ? 'TEMPORADA' : 'TEMPORADAS'}`
+               : ''
              genresText = payload.genres?.map(g => g.name).slice(0, 2).join(', ') || ''
-             ratingValue = typeof payload.vote_average === 'number' && Number.isFinite(payload.vote_average) ? payload.vote_average : 0
+             if (typeof payload.vote_average === 'number' && Number.isFinite(payload.vote_average) && payload.vote_average > 0) {
+               ratingValue = payload.vote_average
+             }
 
              if (includeSynopsis) {
                const overviewRaw = typeof payload.overview === 'string' ? payload.overview.trim() : ''
@@ -1614,16 +3762,16 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
       const headerPhone = ''
 
       const headerScale = Math.max(0.5, Math.min(1.25, headerH / 220))
-      const headerCtaScale = hasHeaderCta ? 0.72 : 1
+      const headerCtaScale = hasHeaderCta ? 0.78 : 1
       const headerUiScale = headerScale * headerCtaScale
       const padX = Math.max(28, Math.round(64 * headerUiScale))
-      const iconBox = Math.max(52, Math.round(92 * headerUiScale))
+      const iconBox = Math.max(48, Math.round(84 * headerUiScale))
       const gap = Math.max(10, Math.round(18 * headerUiScale))
       const iconX = padX
       const iconY = Math.round((headerH - iconBox) / 2)
       const textX = iconX + iconBox + gap
-      const headerLogoW = Math.max(160, Math.round(targetW * (190 / 1080)))
-      const reservedRight = logoIndex >= 0 && hasHeaderCta ? 30 + headerLogoW + Math.round(38 * headerUiScale) : padX
+      const headerLogoW = Math.max(146, Math.round(targetW * (165 / 1080)))
+      const reservedRight = logoIndex >= 0 ? 26 + headerLogoW + Math.round(30 * headerUiScale) : padX
       const textW = targetW - textX - reservedRight
 
       const wrapHeaderLines = (context, text, maxWidth, maxLines) => {
@@ -1738,7 +3886,7 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
         }
 
         hctx.textAlign = 'left'
-        hctx.textBaseline = 'top'
+        hctx.textBaseline = 'middle'
         hctx.shadowColor = 'rgba(0,0,0,0.70)'
         hctx.shadowBlur = 12
         hctx.shadowOffsetY = 6
@@ -1746,13 +3894,13 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
         hctx.fillStyle = '#ffffff'
         hctx.font = `800 ${titleFontSize}px ${canvasFontBold}`
         for (let i = 0; i < titleLines.length; i++) {
-          hctx.fillText(titleLines[i], textX, startY + i * titleLineHeight)
+          hctx.fillText(titleLines[i], textX, startY + i * titleLineHeight + Math.round(titleLineHeight / 2))
         }
 
         if (headerPhone) {
           hctx.fillStyle = 'rgba(255,255,255,0.92)'
           hctx.font = `800 ${phoneFontSize}px ${canvasFontBold}`
-          hctx.fillText(headerPhone, textX, startY + titleLines.length * titleLineHeight + 16)
+          hctx.fillText(headerPhone, textX, startY + titleLines.length * titleLineHeight + 16 + Math.round(phoneFontSize / 2))
         }
       }
 
@@ -1869,15 +4017,27 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
     }
 
     const infoOverlay = ctx.createLinearGradient(0, 0, 0, infoH)
-    infoOverlay.addColorStop(0, videoThemeConfig.headerOverlayStops[0])
-    infoOverlay.addColorStop(0.55, videoThemeConfig.headerOverlayStops[1])
-    infoOverlay.addColorStop(1, videoThemeConfig.headerOverlayStops[2])
+    infoOverlay.addColorStop(0, 'rgba(2,6,23,0.32)')
+    infoOverlay.addColorStop(0.55, 'rgba(2,6,23,0.40)')
+    infoOverlay.addColorStop(1, 'rgba(2,6,23,0.55)')
     ctx.fillStyle = infoOverlay
     ctx.fillRect(0, 0, targetW, infoH)
     if (videoThemeConfig.headerColorWash) {
       ctx.fillStyle = videoThemeConfig.headerColorWash
       ctx.fillRect(0, 0, targetW, infoH)
     }
+    const lowerThemeShadow = ctx.createRadialGradient(
+      Math.round(targetW * 0.5),
+      Math.round(infoH * 0.72),
+      Math.round(targetW * 0.1),
+      Math.round(targetW * 0.5),
+      Math.round(infoH * 0.72),
+      Math.round(targetW * 0.7)
+    )
+    lowerThemeShadow.addColorStop(0, rgbaFromHex(themePrimary, 0.22))
+    lowerThemeShadow.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.fillStyle = lowerThemeShadow
+    ctx.fillRect(0, 0, targetW, infoH)
     
     const padX = Math.max(44, Math.round(targetW * 0.055))
     const isCompactInfo = infoH < 720
@@ -2002,7 +4162,7 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
     const tagsY = endTitleY + (isCompactInfo ? 12 : 18)
     const genresList = genresText.split(',').slice(0, 2).join(', ')
     const typeText = mediaType === 'tv' ? 'SÉRIE' : 'FILME'
-    const tagsText = `${typeText} • ${genresList} • ${yearText}`
+    const tagsText = [typeText, genresList, yearText, seasonsText].filter(Boolean).join(' • ')
 
     ctx.fillStyle = videoThemeConfig.tagsFill
     let tagsFontSize = 30
@@ -2056,13 +4216,15 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
     const btnY = footerY
     const synTopGap = isCompactInfo ? 22 : 30
 
-    const synBoxX = canShowPosterCard ? titleX : padX
-    const synBoxW = canShowPosterCard ? targetW - synBoxX - padX : targetW - padX * 2
     const synBaseY = tagsY + tagsH
     const synBaseBottomY = ratingPillBottomY ? Math.max(synBaseY, ratingPillBottomY) : synBaseY
-    const synBoxY = canShowPosterCard ? posterY + posterH + 30 : synBaseBottomY + synTopGap
+    const synBoxX = padX
+    const synBoxW = targetW - padX * 2
+    const synMinY = synBaseBottomY + synTopGap
+    const synAfterPosterY = canShowPosterCard ? posterY + posterH + 22 : synMinY
+    const synBoxY = Math.max(synMinY, synAfterPosterY)
     const synAvailableH = btnY - synBoxY - gap
-    const synBoxH = Math.max(60, synAvailableH)
+    const synBoxH = Math.max(60, Math.min(synAvailableH, Math.round(infoH * (isCompactInfo ? 0.56 : 0.62))))
 
     const synopsisStripW = isCompactInfo
       ? Math.max(44, Math.min(72, Math.round(synBoxW * 0.14)))
@@ -2139,8 +4301,8 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
       return out
     }
 
-    const minSynFont = layout === 'feed' ? 7 : 8
-    const maxSynFont = isCompactInfo ? 24 : 30
+    const minSynFont = layout === 'feed' ? 7 : 7
+    const maxSynFont = isCompactInfo ? 22 : 26
     const synColGap = isCompactInfo ? 16 : 20
     const synMaxCols = layout === 'feed' ? 3 : 2
 
@@ -2153,7 +4315,7 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
 
     for (let fs = maxSynFont; fs >= minSynFont; fs--) {
       ctx.font = `600 ${fs}px ${canvasFontRegular}`
-      const lh = Math.max(fs + 2, Math.round(fs * 1.22))
+      const lh = Math.max(fs + 3, Math.round(fs * 1.28))
       const maxLinesPerCol = Math.max(1, Math.floor(synTextH / lh))
       for (let cols = 1; cols <= synMaxCols; cols++) {
         const colW = cols === 1 ? synTextW : Math.floor((synTextW - synColGap * (cols - 1)) / cols)
@@ -2173,7 +4335,7 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
     }
 
     if (!synTextLines.length) {
-      ctx.font = `600 ${minSynFont}px ${canvasFontRegular}`
+      ctx.font = `500 ${minSynFont}px ${canvasFontRegular}`
       synTextFontSize = minSynFont
       synTextLineHeight = Math.max(minSynFont + 2, Math.round(minSynFont * 1.22))
       synCols = synMaxCols
@@ -2183,7 +4345,7 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
     }
 
     ctx.fillStyle = 'rgba(248,250,252,0.95)'
-    ctx.font = `600 ${synTextFontSize}px ${canvasFontRegular}`
+    ctx.font = `500 ${synTextFontSize}px ${canvasFontRegular}`
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
     if (synCols === 1) {
@@ -2342,7 +4504,7 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
         }
       } else {
         const footerText = footerKind === 'phone' ? formatPhoneForDisplay(phone) : String(website || '').trim()
-        let fontSize = footerKind === 'phone' ? 40 : 32
+        let fontSize = footerKind === 'phone' ? 34 : 30
         const maxW = Math.max(120, targetW - padX * 2)
         const measureGroup = (size) => {
           ctx.font = `800 ${size}px ${canvasFontBold}`
@@ -2362,7 +4524,7 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
         }
 
         const startX = Math.round((targetW - m.total) / 2)
-        const midY = Math.round(footerY + footerH / 2)
+        const midY = Math.round(footerY + footerH / 2) - (footerKind === 'phone' ? Math.round(targetH * 0.008) : 0)
 
         let x = startX
         ctx.fillStyle = 'rgba(255,255,255,0.92)'
@@ -2375,7 +4537,7 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
             const waIconPath = path.resolve('anexos', 'pngtree-whatsapp-icon-png-image_6315990.png')
             if (fs.existsSync(waIconPath)) {
               const waIcon = await loadImage(waIconPath)
-              const iconY = Math.round(footerY + (footerH - m.iconSize) / 2)
+              const iconY = Math.round(footerY + (footerH - m.iconSize) / 2) - Math.round(targetH * 0.008)
               ctx.save()
               ctx.globalAlpha = 1
               ctx.drawImage(waIcon, x, iconY, m.iconSize, m.iconSize)
@@ -2430,7 +4592,7 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
     }
     args.push(outFile)
     console.log('video-branding: running ffmpeg', { command: ffmpegCommand, args })
-    const renderResult = await runProcess({ command: ffmpegCommand, args, cwd: tmpDir, timeoutMs: preview ? 90_000 : 240_000 })
+    const renderResult = await runProcess({ command: ffmpegCommand, args, cwd: tmpDir, timeoutMs: preview ? 90_000 : 900_000 })
     if (renderResult.code !== 0 || !fs.existsSync(outFile)) {
       console.error('video-branding: ffmpeg failed', { code: renderResult.code, stderr: renderResult.stderr.slice(0, 5000) })
       res.status(503).json({ message: 'Não foi possível gerar com o trailer agora. Tente novamente.' })
@@ -2439,109 +4601,225 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
 
     res.setHeader('Content-Type', 'video/mp4')
     res.setHeader('Cache-Control', 'no-store')
+    if (forceDownload) res.setHeader('Content-Disposition', 'attachment; filename="video_branding_trailer.mp4"')
+    try {
+      const stats = fs.statSync(outFile)
+      if (Number.isFinite(stats.size) && stats.size > 0) res.setHeader('Content-Length', String(stats.size))
+    } catch {
+      void 0
+    }
     res.status(200)
-    fs.createReadStream(outFile).pipe(res)
+    const stream = fs.createReadStream(outFile)
+    stream.on('error', (err) => {
+      console.error('video-branding: stream error', { message: String(err?.message || '') })
+      try {
+        if (!res.headersSent) res.status(503).json({ message: 'Não foi possível gerar com o trailer agora. Tente novamente.' })
+        else res.destroy()
+      } catch {
+        void 0
+      } finally {
+        cleanup()
+      }
+    })
+    res.on('close', () => {
+      try {
+        stream.destroy()
+      } catch {
+        void 0
+      }
+    })
+    stream.pipe(res)
   } catch (e) {
     console.error('video-branding: unexpected error', { message: String(e?.message || '') })
-    res.status(503).json({ message: 'Não foi possível gerar com o trailer agora. Tente novamente.' })
+    try {
+      if (!res.headersSent) {
+        res.status(503).json({ message: 'Não foi possível gerar com o trailer agora. Tente novamente.' })
+      } else {
+        res.destroy()
+      }
+    } catch {
+      void 0
+    }
   }
 })
 
 app.post('/api/trailer/download', requireAuth, async (req, res) => {
   const trailerId = typeof req.body?.trailerId === 'string' ? req.body.trailerId.trim() : ''
   const trailerUrlRaw = typeof req.body?.trailerUrl === 'string' ? req.body.trailerUrl.trim() : ''
-  const trailerUrl = isYouTubeTrailerId(trailerId) ? buildYouTubeTrailerUrlFromId(trailerId) : trailerUrlRaw
+  let trailerUrl = isYouTubeTrailerId(trailerId) ? buildYouTubeTrailerUrlFromId(trailerId) : trailerUrlRaw
   const mediaType = req.body?.mediaType === 'tv' ? 'tv' : 'movie'
   const idRaw = req.body?.id
   const id = typeof idRaw === 'number' ? idRaw : Number(idRaw)
+  const previewSecondsRaw = Number(req.body?.previewSeconds)
+  const previewSeconds = Number.isFinite(previewSecondsRaw) && previewSecondsRaw > 0 ? Math.min(Math.max(Math.round(previewSecondsRaw), 6), 30) : 0
 
-  if (!trailerUrl) {
-    res.status(400).json({ message: 'Trailer indisponível no momento.' })
-    return
-  }
-  if (!isYouTubeTrailerUrl(trailerUrl)) {
-    res.status(400).json({ message: 'Trailer inválido.' })
-    return
-  }
   if (!Number.isFinite(id) || id <= 0) {
     res.status(400).json({ message: 'Conteúdo inválido.' })
     return
   }
 
-  const userContext = await readOptionalAuthUserContext(req)
-  const userType = userContext.userType
-
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mediahub-trailer-'))
-  const cleanup = () => safeRm(tmpDir)
+  let tmpDir = ''
+  let cleaned = false
+  const cleanup = () => {
+    if (cleaned) return
+    cleaned = true
+    if (tmpDir) safeRm(tmpDir)
+  }
+  res.on('finish', cleanup)
   res.on('close', cleanup)
 
   try {
+    const userContext = await readOptionalAuthUserContext(req)
+    const userType = userContext.userType
+    if (!trailerUrl || !isYouTubeTrailerUrl(trailerUrl)) {
+      trailerUrl = await resolveTrailerUrlFromProvider({ mediaType, id, userKey: userContext.userKey })
+    }
+    if (!trailerUrl || !isYouTubeTrailerUrl(trailerUrl)) {
+      res.status(404).json({ message: 'Trailer não encontrado para este conteúdo.' })
+      return
+    }
+
+    cleanupStaleTempFiles()
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mediahub-trailer-'))
+
     let trailerFile = path.join(tmpDir, 'trailer.mp4')
     const trailerTemplate = path.join(tmpDir, 'trailer.%(ext)s')
     const bundledYtdlpCommand = resolveBundledYtdlpCommand()
-    if (bundledYtdlpCommand) {
-      const downloadResult = await runProcess({
-        command: bundledYtdlpCommand,
-        args: ['--js-runtimes', 'node', '--no-playlist', '-f', 'b[ext=mp4][height<=1080]/b[ext=mp4]', '-o', trailerTemplate, trailerUrl],
-        cwd: tmpDir,
-        timeoutMs: 180_000,
-      })
-      if (downloadResult.code !== 0) {
-        console.error('trailer-download: bundled yt-dlp failed', { code: downloadResult.code, stderr: downloadResult.stderr.slice(0, 1000) })
-      }
-    }
-
-    if (!fs.existsSync(trailerFile)) {
+    const findDownloadedTrailerFile = () => {
       const files = fs
         .readdirSync(tmpDir)
-        .filter((name) => name.toLowerCase().startsWith('trailer.') && name.toLowerCase().endsWith('.mp4'))
+        .filter((name) => name.toLowerCase().startsWith('trailer.'))
       if (files.length > 0) trailerFile = path.join(tmpDir, files[0])
+      return fs.existsSync(trailerFile)
+    }
+    let ffmpegCommand = resolveFfmpegCommand()
+    if (ffmpegCommand !== 'ffmpeg' && !fs.existsSync(ffmpegCommand)) {
+      ffmpegCommand = 'ffmpeg'
+    }
+    const ffmpegOk = await hasBinary(ffmpegCommand, ['-version'])
+    const canUseDownloadSections = previewSeconds > 0 && ffmpegOk
+
+    const ytdlpFormat = previewSeconds > 0 ? 'best[ext=mp4][height<=480]/best[height<=480]' : 'best[ext=mp4]/best'
+    const acquireErrors = []
+
+    const buildYtdlpArgList = (withJsRuntime) => {
+      const parts = []
+      if (withJsRuntime) {
+        parts.push('--js-runtimes', 'node')
+      }
+      parts.push(
+        '--no-playlist',
+        '--extractor-retries',
+        '2',
+        '--retries',
+        '2',
+        '--fragment-retries',
+        '2',
+        '--socket-timeout',
+        '30',
+        '-f',
+        ytdlpFormat,
+        '-o',
+        trailerTemplate,
+        trailerUrl
+      )
+      if (canUseDownloadSections) {
+        parts.splice(parts.length - 3, 0, '--download-sections', `*0-${previewSeconds}`)
+      }
+      return parts
     }
 
-    if (!fs.existsSync(trailerFile)) {
-      const ytdl = resolveYtdl()
-      if (ytdl) {
+    const ytdlpCommandVariants = []
+    ytdlpCommandVariants.push({ command: 'py', baseArgs: ['-m', 'yt_dlp'] })
+    ytdlpCommandVariants.push({ command: 'python', baseArgs: ['-m', 'yt_dlp'] })
+    if (bundledYtdlpCommand) ytdlpCommandVariants.push({ command: bundledYtdlpCommand, baseArgs: [] })
+    ytdlpCommandVariants.push({ command: 'yt-dlp', baseArgs: [] })
+
+    const attemptYtdlpDownload = async (command, baseArgs, ytdlpArgList) => {
+      const cookieSources = [null, 'edge', 'chrome', 'firefox']
+      for (const cookieSource of cookieSources) {
+        const args = cookieSource
+          ? [...baseArgs, '--cookies-from-browser', cookieSource, ...ytdlpArgList]
+          : [...baseArgs, ...ytdlpArgList]
         try {
-          const info = await ytdl.getInfo(trailerUrl)
-          const mp4Formats = info?.formats?.filter((f) => f && f.container === 'mp4' && f.hasVideo && f.hasAudio) || []
-          const format = mp4Formats.length
-            ? mp4Formats.sort((a, b) => (Number(b.bitrate || 0) - Number(a.bitrate || 0)))[0]
-            : ytdl.chooseFormat(info.formats, { quality: 'highest', filter: 'audioandvideo' })
-          const stream = ytdl.downloadFromInfo(info, { format, requestOptions: { headers: { 'user-agent': 'Mozilla/5.0' } } })
-          await downloadToFile({ stream, filePath: trailerFile, timeoutMs: 180_000 })
+          const downloadResult = await runProcess({
+            command,
+            args,
+            cwd: tmpDir,
+            timeoutMs: 420_000,
+          })
+          if (downloadResult.code === 0) {
+            if (findDownloadedTrailerFile()) return true
+            continue
+          }
+          acquireErrors.push(String(downloadResult.stderr || `${command} failed (${cookieSource || 'no-cookies'})`))
         } catch (e) {
-          console.error('trailer-download: ytdl-core failed', { message: String(e?.message || '') })
+          acquireErrors.push(String(e?.message || `${command} spawn failed (${cookieSource || 'no-cookies'})`))
+        }
+      }
+      return false
+    }
+
+    const runAllYtdlpStrategies = async () => {
+      for (const withJs of [true, false]) {
+        if (findDownloadedTrailerFile()) return
+        const ytdlpArgList = buildYtdlpArgList(withJs)
+        for (const variant of ytdlpCommandVariants) {
+          if (findDownloadedTrailerFile()) return
+          const ok = await attemptYtdlpDownload(variant.command, variant.baseArgs, ytdlpArgList)
+          if (!ok) {
+            console.error('trailer-download: yt-dlp variant failed', { command: variant.command, withJsRuntime: withJs })
+          }
         }
       }
     }
 
-    if (!fs.existsSync(trailerFile)) {
-      const ytdlpOk = await hasBinary('yt-dlp', ['--version'])
-      if (!ytdlpOk) {
-        res.status(503).json({ message: userType === 'admin' ? 'Trailer não configurado no servidor.' : 'Trailer indisponível no momento.' })
-        return
-      }
-      const downloadResult = await runProcess({
-        command: 'yt-dlp',
-        args: ['--js-runtimes', 'node', '--no-playlist', '-f', 'b[ext=mp4][height<=1080]/b[ext=mp4]', '-o', trailerTemplate, trailerUrl],
-        cwd: tmpDir,
-        timeoutMs: 180_000,
-      })
-      if (downloadResult.code !== 0) {
-        console.error('trailer-download: yt-dlp failed', { code: downloadResult.code, stderr: downloadResult.stderr.slice(0, 1000) })
-        res.status(503).json({ message: 'Não foi possível baixar o trailer agora. Tente novamente.' })
-        return
-      }
-      if (!fs.existsSync(trailerFile)) {
-        const files = fs
-          .readdirSync(tmpDir)
-          .filter((name) => name.toLowerCase().startsWith('trailer.') && name.toLowerCase().endsWith('.mp4'))
-        if (files.length > 0) trailerFile = path.join(tmpDir, files[0])
+    // ytdl-core removido nesta rota (instável com mudanças do YouTube); yt-dlp é o caminho padrão.
+
+    if (!findDownloadedTrailerFile() && isYouTubeTrailerUrl(trailerUrl)) {
+      const ytdlpExec = resolveYtdlpExec()
+      if (ytdlpExec) {
+        try {
+          await ytdlpExec(trailerUrl, {
+            output: trailerTemplate,
+            format: previewSeconds > 0 ? ytdlpFormat : 'bv*+ba/b',
+            mergeOutputFormat: 'mp4',
+            ffmpegLocation: ffmpegCommand,
+            retries: 2,
+          })
+        } catch (ee) {
+          acquireErrors.push(String(ee?.message || 'youtube-dl-exec failed'))
+          console.error('trailer-download: youtube-dl-exec failed', {
+            message: String(ee?.message || ''),
+            stderr: String(ee?.stderr || ''),
+          })
+        }
       }
     }
 
-    if (!fs.existsSync(trailerFile)) {
-      res.status(503).json({ message: 'Não foi possível baixar o trailer agora. Tente novamente.' })
+    if (!findDownloadedTrailerFile()) {
+      await runAllYtdlpStrategies()
+    }
+
+    if (!findDownloadedTrailerFile() && bundledYtdlpCommand) {
+      cleanupStaleTempFiles()
+      for (const withJs of [true, false]) {
+        if (findDownloadedTrailerFile()) break
+        const ytdlpArgList = buildYtdlpArgList(withJs)
+        await attemptYtdlpDownload(bundledYtdlpCommand, [], ytdlpArgList)
+      }
+      findDownloadedTrailerFile()
+    }
+
+    if (!findDownloadedTrailerFile()) {
+      if (userType === 'admin' || process.env.NODE_ENV !== 'production') {
+        console.error('trailer-download: acquisition failed', { errors: acquireErrors.slice(0, 8) })
+      }
+      res.status(503).json({
+        message: 'Não foi possível baixar o trailer agora. Tente novamente em instantes.',
+        hint:
+          'No computador onde a API roda, instale o yt-dlp no PATH (ex.: winget install yt-dlp ou pip install yt-dlp) e confira se o ffmpeg está disponível. Em desenvolvimento, veja o terminal da API para o erro detalhado.',
+      })
       return
     }
 
@@ -2568,16 +4846,50 @@ app.post('/api/trailer/download', requireAuth, async (req, res) => {
         .toLowerCase()
         .slice(0, 80) || 'trailer'
     }
-    const downloadName = `${safeFileBaseName(titleText || 'trailer')}_trailer.mp4`
+    const extRaw = path.extname(trailerFile || '').toLowerCase()
+    const ext = extRaw && extRaw.startsWith('.') ? extRaw.slice(1) : (extRaw || '')
+    const safeExt = ext && /^[a-z0-9]+$/.test(ext) ? ext : 'mp4'
+    const contentType =
+      safeExt === 'mp4'
+        ? 'video/mp4'
+        : safeExt === 'webm'
+          ? 'video/webm'
+          : 'application/octet-stream'
+    const downloadName = `${safeFileBaseName(titleText || 'trailer')}_trailer.${safeExt}`
 
-    res.setHeader('Content-Type', 'video/mp4')
+    res.setHeader('Content-Type', contentType)
     res.setHeader('Cache-Control', 'no-store')
     res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`)
+    try {
+      const stats = fs.statSync(trailerFile)
+      if (Number.isFinite(stats.size) && stats.size > 0) res.setHeader('Content-Length', String(stats.size))
+    } catch {
+      void 0
+    }
     res.status(200)
-    fs.createReadStream(trailerFile).pipe(res)
+    const stream = fs.createReadStream(trailerFile)
+    stream.on('error', (err) => {
+      console.error('trailer-download: stream error', { message: String(err?.message || '') })
+      try {
+        if (!res.headersSent) res.status(503).json({ message: 'Não foi possível baixar o trailer agora. Tente novamente.' })
+        else res.destroy()
+      } catch {
+        void 0
+      } finally {
+        cleanup()
+      }
+    })
+    res.on('close', () => {
+      try {
+        stream.destroy()
+      } catch {
+        void 0
+      }
+    })
+    stream.pipe(res)
   } catch (e) {
     console.error('trailer-download: unexpected error', { message: String(e?.message || '') })
-    res.status(503).json({ message: 'Não foi possível baixar o trailer agora. Tente novamente.' })
+    if (!res.headersSent) res.status(503).json({ message: 'Não foi possível baixar o trailer agora. Tente novamente.' })
   }
 })
 
@@ -2666,6 +4978,7 @@ app.put('/api/admin/search-provider', requireAuth, requireAdmin, async (req, res
 
 app.get('/api/admin/dashboard', requireAuth, requireAdmin, async (_req, res) => {
   try {
+    await ensureSearchHistorySchema()
     const now = Date.now()
     const since24h = now - 24 * 60 * 60 * 1000
     const since7d = now - 7 * 24 * 60 * 60 * 1000
@@ -2707,8 +5020,17 @@ app.get('/api/admin/dashboard', requireAuth, requireAdmin, async (_req, res) => 
       `,
       [since7d]
     )
+    const topQueriesAllPromise = query(
+      `
+      select query, count(*)::int as value
+      from app_search_history
+      group by query
+      order by value desc
+      limit 10
+      `
+    )
 
-    const [usersTotal, usersActive, usersByType, premiumExpiringSoon, premiumExpired, searchesTotal, searches24h, topQueries7d] = await Promise.all([
+    const [usersTotal, usersActive, usersByType, premiumExpiringSoon, premiumExpired, searchesTotal, searches24h, topQueries7d, topQueriesAll] = await Promise.all([
       usersTotalPromise,
       usersActivePromise,
       usersByTypePromise,
@@ -2717,7 +5039,9 @@ app.get('/api/admin/dashboard', requireAuth, requireAdmin, async (_req, res) => 
       searchesTotalPromise,
       searches24hPromise,
       topQueries7dPromise,
+      topQueriesAllPromise,
     ])
+    const topRows = topQueries7d.rows.length > 0 ? topQueries7d.rows : topQueriesAll.rows
 
     const allowRegistrations = await getAllowRegistrations()
     const baseUrl = await getSearchProviderBaseUrl()
@@ -2740,7 +5064,7 @@ app.get('/api/admin/dashboard', requireAuth, requireAdmin, async (_req, res) => 
       searches: {
         total: searchesTotal.rows[0]?.value ?? 0,
         last24h: searches24h.rows[0]?.value ?? 0,
-        topQueries7d: topQueries7d.rows.map((row) => ({ query: row.query, count: row.value })),
+        topQueries7d: topRows.map((row) => ({ query: row.query, count: row.value })),
       },
       system: {
         allowRegistrations,
@@ -3261,28 +5585,441 @@ app.get('/api/search/details', requireAuth, async (req, res) => {
 
 app.get('/api/admin/settings', requireAuth, requireAdmin, async (_req, res) => {
   const allowRegistrations = await getAllowRegistrations()
-  res.json({ allowRegistrations })
+  const ticketsEnabled = await getTicketsEnabled()
+  res.json({ allowRegistrations, ticketsEnabled })
 })
 
 app.put('/api/admin/settings', requireAuth, requireAdmin, async (req, res) => {
   const allowRegistrations = typeof req.body?.allowRegistrations === 'boolean' ? req.body.allowRegistrations : null
-  if (allowRegistrations === null) {
+  const ticketsEnabled = typeof req.body?.ticketsEnabled === 'boolean' ? req.body.ticketsEnabled : null
+  if (allowRegistrations === null && ticketsEnabled === null) {
     res.status(400).json({ message: 'Dados inválidos.' })
     return
   }
 
   try {
-    await query(
-      `
-      insert into app_settings (key, value, updated_at)
-      values ($1, $2, now())
-      on conflict (key) do update set value = excluded.value, updated_at = now()
-      `,
-      ['allow_registrations', allowRegistrations ? 'true' : 'false']
-    )
+    if (allowRegistrations !== null) {
+      await query(
+        `
+        insert into app_settings (key, value, updated_at)
+        values ($1, $2, now())
+        on conflict (key) do update set value = excluded.value, updated_at = now()
+        `,
+        ['allow_registrations', allowRegistrations ? 'true' : 'false']
+      )
+    }
+    if (ticketsEnabled !== null) {
+      await setAppSettingValue({ key: 'tickets_enabled', value: ticketsEnabled ? 'true' : 'false' })
+    }
     res.status(204).end()
   } catch {
     res.status(500).json({ message: 'Não foi possível concluir. Tente novamente.' })
+  }
+})
+
+app.get('/api/admin/football/settings', requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const settings = await getFootballSettings()
+    const sources = await query(
+      `
+      select id, name, url, is_active, created_at, updated_at
+      from football_sources
+      order by created_at asc
+      `
+    )
+    res.json({
+      settings,
+      sources: sources.rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        url: row.url,
+        isActive: Boolean(row.is_active),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      })),
+    })
+  } catch {
+    res.status(500).json({ message: 'Não foi possível concluir. Tente novamente.' })
+  }
+})
+
+app.put('/api/admin/football/settings', requireAuth, requireAdmin, async (req, res) => {
+  const readTimeRaw = typeof req.body?.readTime === 'string' ? req.body.readTime.trim() : ''
+  const readWindowStartRaw = typeof req.body?.readWindowStart === 'string' ? req.body.readWindowStart.trim() : ''
+  const readWindowEndRaw = typeof req.body?.readWindowEnd === 'string' ? req.body.readWindowEnd.trim() : ''
+  const timeZoneRaw = typeof req.body?.timeZone === 'string' ? req.body.timeZone.trim() : ''
+  const readTime = parseClockTime(readTimeRaw)
+  const readWindowStart = parseClockTime(readWindowStartRaw)
+  const readWindowEnd = parseClockTime(readWindowEndRaw)
+  const timeZone = timeZoneRaw || null
+  const excludedChannelsInput = Array.isArray(req.body?.excludedChannels)
+    ? req.body.excludedChannels
+    : typeof req.body?.excludedChannels === 'string'
+      ? req.body.excludedChannels.split(/\r?\n|[,;]+/g)
+      : []
+  const excludedCompetitionsInput = Array.isArray(req.body?.excludedCompetitions)
+    ? req.body.excludedCompetitions
+    : typeof req.body?.excludedCompetitions === 'string'
+      ? req.body.excludedCompetitions.split(/\r?\n|[,;]+/g)
+      : []
+  const excludedChannels = [...new Set(excludedChannelsInput.map((v) => normalizeFootballFilterToken(v)).filter(Boolean))]
+  const excludedCompetitions = [...new Set(excludedCompetitionsInput.map((v) => normalizeFootballFilterToken(v)).filter(Boolean))]
+
+  if (!readTime && !readWindowStart && !readWindowEnd && !timeZone && excludedChannels.length === 0 && excludedCompetitions.length === 0) {
+    res.status(400).json({ message: 'Dados inválidos.' })
+    return
+  }
+
+  try {
+    const effectiveReadTime = readTime || readWindowEnd || DEFAULT_FOOTBALL_READ_TIME
+    await setAppSettingValue({ key: FOOTBALL_SETTINGS_KEYS.readTime, value: effectiveReadTime })
+    await setAppSettingValue({
+      key: FOOTBALL_SETTINGS_KEYS.readWindowStart,
+      value: readWindowStart || DEFAULT_FOOTBALL_READ_WINDOW_START,
+    })
+    await setAppSettingValue({
+      key: FOOTBALL_SETTINGS_KEYS.readWindowEnd,
+      value: readWindowEnd || DEFAULT_FOOTBALL_READ_WINDOW_END,
+    })
+    if (timeZone) {
+      await setAppSettingValue({ key: FOOTBALL_SETTINGS_KEYS.timeZone, value: timeZone })
+    }
+    await setAppSettingValue({
+      key: FOOTBALL_SETTINGS_KEYS.excludedChannels,
+      value: JSON.stringify(excludedChannels.length ? excludedChannels : DEFAULT_FOOTBALL_EXCLUDED_CHANNELS),
+    })
+    await setAppSettingValue({
+      key: FOOTBALL_SETTINGS_KEYS.excludedCompetitions,
+      value: JSON.stringify(excludedCompetitions.length ? excludedCompetitions : DEFAULT_FOOTBALL_EXCLUDED_COMPETITIONS),
+    })
+    res.status(204).end()
+  } catch {
+    res.status(500).json({ message: 'Não foi possível concluir. Tente novamente.' })
+  }
+})
+
+app.post('/api/admin/football/sources', requireAuth, requireAdmin, async (req, res) => {
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim().slice(0, 80) : ''
+  const url = typeof req.body?.url === 'string' ? req.body.url.trim().slice(0, 500) : ''
+  if (!name || !url || !isSafeExternalHttpUrl(url)) {
+    res.status(400).json({ message: 'Dados inválidos.' })
+    return
+  }
+  try {
+    const created = await query(
+      `
+      insert into football_sources (name, url, is_active, created_at, updated_at)
+      values ($1, $2, true, now(), now())
+      returning id, name, url, is_active, created_at, updated_at
+      `,
+      [name, url]
+    )
+    const row = created.rows[0]
+    res.status(201).json({
+      source: {
+        id: row.id,
+        name: row.name,
+        url: row.url,
+        isActive: Boolean(row.is_active),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      },
+    })
+  } catch {
+    res.status(500).json({ message: 'Não foi possível concluir. Tente novamente.' })
+  }
+})
+
+app.put('/api/admin/football/sources/:id', requireAuth, requireAdmin, async (req, res) => {
+  const sourceId = String(req.params?.id || '').trim()
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim().slice(0, 80) : ''
+  const url = typeof req.body?.url === 'string' ? req.body.url.trim().slice(0, 500) : ''
+  if (!sourceId || !name || !url || !isSafeExternalHttpUrl(url)) {
+    res.status(400).json({ message: 'Dados inválidos.' })
+    return
+  }
+  try {
+    const updated = await query(
+      `
+      update football_sources
+      set name = $1, url = $2, updated_at = now()
+      where id = $3
+      returning id, name, url, is_active, created_at, updated_at
+      `,
+      [name, url, sourceId]
+    )
+    if (updated.rowCount <= 0) {
+      res.status(404).json({ message: 'Fonte não encontrada.' })
+      return
+    }
+    const row = updated.rows[0]
+    res.json({
+      source: {
+        id: row.id,
+        name: row.name,
+        url: row.url,
+        isActive: Boolean(row.is_active),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      },
+    })
+  } catch {
+    res.status(500).json({ message: 'Não foi possível concluir. Tente novamente.' })
+  }
+})
+
+app.patch('/api/admin/football/sources/:id', requireAuth, requireAdmin, async (req, res) => {
+  const sourceId = String(req.params?.id || '').trim()
+  const isActive = typeof req.body?.isActive === 'boolean' ? req.body.isActive : null
+  if (!sourceId || isActive === null) {
+    res.status(400).json({ message: 'Dados inválidos.' })
+    return
+  }
+  try {
+    const updated = await query(
+      `
+      update football_sources
+      set is_active = $1, updated_at = now()
+      where id = $2
+      returning id, name, url, is_active, created_at, updated_at
+      `,
+      [isActive, sourceId]
+    )
+    if (updated.rowCount <= 0) {
+      res.status(404).json({ message: 'Fonte não encontrada.' })
+      return
+    }
+    const row = updated.rows[0]
+    res.json({
+      source: {
+        id: row.id,
+        name: row.name,
+        url: row.url,
+        isActive: Boolean(row.is_active),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      },
+    })
+  } catch {
+    res.status(500).json({ message: 'Não foi possível concluir. Tente novamente.' })
+  }
+})
+
+app.post('/api/admin/football/refresh', requireAuth, requireAdmin, async (req, res) => {
+  const dateRaw = typeof req.body?.date === 'string' ? req.body.date.trim() : ''
+  const explicitDate = /^\d{4}-\d{2}-\d{2}$/.test(dateRaw) ? dateRaw : null
+
+  try {
+    const settings = await getFootballSettings()
+    const nowParts = getZonedNowParts({ timeZone: settings.timeZone })
+    const date = explicitDate || getDefaultFootballScheduleDate({ nowDateIso: nowParts.date, nowTime: nowParts.time, readTime: settings.readWindowEnd || settings.readTime })
+    void refreshFootballSchedule({ scheduleDateIso: date, timeZone: settings.timeZone }).catch(() => undefined)
+    res.status(202).json({ started: true, date })
+  } catch {
+    res.status(500).json({ message: 'Não foi possível concluir. Tente novamente.' })
+  }
+})
+
+app.get('/api/football/schedule', requireAuth, requirePremiumOrAdmin, async (req, res) => {
+  const dateRaw = typeof req.query?.date === 'string' ? req.query.date.trim() : ''
+  const explicitDate = /^\d{4}-\d{2}-\d{2}$/.test(dateRaw) ? dateRaw : null
+
+  try {
+    const settings = await getFootballSettings()
+    const nowParts = getZonedNowParts({ timeZone: settings.timeZone })
+    const date = explicitDate || getDefaultFootballScheduleDate({ nowDateIso: nowParts.date, nowTime: nowParts.time, readTime: settings.readWindowEnd || settings.readTime })
+
+    const loadRows = async (targetDate) =>
+      query(
+        `
+        select distinct on (fs.source_id) fs.matches, fs.fetched_at
+        from football_schedules fs
+        join football_sources s on s.id = fs.source_id
+        where fs.schedule_date = $1
+          and s.is_active = true
+        order by fs.source_id, fs.fetched_at desc nulls last
+        `,
+        [targetDate]
+      )
+
+    const mergeRows = (rows) => {
+      const mergedMap = new Map()
+      let updatedAt = null
+      for (const row of rows) {
+        if (!updatedAt || (row.fetched_at && new Date(row.fetched_at).getTime() > new Date(updatedAt).getTime())) {
+          updatedAt = row.fetched_at
+        }
+        const list = Array.isArray(row.matches) ? row.matches : []
+        for (const item of list) {
+          const time = parseClockTime(item?.time)
+          const home = typeof item?.home === 'string' ? item.home.trim() : ''
+          const away = typeof item?.away === 'string' ? item.away.trim() : ''
+          const competition = typeof item?.competition === 'string' ? item.competition.trim() : ''
+          const channels = Array.isArray(item?.channels) ? item.channels.map((c) => String(c || '').trim()).filter(Boolean) : []
+          const homeCrestUrl = typeof item?.homeCrestUrl === 'string' ? item.homeCrestUrl.trim() : ''
+          const awayCrestUrl = typeof item?.awayCrestUrl === 'string' ? item.awayCrestUrl.trim() : ''
+          if (!time || !home || !away) continue
+          const key = `${time}::${normalizeFootballSearchText(home)}::${normalizeFootballSearchText(away)}`
+          const existing = mergedMap.get(key)
+          if (!existing) {
+            mergedMap.set(key, { time, home, away, competition, channels, homeCrestUrl, awayCrestUrl })
+            continue
+          }
+          if (!existing.competition && competition) existing.competition = competition
+          if (existing.channels.length === 0 && channels.length > 0) {
+            existing.channels = channels
+          } else if (channels.length > 0) {
+            existing.channels = uniqStrings([...existing.channels, ...channels])
+          }
+
+          const existingHome = typeof existing.homeCrestUrl === 'string' ? existing.homeCrestUrl.trim() : ''
+          const existingAway = typeof existing.awayCrestUrl === 'string' ? existing.awayCrestUrl.trim() : ''
+          if ((!existingHome || isPlaceholderFootballTeamCrestUrl(existingHome)) && homeCrestUrl && !isPlaceholderFootballTeamCrestUrl(homeCrestUrl)) {
+            existing.homeCrestUrl = homeCrestUrl
+          } else if (!existingHome && homeCrestUrl) {
+            existing.homeCrestUrl = homeCrestUrl
+          }
+          if ((!existingAway || isPlaceholderFootballTeamCrestUrl(existingAway)) && awayCrestUrl && !isPlaceholderFootballTeamCrestUrl(awayCrestUrl)) {
+            existing.awayCrestUrl = awayCrestUrl
+          } else if (!existingAway && awayCrestUrl) {
+            existing.awayCrestUrl = awayCrestUrl
+          }
+        }
+      }
+      const merged = [...mergedMap.values()]
+      merged.sort((a, b) => a.time.localeCompare(b.time))
+      return { merged, updatedAt }
+    }
+
+    const shouldExcludeFootballMatch = (match, settings) => {
+      const competition = normalizeFootballFilterToken(match?.competition || '')
+      const channels = Array.isArray(match?.channels)
+        ? match.channels.map((c) => normalizeFootballFilterToken(c)).filter(Boolean)
+        : []
+      const excludedCompetitions = Array.isArray(settings?.excludedCompetitions) ? settings.excludedCompetitions : []
+      const excludedChannels = Array.isArray(settings?.excludedChannels) ? settings.excludedChannels : []
+      const competitionExcluded = competition && excludedCompetitions.some((needle) => competition.includes(needle))
+      const exclusiveChannelsExcluded =
+        channels.length > 0 &&
+        excludedChannels.length > 0 &&
+        channels.every((channel) => excludedChannels.some((needle) => channel.includes(needle)))
+      return competitionExcluded || exclusiveChannelsExcluded
+    }
+
+    let responseDate = date
+    let result = await loadRows(responseDate)
+    let { merged, updatedAt } = mergeRows(result.rows)
+
+    if (!explicitDate && merged.length === 0) {
+      const fallbackDates = uniqStrings([nowParts.date, addDaysToIsoDate(nowParts.date, -1)])
+      for (const fallbackDate of fallbackDates) {
+        if (fallbackDate === responseDate) continue
+        const fallbackRows = await loadRows(fallbackDate)
+        const fallbackMerged = mergeRows(fallbackRows.rows)
+        if (fallbackMerged.merged.length > 0) {
+          responseDate = fallbackDate
+          merged = fallbackMerged.merged
+          updatedAt = fallbackMerged.updatedAt
+          break
+        }
+      }
+    }
+
+    merged = merged.filter((match) => !shouldExcludeFootballMatch(match, settings))
+
+    if (
+      shouldRefreshFootballScheduleBecauseTooFew({ merged, scheduleDateIso: responseDate }) ||
+      shouldRefreshFootballScheduleBecauseCrestsMissing({ merged, scheduleDateIso: responseDate })
+    ) {
+      void refreshFootballSchedule({ scheduleDateIso: responseDate, timeZone: settings.timeZone }).catch(() => undefined)
+    }
+
+    res.json({ date: responseDate, updatedAt, matches: merged })
+  } catch {
+    res.status(200).json({
+      date: explicitDate || new Date().toISOString().slice(0, 10),
+      updatedAt: null,
+      matches: [],
+    })
+  }
+})
+
+app.get('/api/football/crest', async (req, res) => {
+  const urlRaw = typeof req.query?.url === 'string' ? req.query.url.trim() : ''
+  if (!urlRaw || urlRaw.length > 800) {
+    res.status(400).end()
+    return
+  }
+  try {
+    const normalized = urlRaw.startsWith('//') ? `https:${urlRaw}` : urlRaw
+    if (!isSafeExternalHttpUrl(normalized)) {
+      res.status(403).end()
+      return
+    }
+    const url = new URL(normalized)
+    const response = await fetch(url.toString(), {
+      headers: {
+        'user-agent': 'Mozilla/5.0',
+        accept: 'image/*',
+        referer: `${url.origin}/`,
+      },
+    })
+    if (!response.ok) {
+      res.status(502).end()
+      return
+    }
+    const contentType = String(response.headers.get('content-type') || '')
+    if (!contentType.startsWith('image/')) {
+      res.status(502).end()
+      return
+    }
+    const buffer = Buffer.from(await response.arrayBuffer())
+    if (buffer.length > 600_000) {
+      res.status(413).end()
+      return
+    }
+    res.setHeader('Content-Type', contentType)
+    res.setHeader('Cache-Control', 'public, max-age=86400')
+    res.status(200).send(buffer)
+  } catch {
+    res.status(400).end()
+  }
+})
+
+app.get('/api/assets/image', requireAuth, requirePremiumOrAdmin, async (req, res) => {
+  const urlRaw = typeof req.query?.url === 'string' ? req.query.url.trim() : ''
+  if (!urlRaw || urlRaw.length > 800 || !isSafeExternalHttpUrl(urlRaw)) {
+    res.status(400).end()
+    return
+  }
+
+  try {
+    const url = new URL(urlRaw)
+    const response = await fetch(url.toString(), {
+      headers: {
+        'user-agent': 'Mozilla/5.0',
+        accept: 'image/*',
+      },
+    })
+    if (!response.ok) {
+      res.status(502).end()
+      return
+    }
+    const contentType = String(response.headers.get('content-type') || '')
+    if (!contentType.startsWith('image/')) {
+      res.status(502).end()
+      return
+    }
+    const buffer = Buffer.from(await response.arrayBuffer())
+    if (buffer.length > 2_500_000) {
+      res.status(413).end()
+      return
+    }
+    res.setHeader('Content-Type', contentType)
+    res.setHeader('Cache-Control', 'private, max-age=86400')
+    res.status(200).send(buffer)
+  } catch {
+    res.status(400).end()
   }
 })
 
@@ -3364,12 +6101,20 @@ app.post('/api/auth/login', async (req, res) => {
       return
     }
 
+    await deactivateExpiredPremiumByUserId(row.id)
+    const currentResult = await query('select * from app_users where id = $1 limit 1', [row.id])
+    const currentRow = currentResult.rows[0] || row
+    if (!currentRow.is_active) {
+      res.status(403).json({ message: 'Sua conta está inativa. Fale com o suporte.' })
+      return
+    }
+
     const ok = await verifyPassword({
       password,
       digest: {
-        hash: row.password_hash,
-        salt: row.password_salt,
-        iterations: row.password_iterations,
+        hash: currentRow.password_hash,
+        salt: currentRow.password_salt,
+        iterations: currentRow.password_iterations,
       },
     })
 
@@ -3378,8 +6123,8 @@ app.post('/api/auth/login', async (req, res) => {
       return
     }
 
-    const token = signToken({ sub: row.id })
-    res.json({ token, user: publicUserFromRow(row) })
+    const token = signToken({ sub: currentRow.id })
+    res.json({ token, user: publicUserFromRow(currentRow) })
   } catch {
     res.status(500).json({ message: 'Não foi possível concluir. Tente novamente.' })
   }
@@ -3405,13 +6150,18 @@ app.post('/api/auth/password-reset/start', async (req, res) => {
       `insert into app_password_reset_tokens (user_id, token_hash, expires_at) values ($1, $2, $3)`,
       [user.id, tokenHash, expiresAt]
     )
-    const baseUrl = APP_URL || (req.headers.origin || '').replace(/\/$/, '')
+    const origin = typeof req.headers.origin === 'string' ? req.headers.origin.trim().replace(/\/$/, '') : ''
+    const baseUrl = APP_URL || origin || (process.env.NODE_ENV !== 'production' ? `http://127.0.0.1:${process.env.VITE_PORT || 5173}` : '')
     const url = `${baseUrl}/reset?token=${rawToken}`
     try {
       await sendResetEmail({ to: user.email, url })
       res.json({ ok: true })
     } catch (e) {
       console.error('SMTP Error', e)
+      if (process.env.NODE_ENV !== 'production') {
+        res.json({ ok: true, devResetUrl: url, devToken: rawToken })
+        return
+      }
       res.status(503).json({ message: 'Envio indisponível. Tente mais tarde.' })
     }
   } catch (e) {
@@ -3761,20 +6511,12 @@ app.post('/api/telegram/send', requireAuth, async (req, res) => {
 app.post('/api/telegram/send-trailer-video', requireAuth, async (req, res) => {
   const trailerId = typeof req.body?.trailerId === 'string' ? req.body.trailerId.trim() : ''
   const trailerUrlRaw = typeof req.body?.trailerUrl === 'string' ? req.body.trailerUrl.trim() : ''
-  const trailerUrl = isYouTubeTrailerId(trailerId) ? buildYouTubeTrailerUrlFromId(trailerId) : trailerUrlRaw
+  let trailerUrl = isYouTubeTrailerId(trailerId) ? buildYouTubeTrailerUrlFromId(trailerId) : trailerUrlRaw
   const mediaType = req.body?.mediaType === 'tv' ? 'tv' : 'movie'
   const idRaw = req.body?.id
   const id = typeof idRaw === 'number' ? idRaw : Number(idRaw)
   const captionRaw = typeof req.body?.caption === 'string' ? req.body.caption.trim() : ''
 
-  if (!trailerUrl) {
-    res.status(400).json({ message: 'Trailer indisponível no momento.' })
-    return
-  }
-  if (!isYouTubeTrailerUrl(trailerUrl)) {
-    res.status(400).json({ message: 'Trailer inválido.' })
-    return
-  }
   if (!Number.isFinite(id) || id <= 0) {
     res.status(400).json({ message: 'Conteúdo inválido.' })
     return
@@ -3809,6 +6551,13 @@ app.post('/api/telegram/send-trailer-video', requireAuth, async (req, res) => {
 
     const userContext = await readOptionalAuthUserContext(req)
     const resolvedUserType = userContext.userType
+    if (!trailerUrl || !isYouTubeTrailerUrl(trailerUrl)) {
+      trailerUrl = await resolveTrailerUrlFromProvider({ mediaType, id, userKey: userContext.userKey })
+    }
+    if (!trailerUrl || !isYouTubeTrailerUrl(trailerUrl)) {
+      res.status(404).json({ message: 'Trailer não encontrado para este conteúdo.' })
+      return
+    }
 
     let ffmpegCommand = resolveFfmpegCommand()
     if (ffmpegCommand !== 'ffmpeg' && !fs.existsSync(ffmpegCommand)) {
@@ -4097,10 +6846,17 @@ app.post('/api/telegram/send-video-upload', requireAuth, upload.single('video'),
     if (caption) {
       form.append('caption', caption)
     }
-    const blob = new Blob([file.buffer], { type: file.mimetype })
-    form.append('video', blob, file.originalname || 'video.mp4')
+    const contentType = typeof file.mimetype === 'string' ? file.mimetype : 'application/octet-stream'
+    const isMp4 = contentType.toLowerCase().includes('mp4')
+    const filename = file.originalname || (isMp4 ? 'video.mp4' : 'video.webm')
+    const blob = new Blob([file.buffer], { type: contentType })
+    if (isMp4) {
+      form.append('video', blob, filename)
+    } else {
+      form.append('document', blob, filename)
+    }
 
-    const r = await fetch(`${telegramBase}/sendVideo`, { method: 'POST', body: form })
+    const r = await fetch(`${telegramBase}/${isMp4 ? 'sendVideo' : 'sendDocument'}`, { method: 'POST', body: form })
     if (!r.ok) {
       const err = await r.json().catch(() => ({}))
       console.error('Telegram Error:', err)
@@ -4291,6 +7047,7 @@ app.post(
 
 app.get('/api/history', requireAuth, async (req, res) => {
   try {
+    await ensureSearchHistorySchema()
     const result = await query(
       'select id, query, results, timestamp, type from app_search_history where user_id = $1 order by timestamp desc limit 10',
       [req.auth.userId]
@@ -4313,6 +7070,7 @@ app.post('/api/history', requireAuth, async (req, res) => {
   }
 
   try {
+    await ensureSearchHistorySchema()
     await query('delete from app_search_history where user_id = $1 and query = $2 and type = $3', [req.auth.userId, queryText, type])
     await query(
       `
@@ -4348,10 +7106,7 @@ app.post('/api/history', requireAuth, async (req, res) => {
 // Get System Settings (Public/Auth)
 app.get('/api/tickets/settings', async (req, res) => {
   try {
-    const result = await query("SELECT value FROM app_settings WHERE key = 'tickets_enabled'")
-    // Handle both string 'true' and boolean true just in case JSONB parsing varies
-    const val = result.rows[0]?.value
-    const enabled = val === 'true' || val === true || val === '"true"'
+    const enabled = await getTicketsEnabled()
     res.json({ enabled })
   } catch (e) {
     console.error(e)
@@ -4385,12 +7140,15 @@ app.get('/api/tickets', requireAuth, async (req, res) => {
 // Create Ticket (User)
 app.post('/api/tickets', requireAuth, async (req, res) => {
   try {
-    const { subject, message, priority = 'medium' } = req.body
+    const subject = typeof req.body?.subject === 'string' ? req.body.subject.trim() : ''
+    const message = typeof req.body?.message === 'string' ? req.body.message.trim() : ''
+    const priority = 'medium'
+    if (!subject || !message) {
+      return res.status(400).json({ message: 'Assunto e mensagem são obrigatórios.' })
+    }
     
     // Check if tickets are enabled
-    const settings = await query("SELECT value FROM app_settings WHERE key = 'tickets_enabled'")
-    const val = settings.rows[0]?.value
-    const enabled = val === 'true' || val === true || val === '"true"'
+    const enabled = await getTicketsEnabled()
     
     if (!enabled) {
        const user = await query('select type from app_users where id = $1', [req.auth.userId])
@@ -4544,6 +7302,24 @@ app.get('/api/tickets/stats', requireAuth, async (req, res) => {
   }
 })
 
+app.get('/api/football/schedule/refresh', async (req, res) => {
+  try {
+    const { date } = req.query;
+    const settings = await getFootballSettings();
+    const scheduleDateIso = date || getDefaultFootballScheduleDate({
+      nowDateIso: getZonedNowParts({ timeZone: settings.timeZone }).date,
+      nowTime: getZonedNowParts({ timeZone: settings.timeZone }).time,
+      readTime: settings.readTime
+    });
+
+    const results = await refreshFootballSchedule({ scheduleDateIso, timeZone: settings.timeZone });
+    res.json(results);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'Erro ao forçar a atualização da programação de futebol.' });
+  }
+});
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const distDir = path.join(__dirname, '..', 'dist')
@@ -4564,6 +7340,91 @@ if (fs.existsSync(distDir)) {
   })
 }
 
-app.listen(PORT, () => {
-  console.log(`API pronta em http://localhost:${PORT}`)
-})
+/** Em dev, libera PORT antes de ouvir (predev:api não roda em reinícios do node --watch). Produção: desativado. */
+const freeProjectListenPort = () => {
+  if (process.env.NODE_ENV === 'production') return
+  if (process.env.MEDIAHUB_SKIP_FREE_PORT === '1') return
+  try {
+    const script = path.join(__dirname, '..', 'scripts', 'free-api-port.mjs')
+    if (!fs.existsSync(script)) return
+    execFileSync(process.execPath, [script], {
+      cwd: path.join(__dirname, '..'),
+      stdio: 'ignore',
+      env: { ...process.env, PORT: String(PORT) },
+    })
+  } catch {
+    void 0
+  }
+}
+
+let server
+let listenRecoveryAttempts = 0
+const maxListenRecoveries = 3
+
+const attachHttpServer = () => {
+  freeProjectListenPort()
+  const runtimeBuildTag = 'video-branding-fallback-v10'
+  server = app.listen(PORT, () => {
+    startFootballScheduler()
+    console.log(`API pronta em http://localhost:${PORT} (${runtimeBuildTag})`)
+  })
+  // Geração de vídeo pode levar vários minutos sem enviar o primeiro byte; timeouts padrão do Node podem derrubar o socket.
+  try {
+    server.requestTimeout = 0
+    server.headersTimeout = 0
+    server.timeout = 0
+  } catch {
+    void 0
+  }
+
+  server.on('error', (err) => {
+    if (
+      err &&
+      err.code === 'EADDRINUSE' &&
+      process.env.NODE_ENV !== 'production' &&
+      listenRecoveryAttempts < maxListenRecoveries
+    ) {
+      listenRecoveryAttempts += 1
+      console.warn(
+        `[MediaHub] Porta ${PORT} ocupada — liberando processo antigo (tentativa ${listenRecoveryAttempts}/${maxListenRecoveries})…`
+      )
+      freeProjectListenPort()
+      const retry = () => attachHttpServer()
+      try {
+        server.close(() => setTimeout(retry, 500))
+      } catch {
+        setTimeout(retry, 500)
+      }
+      return
+    }
+    if (err && err.code === 'EADDRINUSE') {
+      console.error(
+        `[MediaHub] Porta ${PORT} já em uso. Feche o outro processo (outro terminal com npm run dev:api) ou libere a porta.`
+      )
+      console.error(
+        'PowerShell: Get-NetTCPConnection -LocalPort ' +
+          PORT +
+          ' -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }'
+      )
+      process.exit(1)
+    }
+    throw err
+  })
+}
+
+attachHttpServer()
+
+const gracefulShutdown = (signal) => {
+  console.log(`[MediaHub] Sinal ${signal}: encerrando servidor…`)
+  if (!server) {
+    process.exit(0)
+    return
+  }
+  server.close(() => {
+    process.exit(0)
+  })
+  setTimeout(() => process.exit(1), 10_000).unref()
+}
+
+process.once('SIGTERM', () => gracefulShutdown('SIGTERM'))
+process.once('SIGINT', () => gracefulShutdown('SIGINT'))

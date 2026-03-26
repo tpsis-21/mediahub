@@ -33,7 +33,6 @@ const SupportModal: React.FC<SupportModalProps> = ({ isOpen, onClose }) => {
   // New Ticket Form State
   const [isCreating, setIsCreating] = useState(false);
   const [newSubject, setNewSubject] = useState('');
-  const [newPriority, setNewPriority] = useState('medium');
   const [newInitialMessage, setNewInitialMessage] = useState('');
 
   // Admin State
@@ -83,14 +82,15 @@ const SupportModal: React.FC<SupportModalProps> = ({ isOpen, onClose }) => {
     }
     setIsSending(true);
     try {
-      await ticketService.createTicket({ subject: newSubject, message: newInitialMessage, priority: newPriority });
+      await ticketService.createTicket({ subject: newSubject, message: newInitialMessage, priority: 'medium' });
       toast({ title: 'Sucesso', description: 'Ticket criado com sucesso.' });
       setIsCreating(false);
       setNewSubject('');
       setNewInitialMessage('');
       fetchData();
     } catch (e) {
-      toast({ title: 'Erro', description: 'Não foi possível criar o ticket.', variant: 'destructive' });
+      const message = typeof (e as { message?: unknown })?.message === 'string' ? (e as { message: string }).message : null;
+      toast({ title: 'Erro', description: message || 'Não foi possível criar o ticket.', variant: 'destructive' });
     } finally {
       setIsSending(false);
     }
@@ -175,10 +175,11 @@ const SupportModal: React.FC<SupportModalProps> = ({ isOpen, onClose }) => {
   };
 
   const renderTicketList = (list: Ticket[], isAdmin = false) => (
-    <ScrollArea className="h-[400px]">
+    <ScrollArea className="h-[40vh] sm:h-[400px]">
       <div className="space-y-2 p-1">
         {list.map(ticket => (
-          <div 
+          <button
+            type="button"
             key={ticket.id} 
             className="flex items-center justify-between p-4 border rounded-lg hover:bg-accent cursor-pointer transition-colors"
             onClick={() => handleSelectTicket(ticket)}
@@ -196,7 +197,7 @@ const SupportModal: React.FC<SupportModalProps> = ({ isOpen, onClose }) => {
               </p>
             </div>
             <ChevronLeft className="h-4 w-4 rotate-180 text-muted-foreground" />
-          </div>
+          </button>
         ))}
         {list.length === 0 && (
           <div className="text-center py-10 text-muted-foreground">
@@ -210,7 +211,7 @@ const SupportModal: React.FC<SupportModalProps> = ({ isOpen, onClose }) => {
   if (!systemEnabled && user?.type !== 'admin' && !isLoading) {
     return (
       <Dialog open={isOpen} onOpenChange={onClose}>
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent variant="compact" className="sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive">
               <Lock className="h-5 w-5" />
@@ -231,7 +232,7 @@ const SupportModal: React.FC<SupportModalProps> = ({ isOpen, onClose }) => {
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl h-[80vh] flex flex-col p-0 gap-0">
+      <DialogContent variant="complex" className="sm:max-w-4xl h-[88vh] sm:h-[80vh] flex flex-col p-0 gap-0">
         <div className="p-6 pb-2 border-b">
           <DialogHeader>
             <DialogTitle className="text-2xl font-bold flex items-center justify-between">
@@ -339,23 +340,6 @@ const SupportModal: React.FC<SupportModalProps> = ({ isOpen, onClose }) => {
                    />
                  </div>
                  
-                 <div className="space-y-2">
-                   <label className="text-sm font-medium">Prioridade</label>
-                   <div className="flex gap-2">
-                     {['low', 'medium', 'high'].map(p => (
-                       <Button 
-                         key={p} 
-                         variant={newPriority === p ? 'default' : 'outline'} 
-                         size="sm"
-                         onClick={() => setNewPriority(p)}
-                         className="capitalize"
-                       >
-                         {p === 'low' ? 'Baixa' : p === 'medium' ? 'Média' : 'Alta'}
-                       </Button>
-                     ))}
-                   </div>
-                 </div>
-
                  <div className="space-y-2">
                    <label className="text-sm font-medium">Mensagem</label>
                    <textarea 

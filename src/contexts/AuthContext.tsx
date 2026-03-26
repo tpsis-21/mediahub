@@ -104,6 +104,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const token = getAuthToken();
     if (!token) {
+      // Evita estado inconsistente: usuário em cache sem token válido.
+      clearCachedAuthUser();
+      setUser(null);
       setIsLoading(false);
       return;
     }

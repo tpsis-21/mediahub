@@ -44,14 +44,32 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
   const [clearSearchIntegrationKey, setClearSearchIntegrationKey] = useState(false);
   const [searchConfigured, setSearchConfigured] = useState<boolean | null>(null);
   const [searchScope, setSearchScope] = useState<'user' | 'system' | 'none' | null>(null);
+  const [isSearchStatusLoading, setIsSearchStatusLoading] = useState(false);
+  const [searchStatusError, setSearchStatusError] = useState(false);
   const colorsDirtyRef = useRef(false);
   const searchKeyDirtyRef = useRef(false);
   const lastAutoColorLogoSigRef = useRef<string | null>(null);
 
+  const refreshSearchStatus = () => {
+    setIsSearchStatusLoading(true);
+    setSearchStatusError(false);
+    return apiRequest<{ configured: boolean; scope: 'user' | 'system' | 'none' }>({ path: '/api/search/status', auth: true })
+      .then((payload) => {
+        setSearchConfigured(payload.configured);
+        setSearchScope(payload.scope);
+      })
+      .catch(() => {
+        setSearchConfigured(null);
+        setSearchScope(null);
+        setSearchStatusError(true);
+      })
+      .finally(() => setIsSearchStatusLoading(false));
+  };
+
   useEffect(() => {
     let alive = true;
-    setSearchConfigured(null);
-    setSearchScope(null);
+    setIsSearchStatusLoading(true);
+    setSearchStatusError(false);
     apiRequest<{ configured: boolean; scope: 'user' | 'system' | 'none' }>({ path: '/api/search/status', auth: true })
       .then((payload) => {
         if (!alive) return;
@@ -62,11 +80,20 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
         if (!alive) return;
         setSearchConfigured(null);
         setSearchScope(null);
+        setSearchStatusError(true);
+      })
+      .finally(() => {
+        if (!alive) return;
+        setIsSearchStatusLoading(false);
       });
     return () => {
       alive = false;
     };
   }, []);
+
+  useEffect(() => {
+    setTelegramChatId(user?.telegramChatId || '');
+  }, [user?.telegramChatId]);
 
   const handlePrimaryColorChange = (value: string) => {
     colorsDirtyRef.current = true;
@@ -371,15 +398,7 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
             searchKeyDirtyRef.current = false;
             setSearchIntegrationKey('');
             setClearSearchIntegrationKey(false);
-            apiRequest<{ configured: boolean; scope: 'user' | 'system' | 'none' }>({ path: '/api/search/status', auth: true })
-              .then((payload) => {
-                setSearchConfigured(payload.configured);
-                setSearchScope(payload.scope);
-              })
-              .catch(() => {
-                setSearchConfigured(null);
-                setSearchScope(null);
-              });
+            await refreshSearchStatus();
           }
         } else {
           toast({
@@ -405,15 +424,7 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
           searchKeyDirtyRef.current = false;
           setSearchIntegrationKey('');
           setClearSearchIntegrationKey(false);
-          apiRequest<{ configured: boolean; scope: 'user' | 'system' | 'none' }>({ path: '/api/search/status', auth: true })
-            .then((payload) => {
-              setSearchConfigured(payload.configured);
-              setSearchScope(payload.scope);
-            })
-            .catch(() => {
-              setSearchConfigured(null);
-              setSearchScope(null);
-            });
+          await refreshSearchStatus();
         }
       } else {
         toast({
@@ -480,7 +491,7 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-3xl">
+      <DialogContent variant="complex" className="sm:max-w-3xl">
         <DialogHeader className="space-y-3">
           <div className="flex items-start justify-between gap-4">
             <DialogTitle className="flex items-center gap-2">
@@ -508,7 +519,7 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
         </DialogHeader>
 
         <Tabs defaultValue="account" className="space-y-4">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4">
             <TabsTrigger value="account">Conta</TabsTrigger>
             <TabsTrigger value="brand">Marca</TabsTrigger>
             <TabsTrigger value="telegram">Telegram</TabsTrigger>
@@ -791,6 +802,14 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant={user?.telegramChatId?.trim() ? 'outline' : 'secondary'}>
+                    Destino Telegram: {user?.telegramChatId?.trim() ? 'configurado' : 'não configurado'}
+                  </Badge>
+                  {telegramChatId.trim() !== (user?.telegramChatId || '').trim() && (
+                    <Badge variant="secondary">Alteração pendente de salvar</Badge>
+                  )}
+                </div>
                 <div className="grid gap-2">
                   <Label htmlFor="telegramChatId">ID do Telegram (chat_id)</Label>
                   <Input
@@ -801,6 +820,17 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
                     inputMode="text"
                     autoComplete="off"
                   />
+                  <div
+                    className={`rounded-md border px-3 py-2 text-xs ${
+                      user?.telegramChatId?.trim()
+                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                        : 'border-muted-foreground/20 bg-muted/20 text-muted-foreground'
+                    }`}
+                  >
+                    {user?.telegramChatId?.trim()
+                      ? 'Ja existe um chat_id configurado para envio via Telegram.'
+                      : 'Nenhum chat_id configurado no momento.'}
+                  </div>
                   <p className="text-sm text-muted-foreground">
                     Para descobrir seu ID: no Telegram, abra o bot @userinfobot, toque em Start e copie o ID exibido.
                     Para grupos/canais, adicione o bot no chat e repita (IDs podem começar com -100).
@@ -823,18 +853,37 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge
                     variant={
-                      searchConfigured === null
+                      isSearchStatusLoading
                         ? 'secondary'
+                        : searchStatusError
+                          ? 'destructive'
                         : searchConfigured
                           ? 'outline'
                           : 'destructive'
                     }
                   >
-                    {searchConfigured === null ? 'Status: —' : searchConfigured ? 'Status: configurado' : 'Status: não configurado'}
+                    {isSearchStatusLoading
+                      ? 'Status: verificando...'
+                      : searchStatusError
+                        ? 'Status: indisponível'
+                        : searchConfigured
+                          ? 'Status: configurado'
+                          : 'Status: não configurado'}
                   </Badge>
                   {searchScope && searchScope !== 'none' && (
                     <Badge variant="secondary">{searchScope === 'user' ? 'Escopo: sua conta' : 'Escopo: sistema'}</Badge>
                   )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      void refreshSearchStatus();
+                    }}
+                    disabled={isSearchStatusLoading}
+                  >
+                    {isSearchStatusLoading ? 'Verificando...' : 'Recarregar status'}
+                  </Button>
                 </div>
 
                 <div className="grid gap-2">

@@ -17,16 +17,53 @@ const normalizeApiBaseUrl = (raw: string): string => {
   return trimmed;
 };
 
+const isLocalApiBaseUrl = (raw: string): boolean => {
+  try {
+    const normalized = normalizeApiBaseUrl(raw);
+    if (!normalized) return false;
+    const url = new URL(normalized);
+    const host = (url.hostname || '').toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  } catch {
+    return false;
+  }
+};
+
 export const getApiBaseUrl = () => {
   const env = import.meta.env.VITE_API_BASE_URL;
-  if (typeof env === 'string' && env.trim().length > 0) return normalizeApiBaseUrl(env);
+  if (typeof env === 'string' && env.trim().length > 0) {
+    if (import.meta.env.DEV && isLocalApiBaseUrl(env)) return '';
+    return normalizeApiBaseUrl(env);
+  }
   if (!import.meta.env.DEV) return '';
-  const hostname =
-    typeof window !== 'undefined' && window.location && typeof window.location.hostname === 'string'
-      ? window.location.hostname
-      : 'localhost';
-  const host = hostname && hostname !== 'localhost' && hostname !== '127.0.0.1' ? hostname : 'localhost';
-  return `http://${host}:8080`;
+  return '';
+};
+
+/** URL absoluta para um path da API (ex.: `/api/search/image?size=w500&path=…`). Respeita `VITE_API_BASE_URL`. */
+export const buildApiUrl = (path: string): string => {
+  const base = getApiBaseUrl();
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  return `${base}${normalized}`;
+};
+
+/**
+ * Em dev, geração de vídeo pode levar minutos sem enviar bytes; o proxy do Vite às vezes derruba a conexão.
+ * Use esta URL para POST/stream longos: vai direto ao Express (mesma máquina), evitando o proxy.
+ */
+export const buildLongRunningApiUrl = (path: string): string => {
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  const base = getApiBaseUrl();
+  if (base) return `${base}${normalized}`;
+  if (import.meta.env.DEV) {
+    const port = String(import.meta.env.VITE_DEV_API_PORT || '8081').trim() || '8081';
+    const hostname =
+      typeof window !== 'undefined' && window.location?.hostname
+        ? window.location.hostname
+        : 'localhost';
+    const localHost = hostname === '127.0.0.1' ? '127.0.0.1' : 'localhost';
+    return `http://${localHost}:${port}${normalized}`;
+  }
+  return normalized;
 };
 
 const isHtmlResponse = (contentType: string, bodyPreview: string) => {
@@ -140,10 +177,9 @@ export const warmupApiConnection = async (): Promise<void> => {
   const now = Date.now();
   if (now - lastWarmupAt < 15_000) return;
   lastWarmupAt = now;
-  const baseUrl = getApiBaseUrl();
   try {
     await fetchWithTimeout(
-      `${baseUrl}/api/health`,
+      buildApiUrl('/api/health'),
       { method: 'GET', headers: { Accept: 'application/json' } },
       4_000
     );
@@ -180,10 +216,10 @@ export const apiRequest = async <T>(
       if (isLikelyNetworkError(e) && attempt < attemptDelays.length - 1) continue;
       const err: ApiError = {
         status: 0,
-        message: isLikelyNetworkError(e)
-          ? 'Não foi possível conectar ao servidor agora. Tente novamente em instantes.'
-          : isAbortError(e)
-            ? 'Tempo excedido. Aguarde alguns segundos e tente novamente.'
+        message: isAbortError(e)
+          ? 'Tempo excedido. Aguarde alguns segundos e tente novamente.'
+          : isLikelyNetworkError(e)
+            ? 'Não foi possível conectar ao servidor agora. Tente novamente em instantes.'
             : 'Não foi possível concluir. Tente novamente.',
       };
       throw err;
@@ -205,6 +241,14 @@ export const apiRequest = async <T>(
     const payload = await parseJsonResponse<unknown>(res);
     if (payload && typeof payload === 'object' && typeof (payload as { message?: unknown }).message === 'string') {
       message = (payload as { message: string }).message;
+    }
+    if (
+      import.meta.env.DEV &&
+      payload &&
+      typeof payload === 'object' &&
+      typeof (payload as { hint?: unknown }).hint === 'string'
+    ) {
+      console.warn('[api]', (payload as { hint: string }).hint);
     }
   } catch {
     // ignore
@@ -247,10 +291,10 @@ export const apiRequestRaw = async <T>(input: {
       if (isLikelyNetworkError(e) && attempt < attemptDelays.length - 1) continue;
       const err: ApiError = {
         status: 0,
-        message: isLikelyNetworkError(e)
-          ? 'Não foi possível conectar ao servidor agora. Tente novamente em instantes.'
-          : isAbortError(e)
-            ? 'Tempo excedido. Aguarde alguns segundos e tente novamente.'
+        message: isAbortError(e)
+          ? 'Tempo excedido. Aguarde alguns segundos e tente novamente.'
+          : isLikelyNetworkError(e)
+            ? 'Não foi possível conectar ao servidor agora. Tente novamente em instantes.'
             : 'Não foi possível concluir. Tente novamente.',
       };
       throw err;
@@ -272,6 +316,14 @@ export const apiRequestRaw = async <T>(input: {
     const payload = await parseJsonResponse<unknown>(res);
     if (payload && typeof payload === 'object' && typeof (payload as { message?: unknown }).message === 'string') {
       message = (payload as { message: string }).message;
+    }
+    if (
+      import.meta.env.DEV &&
+      payload &&
+      typeof payload === 'object' &&
+      typeof (payload as { hint?: unknown }).hint === 'string'
+    ) {
+      console.warn('[api]', (payload as { hint: string }).hint);
     }
   } catch {
     // ignore

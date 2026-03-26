@@ -71,3 +71,25 @@ Yes, you can!
 To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
 
 Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
+
+## UI modal pattern (DialogContent)
+
+For consistent responsiveness, every `DialogContent` must declare a `variant`.
+
+- Use `variant="compact"` for short/simple modals (login, confirmation, small forms).
+- Use `variant="complex"` for long flows (lists, previews, multi-section forms).
+- Do not render `DialogContent` without `variant` (TypeScript now enforces this).
+
+Examples:
+
+```tsx
+<DialogContent variant="compact" className="sm:max-w-md">
+  ...
+</DialogContent>
+```
+
+```tsx
+<DialogContent variant="complex" className="sm:max-w-4xl h-[88vh] sm:h-[80vh] p-0">
+  ...
+</DialogContent>
+```

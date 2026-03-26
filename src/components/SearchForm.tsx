@@ -93,6 +93,9 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading, bulkPreset
               </Label>
             </div>
           </RadioGroup>
+          <p className="mt-3 text-sm text-muted-foreground">
+            Escolha “Todos” para encontrar filmes e séries no mesmo termo. Você também pode usar “Nome (Ano)”.
+          </p>
         </div>
 
         <Tabs
@@ -122,6 +125,9 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading, bulkPreset
           </TabsList>
           
           <TabsContent value="individual" className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Busca individual: digite 1 conteúdo por vez. Exemplo: A Armadilha do Coelho (2025).
+            </p>
             <div className="flex space-x-2">
               <Input
                 placeholder={t('search.placeholder')}
@@ -142,6 +148,9 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading, bulkPreset
           </TabsContent>
           
           <TabsContent value="bulk" className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Busca em massa: cada linha é 1 conteúdo. Emojis e numeração de ranking são ignorados automaticamente.
+            </p>
             <Textarea
               placeholder={t('search.bulk.placeholder')}
               value={bulkQuery}
@@ -149,6 +158,13 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading, bulkPreset
               rows={6}
               className="resize-none"
             />
+            <p className="text-sm text-muted-foreground">
+              Exemplo:
+              <br />
+              🥇 Zootopia 2 (2025)
+              <br />
+              🥈 Máquina de Guerra (2026)
+            </p>
             <Button
               onClick={handleBulkSearch}
               disabled={isLoading || !bulkQuery.trim()}

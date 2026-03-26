@@ -6,6 +6,8 @@ import {
   History,
   LifeBuoy,
   Trophy,
+  CalendarDays,
+  ShieldCheck,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useI18n } from "@/contexts/I18nContext";
@@ -34,7 +36,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { user, getDaysUntilExpiry, isNearExpiry, isPremiumActive, isPremiumExpired } = useAuth();
   const [ticketsEnabled, setTicketsEnabled] = useState(false);
 
-  const appGradient = "linear-gradient(135deg, #2563eb, #7c3aed)";
+  const appGradient = "linear-gradient(135deg, hsl(var(--primary)), hsl(var(--accent)))";
 
   const openUserArea = () => window.dispatchEvent(new Event("mediahub:openUserAreaModal"));
   const isPremiumUser = isPremiumActive();
@@ -134,11 +136,18 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
-                <SidebarMenuButton asChild tooltip="Histórico">
-                  <a href="#history">
-                    <History />
-                    <span>Histórico</span>
-                  </a>
+                <SidebarMenuButton 
+                  onClick={() => {
+                    if (!isPremiumUser) {
+                      openUserArea();
+                      return;
+                    }
+                    window.dispatchEvent(new Event("mediahub:openFootballBannerModal"));
+                  }}
+                  tooltip="Gerar Banner Futebol"
+                >
+                  <CalendarDays />
+                  <span>Gerar Banner Futebol</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
@@ -157,7 +166,15 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
-                {(user?.type === 'admin' || ticketsEnabled) && (
+                <SidebarMenuButton asChild tooltip="Histórico">
+                  <a href="#history">
+                    <History />
+                    <span>Histórico</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              {(user?.type === 'admin' || ticketsEnabled) && (
+                <SidebarMenuItem>
                   <SidebarMenuButton 
                     onClick={() => window.dispatchEvent(new Event("mediahub:openSupportModal"))}
                     tooltip="Suporte & Tickets"
@@ -165,8 +182,18 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                     <LifeBuoy />
                     <span>Suporte & Tickets</span>
                   </SidebarMenuButton>
-                )}
-              </SidebarMenuItem>
+                </SidebarMenuItem>
+              )}
+              {user?.type === "admin" && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild tooltip="Painel Admin">
+                    <Link to="/admin">
+                      <ShieldCheck />
+                      <span>Painel Admin</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -178,7 +205,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               planTone === "danger"
                 ? "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800"
                 : "bg-sidebar-accent/50 border-sidebar-border"
-            }`}
+            } group-data-[collapsible=icon]:hidden`}
           >
             <div className="space-y-3">
               <div className="space-y-1">

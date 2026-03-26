@@ -6,9 +6,49 @@ import { useAuth } from '../contexts/AuthContext';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
-import { getApiBaseUrl } from '../services/apiClient';
+import { buildApiUrl } from '../services/apiClient';
 
 const MovieActionsModal = lazy(() => import('./MovieActionsModal'));
+
+class MovieModalErrorBoundary extends React.Component<
+  { onClose: () => void; children: React.ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error('movie_actions_modal_error', error);
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+        <div className="w-full max-w-sm rounded-lg bg-background p-6 shadow-lg">
+          <div className="space-y-3">
+            <h2 className="text-base font-semibold">Não foi possível abrir as ações</h2>
+            <p className="text-sm text-muted-foreground">
+              Recarregue a página e tente novamente.
+            </p>
+            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <Button type="button" variant="outline" onClick={this.props.onClose}>
+                Fechar
+              </Button>
+              <Button type="button" onClick={() => window.location.reload()}>
+                Recarregar
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+}
 
 interface MovieCardProps {
   movie: MovieData;
@@ -25,11 +65,10 @@ const MovieCard: React.FC<MovieCardProps> = ({ movie, isSelected, onToggleSelect
   const year = releaseDate ? new Date(releaseDate).getFullYear() : '';
   const imageUrl = (() => {
     if (!movie.poster_path) return '/placeholder.svg';
-    const baseUrl = getApiBaseUrl();
     const params = new URLSearchParams();
     params.set('size', 'w500');
     params.set('path', movie.poster_path);
-    return `${baseUrl}/api/search/image?${params.toString()}`;
+    return buildApiUrl(`/api/search/image?${params.toString()}`);
   })();
 
   return (
@@ -101,12 +140,21 @@ const MovieCard: React.FC<MovieCardProps> = ({ movie, isSelected, onToggleSelect
         </CardContent>
       </Card>
 
-      <Suspense fallback={null}>
-        {showActionsModal && user && (
-          <MovieActionsModal movie={movie} imageUrl={imageUrl} onClose={() => setShowActionsModal(false)} />
-        )}
-        {showActionsModal && !user && <MovieActionsModal movie={movie} imageUrl={imageUrl} onClose={() => setShowActionsModal(false)} />}
-      </Suspense>
+      <MovieModalErrorBoundary key={showActionsModal ? 'open' : 'closed'} onClose={() => setShowActionsModal(false)}>
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+              <div className="w-full max-w-xs rounded-lg bg-background p-6 text-center shadow-lg">
+                <span className="text-sm">Carregando…</span>
+              </div>
+            </div>
+          }
+        >
+          {showActionsModal && (
+            <MovieActionsModal movie={movie} imageUrl={imageUrl} onClose={() => setShowActionsModal(false)} />
+          )}
+        </Suspense>
+      </MovieModalErrorBoundary>
     </>
   );
 };

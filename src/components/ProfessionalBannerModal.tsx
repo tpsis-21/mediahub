@@ -1,6 +1,6 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X, Download, Send } from 'lucide-react';
+import { X, Download, Send, Loader2 } from 'lucide-react';
 import { MovieData } from '../services/searchService';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -9,7 +9,7 @@ import { Card, CardHeader, CardTitle, CardContent } from './ui/card';
 import { RadioGroup, RadioGroupItem } from './ui/radio-group';
 import { Label } from './ui/label';
 import { useToast } from '../hooks/use-toast';
-import { apiRequest, apiRequestRaw, getApiBaseUrl } from '../services/apiClient';
+import { apiRequest, apiRequestRaw, buildApiUrl } from '../services/apiClient';
 import { Checkbox } from './ui/checkbox';
 import { Textarea } from './ui/textarea';
 import { Input } from './ui/input';
@@ -73,6 +73,9 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
   const [selectedTemplate, setSelectedTemplate] = useState(1);
   const [selectedFormat, setSelectedFormat] = useState<'square' | 'vertical'>('square');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [taskStatus, setTaskStatus] = useState<'idle' | 'running' | 'cancelling'>('idle');
+  const [taskAction, setTaskAction] = useState<'download' | 'telegram' | null>(null);
+  const [taskStage, setTaskStage] = useState<'gerando' | 'enviando' | null>(null);
   const [previewUrls, setPreviewUrls] = useState<Record<number, string>>({});
   const previewUrlsRef = useRef<Record<number, string>>({});
   const previewSeq = useRef(0);
@@ -85,6 +88,8 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
   const [captionDirty, setCaptionDirty] = useState(false);
   const [detailsGenres, setDetailsGenres] = useState<string[]>([]);
   const [detailsRating, setDetailsRating] = useState<number | null>(null);
+  const generationRunRef = useRef(0);
+  const cancelRequestedRef = useRef(false);
 
   const title = movie.title || movie.name || 'Título';
   const year = movie.release_date || movie.first_air_date 
@@ -142,6 +147,11 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
   const footerWebsiteAvailable = typeof user?.website === 'string' && Boolean(user.website.trim());
 
   useEffect(() => {
+    if (!footerWebsiteAvailable && includeFooterWebsite) setIncludeFooterWebsite(false);
+    if (!footerPhoneAvailable && includeFooterPhone) setIncludeFooterPhone(false);
+  }, [footerPhoneAvailable, footerWebsiteAvailable, includeFooterPhone, includeFooterWebsite]);
+
+  useEffect(() => {
     type SearchDetailsResponse = {
       vote_average?: number;
       genres?: Array<{ id?: number | null; name?: string }>;
@@ -187,39 +197,30 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
     const baseTemplates: BannerTemplate[] = [
       {
         id: 1,
-        name: 'Cinematográfico Azul',
-        layout: 'classic',
-        primaryColor: '#1e40af',
-        secondaryColor: '#3b82f6',
-        gradientFrom: '#1e3a8a',
-        gradientTo: '#3b82f6',
-      },
-      {
-        id: 5,
-        name: 'Preto Elegante',
-        layout: 'classic',
-        primaryColor: '#1f2937',
-        secondaryColor: '#374151',
-        gradientFrom: '#000000',
-        gradientTo: '#1f2937',
-      },
-      {
-        id: 9,
-        name: 'Destaque Amarelo',
+        name: 'Padrão',
         layout: 'inspired',
-        primaryColor: '#fbbf24',
-        secondaryColor: '#d97706',
-        gradientFrom: '#fbbf24',
-        gradientTo: '#d97706',
+        primaryColor: '#3b82f6',
+        secondaryColor: '#8b5cf6',
+        gradientFrom: '#3b82f6',
+        gradientTo: '#8b5cf6',
       },
       {
-        id: 10,
-        name: 'Destaque Preto',
+        id: 2,
+        name: 'Escuro',
         layout: 'inspired',
         primaryColor: '#111827',
-        secondaryColor: '#374151',
-        gradientFrom: '#000000',
+        secondaryColor: '#111827',
+        gradientFrom: '#070911',
         gradientTo: '#111827',
+      },
+      {
+        id: 3,
+        name: 'Vermelho',
+        layout: 'inspired',
+        primaryColor: '#ef4444',
+        secondaryColor: '#b91c1c',
+        gradientFrom: '#ef4444',
+        gradientTo: '#b91c1c',
       },
     ];
 
@@ -229,21 +230,12 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
     return [
       {
         id: 100,
-        name: 'Cores da Minha Marca',
-        layout: 'classic',
+        name: 'Minha marca',
         primaryColor: brandPrimary!,
         secondaryColor: brandSecondary!,
         gradientFrom: brandPrimary!,
         gradientTo: brandSecondary!,
-      },
-      {
-        id: 101,
-        name: 'Destaque (Minha Marca)',
         layout: 'inspired',
-        primaryColor: brandPrimary!,
-        secondaryColor: brandSecondary!,
-        gradientFrom: brandPrimary!,
-        gradientTo: brandSecondary!,
       },
       ...baseTemplates,
     ];
@@ -262,11 +254,10 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
   );
 
   const getPosterUrl = (args: { posterPath: string; size: string }) => {
-    const baseUrl = getApiBaseUrl();
     const params = new URLSearchParams();
     params.set('size', args.size);
     params.set('path', args.posterPath);
-    return `${baseUrl}/api/search/image?${params.toString()}`;
+    return buildApiUrl(`/api/search/image?${params.toString()}`);
   };
 
   const loadImage = (src: string): Promise<HTMLImageElement> => {
@@ -589,9 +580,12 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           const posterW = 360;
           const posterH = 540;
           const posterX = pad;
-          const posterY = 160;
+          const contentAreaTop = 140;
+          const contentAreaBottom = safeBottom;
+          const availableHeight = Math.max(1, contentAreaBottom - contentAreaTop);
+          const posterY = contentAreaTop + Math.max(0, Math.round((availableHeight - posterH) / 2));
           const contentTop = posterY;
-          const contentBottom = Math.min(safeBottom, posterY + posterH);
+          const contentBottom = posterY + posterH;
 
           if (posterImg) {
             ctx.save();
@@ -618,7 +612,7 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
 
           const rightX = posterX + posterW + 54;
           const rightW = canvas.width - rightX - pad;
-          let y = contentTop + 4;
+          let y = contentTop;
 
           ctx.fillStyle = 'rgba(255,255,255,0.98)';
           ctx.textAlign = 'left';
@@ -629,7 +623,7 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           const metaBadgeH = 54;
           const badgeGap = 34;
           const synopsisMinH = 220;
-          const titleMaxH = Math.max(120, contentBottom - y - (metaBadgeH + badgeGap) - synopsisMinH - 18);
+          const titleMaxH = Math.max(90, contentBottom - y - (metaBadgeH + badgeGap) - synopsisMinH - 18);
           const fittedTitle = fitTextLines(ctx, {
             text: title,
             maxWidth: rightW,
@@ -640,9 +634,11 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
             lineHeightMultiplier: 1.14,
           });
           ctx.font = `900 ${fittedTitle.fontSize}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+          ctx.textBaseline = 'top';
           fittedTitle.lines.forEach((line, idx) => {
             ctx.fillText(line, rightX, y + idx * fittedTitle.lineHeight);
           });
+          ctx.textBaseline = 'alphabetic';
           y += fittedTitle.lines.length * fittedTitle.lineHeight + 24;
           ctx.shadowColor = 'transparent';
           ctx.shadowBlur = 0;
@@ -654,8 +650,26 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           if (effectiveRating > 0) metaParts.push(`⭐ ${effectiveRating.toFixed(1)}`);
           if (year) metaParts.push(String(year));
           const meta = metaParts.join(' • ');
-          const badgeW = Math.min(420, rightW);
           const badgeH = 54;
+          const badgePadX = 30;
+          const badgeMaxW = rightW;
+          const badgeMinW = Math.min(240, badgeMaxW);
+          let badgeFontSize = 20;
+          let badgeDisplayText = meta;
+          ctx.font = `900 ${badgeFontSize}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+          while (badgeFontSize > 15 && ctx.measureText(badgeDisplayText).width > badgeMaxW - badgePadX * 2) {
+            badgeFontSize -= 1;
+            ctx.font = `900 ${badgeFontSize}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+          }
+          if (ctx.measureText(badgeDisplayText).width > badgeMaxW - badgePadX * 2) {
+            let trimmed = badgeDisplayText;
+            while (trimmed.length > 1 && ctx.measureText(`${trimmed}…`).width > badgeMaxW - badgePadX * 2) {
+              trimmed = trimmed.slice(0, -1).trimEnd();
+            }
+            badgeDisplayText = `${trimmed}…`;
+          }
+          const badgeTextW = ctx.measureText(badgeDisplayText).width;
+          const badgeW = Math.max(badgeMinW, Math.min(badgeMaxW, Math.ceil(badgeTextW + badgePadX * 2)));
           const badgeG = ctx.createLinearGradient(rightX, y, rightX + badgeW, y + badgeH);
           badgeG.addColorStop(0, args.template.primaryColor);
           badgeG.addColorStop(1, args.template.secondaryColor);
@@ -664,15 +678,9 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           ctx.roundRect(rightX, y, badgeW, badgeH, 27);
           ctx.fill();
           ctx.fillStyle = 'rgba(255,255,255,0.98)';
-          let badgeFontSize = 20;
-          while (badgeFontSize > 16) {
-            ctx.font = `900 ${badgeFontSize}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
-            if (ctx.measureText(meta).width <= badgeW - 28) break;
-            badgeFontSize -= 1;
-          }
           ctx.font = `900 ${badgeFontSize}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
           ctx.textAlign = 'center';
-          ctx.fillText(meta, rightX + badgeW / 2, y + 35);
+          ctx.fillText(badgeDisplayText, rightX + badgeW / 2, y + 35);
           ctx.textAlign = 'left';
           y += badgeH + 34;
 
@@ -849,8 +857,28 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           if (effectiveRating > 0) badgeParts.push(`⭐ ${effectiveRating.toFixed(1)}`);
           if (year) badgeParts.push(String(year));
           const badgeText = badgeParts.join(' • ');
-          const badgeW = Math.min(520, canvas.width - pad * 2);
           const badgeH = 58;
+          const badgeMaxW = canvas.width - pad * 2;
+          const badgeMinW = Math.min(280, badgeMaxW);
+          const badgePadX = 30;
+          let badgeFontSize = 24;
+          let badgeDisplayText = badgeText;
+          ctx.font = `900 ${badgeFontSize}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+          while (badgeFontSize > 18 && ctx.measureText(badgeDisplayText).width > badgeMaxW - badgePadX * 2) {
+            badgeFontSize -= 1;
+            ctx.font = `900 ${badgeFontSize}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+          }
+          if (ctx.measureText(badgeDisplayText).width > badgeMaxW - badgePadX * 2) {
+            let trimmed = badgeDisplayText;
+            while (trimmed.length > 1 && ctx.measureText(`${trimmed}…`).width > badgeMaxW - badgePadX * 2) {
+              trimmed = trimmed.slice(0, -1).trimEnd();
+            }
+            badgeDisplayText = `${trimmed}…`;
+          }
+          const badgeW = Math.max(
+            badgeMinW,
+            Math.min(badgeMaxW, Math.ceil(ctx.measureText(badgeDisplayText).width + badgePadX * 2))
+          );
           const badgeX = (canvas.width - badgeW) / 2;
           const badgeG = ctx.createLinearGradient(badgeX, y, badgeX + badgeW, y + badgeH);
           badgeG.addColorStop(0, args.template.primaryColor);
@@ -860,14 +888,8 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           ctx.roundRect(badgeX, y, badgeW, badgeH, 29);
           ctx.fill();
           ctx.fillStyle = 'rgba(255,255,255,0.98)';
-          let badgeFontSize = 24;
-          while (badgeFontSize > 18) {
-            ctx.font = `900 ${badgeFontSize}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
-            if (ctx.measureText(badgeText).width <= badgeW - 28) break;
-            badgeFontSize -= 1;
-          }
           ctx.font = `900 ${badgeFontSize}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
-          ctx.fillText(badgeText, canvas.width / 2, y + 39);
+          ctx.fillText(badgeDisplayText, canvas.width / 2, y + 39);
           y += badgeH + badgeGap;
 
           const panelX = pad;
@@ -898,17 +920,22 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           }
         }
       } else if (isSquare) {
-        // Layout quadrado (1:1) - duas colunas
+        // Layout quadrado (1:1) - duas colunas (texto sempre alinhado à lateral da capa)
         const leftColumnWidth = canvas.width * 0.4;
         const rightColumnX = leftColumnWidth + 20;
         const rightColumnWidth = canvas.width - rightColumnX - 40;
+        const safeBottom = getFooterSafeBottom(canvas.height, brandLogoImg, true);
         
         // COLUNA ESQUERDA - IMAGEM
         const posterMargin = 40;
         const posterWidth = leftColumnWidth - (posterMargin * 2);
         const posterHeight = posterWidth * 1.5;
         const posterX = posterMargin;
-        const posterY = (canvas.height - posterHeight) / 2;
+        const contentAreaTop = 40;
+        const contentAreaBottom = safeBottom;
+        const posterY =
+          contentAreaTop +
+          Math.max(0, Math.round((Math.max(1, contentAreaBottom - contentAreaTop) - posterHeight) / 2));
 
         if (posterImg) {
           // Desenhar poster com bordas arredondadas e sombra
@@ -944,23 +971,24 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           ctx.fillText('DISPONÍVEL', posterX + posterWidth/2, posterY + posterHeight/2 + 20);
         }
 
-        // COLUNA DIREITA - CONTEÚDO
-        const safeBottom = getFooterSafeBottom(canvas.height, brandLogoImg, true);
-        const contentBottom = Math.min(safeBottom, posterY + posterHeight);
-        let currentY = posterY;
-        
-        // 1. TÍTULO
+        // COLUNA DIREITA - CONTEÚDO (sempre dentro da altura da capa)
+        const contentTop = posterY;
+        const contentBottom = posterY + posterHeight;
+        const contentHeight = Math.max(1, contentBottom - contentTop);
+        const rowGap = 16;
+        const badgeHeight = 52;
+        const synopsisMinH = Math.max(140, Math.round(contentHeight * 0.36));
+        let currentY = contentTop;
+
+        // 1) TÍTULO
         ctx.fillStyle = 'white';
         ctx.textAlign = 'left';
         ctx.shadowColor = 'rgba(0,0,0,0.35)';
         ctx.shadowBlur = 10;
         ctx.shadowOffsetX = 0;
         ctx.shadowOffsetY = 3;
-        const synopsisMinH = 180;
-        const badgeHeight = 52;
-        const badgeGap = 22;
-        const reservedAfterTitle = badgeHeight + badgeGap + synopsisMinH;
-        const titleMaxH = Math.max(120, contentBottom - currentY - reservedAfterTitle);
+        const reservedAfterTitle = badgeHeight + rowGap + synopsisMinH;
+        const titleMaxH = Math.max(60, contentBottom - currentY - reservedAfterTitle);
         const fittedTitle = fitTextLines(ctx, {
           text: title,
           maxWidth: rightColumnWidth,
@@ -971,61 +999,83 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           lineHeightMultiplier: 1.18,
         });
         ctx.font = `700 ${fittedTitle.fontSize}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
-        fittedTitle.lines.forEach((line, index) => {
-          ctx.fillText(line, rightColumnX, currentY + (index * fittedTitle.lineHeight));
+        const titleMaxLines = Math.max(1, Math.floor(titleMaxH / fittedTitle.lineHeight));
+        const titleLines = fittedTitle.lines.slice(0, titleMaxLines);
+        if (fittedTitle.lines.length > titleLines.length && titleLines.length) {
+          const lastIndex = titleLines.length - 1;
+          titleLines[lastIndex] = `${titleLines[lastIndex].replace(/\s+$/g, '')}…`;
+        }
+        ctx.textBaseline = 'top';
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(rightColumnX, contentTop, rightColumnWidth, titleMaxH + 6);
+        ctx.clip();
+        titleLines.forEach((line, index) => {
+          ctx.fillText(line, rightColumnX, currentY + index * fittedTitle.lineHeight);
         });
-
+        ctx.restore();
+        ctx.textBaseline = 'alphabetic';
         ctx.shadowColor = 'transparent';
         ctx.shadowBlur = 0;
-        
-        currentY += fittedTitle.lines.length * fittedTitle.lineHeight + 22;
+        currentY += titleLines.length * fittedTitle.lineHeight + rowGap;
 
-        // 2. RETÂNGULO COM ANO E TIPO
-        {
-          const badgeParts: string[] = [];
-          if (mediaType) badgeParts.push(mediaType);
-          const genres = detailsGenres.slice(0, 2).map((g) => (typeof g === 'string' ? g.trim() : '')).filter(Boolean);
-          if (genres.length) badgeParts.push(...genres);
-          if (effectiveRating > 0) badgeParts.push(`⭐ ${effectiveRating.toFixed(1)}`);
-          if (year) badgeParts.push(String(year));
-          const badgeText = badgeParts.join(' • ');
-          const badgeWidth = Math.min(rightColumnWidth, 520);
-          
-          // Gradiente do badge
-          const badgeGradient = ctx.createLinearGradient(
-            rightColumnX, currentY, 
-            rightColumnX + badgeWidth, currentY + badgeHeight
-          );
-          badgeGradient.addColorStop(0, args.template.primaryColor);
-          badgeGradient.addColorStop(1, args.template.secondaryColor);
-          
-          ctx.fillStyle = badgeGradient;
-          ctx.beginPath();
-          ctx.roundRect(rightColumnX, currentY, badgeWidth, badgeHeight, 26);
-          ctx.fill();
-          
-          ctx.fillStyle = 'white';
-          ctx.textAlign = 'center';
-          let badgeFontSize = 22;
-          while (badgeFontSize > 16) {
-            ctx.font = `900 ${badgeFontSize}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
-            if (ctx.measureText(badgeText).width <= badgeWidth - 28) break;
-            badgeFontSize -= 1;
-          }
+        // 2) BADGE
+        const badgeParts: string[] = [];
+        if (mediaType) badgeParts.push(mediaType);
+        const genres = detailsGenres.slice(0, 2).map((g) => (typeof g === 'string' ? g.trim() : '')).filter(Boolean);
+        if (genres.length) badgeParts.push(...genres);
+        if (effectiveRating > 0) badgeParts.push(`⭐ ${effectiveRating.toFixed(1)}`);
+        if (year) badgeParts.push(String(year));
+        const badgeText = badgeParts.join(' • ');
+        const badgeMaxW = rightColumnWidth;
+        const badgeMinW = Math.min(260, badgeMaxW);
+        const badgePadX = 28;
+        let badgeFontSize = 22;
+        let badgeDisplayText = badgeText;
+        ctx.font = `900 ${badgeFontSize}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+        while (badgeFontSize > 16 && ctx.measureText(badgeDisplayText).width > badgeMaxW - badgePadX * 2) {
+          badgeFontSize -= 1;
           ctx.font = `900 ${badgeFontSize}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
-          ctx.textBaseline = 'alphabetic';
-          ctx.fillText(badgeText, rightColumnX + badgeWidth / 2, currentY + 34);
-          
-          currentY += badgeHeight + badgeGap;
         }
+        if (ctx.measureText(badgeDisplayText).width > badgeMaxW - badgePadX * 2) {
+          let trimmed = badgeDisplayText;
+          while (trimmed.length > 1 && ctx.measureText(`${trimmed}…`).width > badgeMaxW - badgePadX * 2) {
+            trimmed = trimmed.slice(0, -1).trimEnd();
+          }
+          badgeDisplayText = `${trimmed}…`;
+        }
+        const badgeWidth = Math.max(
+          badgeMinW,
+          Math.min(badgeMaxW, Math.ceil(ctx.measureText(badgeDisplayText).width + badgePadX * 2))
+        );
+        const badgeGradient = ctx.createLinearGradient(
+          rightColumnX, currentY,
+          rightColumnX + badgeWidth, currentY + badgeHeight
+        );
+        badgeGradient.addColorStop(0, args.template.primaryColor);
+        badgeGradient.addColorStop(1, args.template.secondaryColor);
+        ctx.fillStyle = badgeGradient;
+        ctx.beginPath();
+        ctx.roundRect(rightColumnX, currentY, badgeWidth, badgeHeight, 26);
+        ctx.fill();
+        ctx.fillStyle = 'white';
+        ctx.textAlign = 'center';
+        ctx.font = `900 ${badgeFontSize}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(rightColumnX + 12, currentY, badgeWidth - 24, badgeHeight);
+        ctx.clip();
+        ctx.fillText(badgeDisplayText, rightColumnX + badgeWidth / 2, currentY + 34);
+        ctx.restore();
+        currentY += badgeHeight + rowGap;
 
+        // 3) SINOPSE
         const synopsisPanelX = rightColumnX;
         const synopsisPanelY = currentY;
         const synopsisPanelW = rightColumnWidth;
         const synopsisPanelPadding = 22;
         const synopsisLineHeight = 28;
-        const synopsisMaxHeight = Math.max(0, contentBottom - synopsisPanelY);
-
+        const synopsisMaxHeight = Math.max(1, contentBottom - synopsisPanelY);
         ctx.font = '20px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif';
         ctx.textAlign = 'left';
         const synopsisLines = wrapText(ctx, synopsis, synopsisPanelW - synopsisPanelPadding * 2);
@@ -1033,8 +1083,7 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           1,
           Math.min(synopsisLines.length, Math.floor((synopsisMaxHeight - synopsisPanelPadding * 2) / synopsisLineHeight))
         );
-        const synopsisPanelH = Math.min(synopsisMaxHeight, synopsisPanelPadding * 2 + maxSynopsisLines * synopsisLineHeight);
-
+        const synopsisPanelH = Math.max(1, Math.min(synopsisMaxHeight, synopsisPanelPadding * 2 + maxSynopsisLines * synopsisLineHeight));
         ctx.fillStyle = 'rgba(0,0,0,0.55)';
         ctx.beginPath();
         ctx.roundRect(synopsisPanelX, synopsisPanelY, synopsisPanelW, synopsisPanelH, 18);
@@ -1042,13 +1091,20 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
         ctx.strokeStyle = 'rgba(255,255,255,0.16)';
         ctx.lineWidth = 1;
         ctx.stroke();
-
         ctx.fillStyle = 'rgba(255,255,255,0.95)';
         ctx.shadowColor = 'rgba(0,0,0,0.25)';
         ctx.shadowBlur = 6;
         ctx.shadowOffsetX = 0;
         ctx.shadowOffsetY = 2;
-
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(
+          synopsisPanelX + synopsisPanelPadding,
+          synopsisPanelY + synopsisPanelPadding,
+          synopsisPanelW - synopsisPanelPadding * 2,
+          synopsisPanelH - synopsisPanelPadding * 2
+        );
+        ctx.clip();
         for (let i = 0; i < maxSynopsisLines; i++) {
           let line = synopsisLines[i];
           if (i === maxSynopsisLines - 1 && synopsisLines.length > maxSynopsisLines) {
@@ -1056,7 +1112,7 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           }
           ctx.fillText(line, synopsisPanelX + synopsisPanelPadding, synopsisPanelY + synopsisPanelPadding + 24 + i * synopsisLineHeight);
         }
-
+        ctx.restore();
         ctx.shadowColor = 'transparent';
         ctx.shadowBlur = 0;
 
@@ -1264,7 +1320,7 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
       }
 
       const footerPadding = 40;
-      const footerChoice = includeFooterPhone ? 'phone' : includeFooterWebsite ? 'website' : 'none';
+      const footerChoice: 'phone' | 'website' | 'none' = includeFooterPhone ? 'phone' : includeFooterWebsite ? 'website' : 'none';
       const phoneText =
         footerChoice === 'phone' && footerPhoneAvailable && typeof user?.phone === 'string' ? formatPhoneForDisplay(user.phone) : '';
       const websiteText =
@@ -1492,6 +1548,14 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
     });
   };
 
+  const cancelBannerTask = () => {
+    if (taskStatus !== 'running') return;
+    cancelRequestedRef.current = true;
+    generationRunRef.current += 1;
+    setTaskStatus('cancelling');
+    setTaskStage(null);
+  };
+
   const generateBannerBlob = async (destination: 'download' | 'telegram') => {
     const format = formatDimensions[selectedFormat];
     const template = visibleTemplates.find((t) => t.id === selectedTemplate) ?? visibleTemplates[0] ?? templates[0];
@@ -1502,12 +1566,19 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
   };
 
   const handleDownloadBanner = () => {
-    if (isGenerating) return;
+    if (isGenerating || taskStatus !== 'idle') return;
     setIsGenerating(true);
+    setTaskStatus('running');
+    setTaskAction('download');
+    setTaskStage('gerando');
+    cancelRequestedRef.current = false;
+    const runId = generationRunRef.current + 1;
+    generationRunRef.current = runId;
 
     void (async () => {
       try {
         const { blob } = await generateBannerBlob('download');
+        if (cancelRequestedRef.current || runId !== generationRunRef.current) throw new Error('Operação cancelada pelo usuário.');
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
@@ -1522,16 +1593,33 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           description: 'Banner gerado e baixado com sucesso!',
         });
       } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : '';
+        if (message.toLowerCase().includes('cancelada')) {
+          toast({
+            title: 'Geração cancelada',
+            description: 'A geração do banner foi cancelada.',
+          });
+          return;
+        }
         handleBannerError(error);
       } finally {
         setIsGenerating(false);
+        setTaskStatus('idle');
+        setTaskAction(null);
+        setTaskStage(null);
       }
     })();
   };
 
   const handleSendBannerToTelegram = () => {
-    if (isGenerating) return;
+    if (isGenerating || taskStatus !== 'idle') return;
     setIsGenerating(true);
+    setTaskStatus('running');
+    setTaskAction('telegram');
+    setTaskStage('gerando');
+    cancelRequestedRef.current = false;
+    const runId = generationRunRef.current + 1;
+    generationRunRef.current = runId;
 
     void (async () => {
       try {
@@ -1541,6 +1629,8 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
         }
 
         const { blob } = await generateBannerBlob('telegram');
+        if (cancelRequestedRef.current || runId !== generationRunRef.current) throw new Error('Operação cancelada pelo usuário.');
+        setTaskStage('enviando');
 
         const text = (captionDirty ? caption : buildCaption({ includeSynopsis: includeSynopsisInCaption })).trim();
         const params = new URLSearchParams();
@@ -1560,9 +1650,20 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           description: 'Banner enviado para o Telegram.',
         });
       } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : '';
+        if (message.toLowerCase().includes('cancelada')) {
+          toast({
+            title: 'Geração cancelada',
+            description: 'A geração do banner foi cancelada.',
+          });
+          return;
+        }
         handleBannerError(error);
       } finally {
         setIsGenerating(false);
+        setTaskStatus('idle');
+        setTaskAction(null);
+        setTaskStage(null);
       }
     })();
   };
@@ -1689,18 +1790,20 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
               <div className="space-y-3">
                 <Label className="text-base font-semibold block">Rodapé do banner (opcional)</Label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <Label className="flex items-center gap-2">
-                  <Checkbox
-                    checked={includeFooterWebsite}
-                    onCheckedChange={(v) => {
-                      const next = Boolean(v);
-                      setIncludeFooterWebsite(next);
-                      if (next) setIncludeFooterPhone(false);
-                    }}
-                    disabled={isGenerating || !footerWebsiteAvailable}
-                  />
-                  Incluir site
-                </Label>
+                {footerWebsiteAvailable && (
+                  <Label className="flex items-center gap-2">
+                    <Checkbox
+                      checked={includeFooterWebsite}
+                      onCheckedChange={(v) => {
+                        const next = Boolean(v);
+                        setIncludeFooterWebsite(next);
+                        if (next) setIncludeFooterPhone(false);
+                      }}
+                      disabled={isGenerating}
+                    />
+                    Incluir site
+                  </Label>
+                )}
                 <Label className="flex items-center gap-2">
                   <Checkbox
                     checked={includeFooterPhone}
@@ -1714,7 +1817,7 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
                   Incluir telefone
                 </Label>
               </div>
-              {!footerWebsiteAvailable || !footerPhoneAvailable ? (
+              {!footerWebsiteAvailable && !footerPhoneAvailable ? (
                 <p className="text-sm text-muted-foreground">Para habilitar, cadastre site e/ou telefone na Minha Área.</p>
               ) : (
                 <p className="text-sm text-muted-foreground">O texto aparece no rodapé junto da logo.</p>
@@ -1765,11 +1868,40 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
           </div>
 
           {/* Botão de Download */}
+          <div className="space-y-2">
+            {taskStatus !== 'idle' && (
+              <p className="text-xs text-muted-foreground">
+                {taskStatus === 'cancelling'
+                  ? 'Cancelando geração...'
+                  : taskAction === 'telegram'
+                    ? taskStage === 'enviando'
+                      ? 'Enviando no Telegram...'
+                      : 'Gerando banner para envio...'
+                    : 'Gerando banner para download...'}
+              </p>
+            )}
           <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+            {taskStatus !== 'idle' && (
+              <Button
+                variant="destructive"
+                onClick={cancelBannerTask}
+                disabled={taskStatus === 'cancelling'}
+                className="flex items-center gap-2"
+              >
+                {taskStatus === 'cancelling' ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Cancelando...
+                  </>
+                ) : (
+                  'Cancelar geração'
+                )}
+              </Button>
+            )}
             <Button
               variant="outline"
               onClick={handleDownloadBanner}
-              disabled={isGenerating}
+              disabled={isGenerating || taskStatus !== 'idle'}
               className="flex items-center space-x-2"
             >
               <Download className="h-4 w-4" />
@@ -1779,12 +1911,13 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
             </Button>
             <Button
               onClick={handleSendBannerToTelegram}
-              disabled={isGenerating}
+              disabled={isGenerating || taskStatus !== 'idle'}
               className="flex items-center space-x-2"
             >
               <Send className="h-4 w-4" />
               <span>{isGenerating ? 'Gerando...' : 'Enviar no Telegram'}</span>
             </Button>
+          </div>
           </div>
         </CardContent>
       </Card>

@@ -1,11 +1,12 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { BarChart3, Eye, EyeOff, Key, Pencil, Plus, Settings, Trash2, Users, X } from 'lucide-react';
+import { BarChart3, CalendarDays, Eye, EyeOff, Key, Pencil, Plus, Settings, Trash2, Users, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
+import { Textarea } from './ui/textarea';
 import { Card, CardHeader, CardTitle, CardContent } from './ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Badge } from './ui/badge';
@@ -57,6 +58,37 @@ interface SearchProviderStatus {
   primaryConfigured: boolean;
   secondaryConfigured: boolean;
 }
+interface AdminTelegramStatus {
+  configured: boolean;
+}
+interface AdminSystemSettings {
+  allowRegistrations: boolean;
+  ticketsEnabled: boolean;
+}
+
+interface FootballSource {
+  id: string;
+  name: string;
+  url: string;
+  isActive: boolean;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+}
+
+interface FootballSettings {
+  readTime: string;
+  readWindowStart?: string;
+  readWindowEnd?: string;
+  timeZone: string;
+  lastRunDate: string | null;
+  excludedChannels?: string[];
+  excludedCompetitions?: string[];
+}
+
+interface FootballAdminPayload {
+  settings: FootballSettings;
+  sources: FootballSource[];
+}
 
 const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
   const navigate = useNavigate();
@@ -75,6 +107,11 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
   const [searchProviderSecondaryKey, setSearchProviderSecondaryKey] = useState('');
   const [showSearchProviderPrimaryKey, setShowSearchProviderPrimaryKey] = useState(false);
   const [showSearchProviderSecondaryKey, setShowSearchProviderSecondaryKey] = useState(false);
+  const [telegramStatus, setTelegramStatus] = useState<AdminTelegramStatus | null>(null);
+  const [isTelegramLoading, setIsTelegramLoading] = useState(false);
+  const [isSavingTelegram, setIsSavingTelegram] = useState(false);
+  const [telegramBotToken, setTelegramBotToken] = useState('');
+  const [showTelegramBotToken, setShowTelegramBotToken] = useState(false);
   const [isCreatingUser, setIsCreatingUser] = useState(false);
   const [isResettingPasswordFor, setIsResettingPasswordFor] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AdminUser | null>(null);
@@ -83,6 +120,23 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [isUpdatingUser, setIsUpdatingUser] = useState(false);
   const [showEditUserPassword, setShowEditUserPassword] = useState(false);
+  const [ticketsEnabled, setTicketsEnabled] = useState(true);
+  const [isSavingTicketsSettings, setIsSavingTicketsSettings] = useState(false);
+  const [footballSettings, setFootballSettings] = useState<FootballSettings | null>(null);
+  const [footballSources, setFootballSources] = useState<FootballSource[]>([]);
+  const [isFootballLoading, setIsFootballLoading] = useState(false);
+  const [isSavingFootballSettings, setIsSavingFootballSettings] = useState(false);
+  const [footballReadWindowStart, setFootballReadWindowStart] = useState('19:30');
+  const [footballReadWindowEnd, setFootballReadWindowEnd] = useState('20:00');
+  const [footballExcludedChannels, setFootballExcludedChannels] = useState('PPV ONEFOOTBALL');
+  const [footballExcludedCompetitions, setFootballExcludedCompetitions] = useState('Inglês 5ª Divisão');
+  const [footballSourceDraft, setFootballSourceDraft] = useState({ name: '', url: '' });
+  const [isCreatingFootballSource, setIsCreatingFootballSource] = useState(false);
+  const [editingFootballSourceId, setEditingFootballSourceId] = useState<string | null>(null);
+  const [footballSourceEdit, setFootballSourceEdit] = useState({ name: '', url: '' });
+  const [isUpdatingFootballSource, setIsUpdatingFootballSource] = useState(false);
+  const [isRefreshingFootball, setIsRefreshingFootball] = useState(false);
+  const [footballRefreshDate, setFootballRefreshDate] = useState('');
   const [editUser, setEditUser] = useState({
     id: '',
     name: '',
@@ -119,6 +173,43 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
       .then((payload) => setSearchProviderStatus(payload))
       .catch(() => setSearchProviderStatus(null))
       .finally(() => setIsSearchProviderLoading(false));
+
+    setIsTelegramLoading(true);
+    apiRequest<AdminTelegramStatus>({ path: '/api/admin/telegram', auth: true })
+      .then((payload) => setTelegramStatus(payload))
+      .catch(() => setTelegramStatus(null))
+      .finally(() => setIsTelegramLoading(false));
+
+    apiRequest<AdminSystemSettings>({ path: '/api/admin/settings', auth: true })
+      .then((payload) => {
+        setAllowNewRegistrations(Boolean(payload.allowRegistrations));
+        setTicketsEnabled(typeof payload.ticketsEnabled === 'boolean' ? payload.ticketsEnabled : true);
+      })
+      .catch(() => {});
+
+    setIsFootballLoading(true);
+    apiRequest<FootballAdminPayload>({ path: '/api/admin/football/settings', auth: true })
+      .then((payload) => {
+        setFootballSettings(payload.settings);
+        setFootballSources(payload.sources);
+        setFootballReadWindowStart(payload.settings.readWindowStart || '19:30');
+        setFootballReadWindowEnd(payload.settings.readWindowEnd || '20:00');
+        setFootballExcludedChannels(
+          Array.isArray(payload.settings.excludedChannels) && payload.settings.excludedChannels.length
+            ? payload.settings.excludedChannels.join('\n')
+            : 'PPV ONEFOOTBALL'
+        );
+        setFootballExcludedCompetitions(
+          Array.isArray(payload.settings.excludedCompetitions) && payload.settings.excludedCompetitions.length
+            ? payload.settings.excludedCompetitions.join('\n')
+            : 'Inglês 5ª Divisão'
+        );
+      })
+      .catch(() => {
+        setFootballSettings(null);
+        setFootballSources([]);
+      })
+      .finally(() => setIsFootballLoading(false));
   }, []);
   
   const [newUser, setNewUser] = useState({
@@ -138,6 +229,39 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
       return hay.includes(q);
     });
   }, [users, usersQuery]);
+
+  const searchPrimaryBadge = useMemo(() => {
+    if (isSearchProviderLoading && !searchProviderStatus) return { variant: 'secondary' as const, text: 'TMDB principal verificando...' };
+    if (!searchProviderStatus) return { variant: 'secondary' as const, text: 'TMDB principal status indisponível' };
+    return searchProviderStatus.primaryConfigured
+      ? { variant: 'outline' as const, text: 'TMDB principal configurada' }
+      : { variant: 'secondary' as const, text: 'TMDB principal não configurada' };
+  }, [isSearchProviderLoading, searchProviderStatus]);
+
+  const searchSecondaryBadge = useMemo(() => {
+    if (isSearchProviderLoading && !searchProviderStatus) return { variant: 'secondary' as const, text: 'TMDB secundária verificando...' };
+    if (!searchProviderStatus) return { variant: 'secondary' as const, text: 'TMDB secundária status indisponível' };
+    return searchProviderStatus.secondaryConfigured
+      ? { variant: 'outline' as const, text: 'TMDB secundária configurada' }
+      : { variant: 'secondary' as const, text: 'TMDB secundária não configurada' };
+  }, [isSearchProviderLoading, searchProviderStatus]);
+
+  const searchAdminBadge = useMemo(() => {
+    if (isSearchProviderLoading && !searchProviderStatus) return { variant: 'secondary' as const, text: 'TMDB no Admin verificando...' };
+    if (!searchProviderStatus) return { variant: 'secondary' as const, text: 'TMDB no Admin status indisponível' };
+    const configured = searchProviderStatus.primaryConfigured || searchProviderStatus.secondaryConfigured;
+    return configured
+      ? { variant: 'outline' as const, text: 'TMDB no Admin configurado' }
+      : { variant: 'destructive' as const, text: 'TMDB no Admin não configurado' };
+  }, [isSearchProviderLoading, searchProviderStatus]);
+
+  const telegramBadge = useMemo(() => {
+    if (isTelegramLoading && !telegramStatus) return { variant: 'secondary' as const, text: 'Bot Telegram oficial verificando...' };
+    if (!telegramStatus) return { variant: 'secondary' as const, text: 'Bot Telegram oficial status indisponível' };
+    return telegramStatus.configured
+      ? { variant: 'outline' as const, text: 'Bot Telegram oficial configurado' }
+      : { variant: 'secondary' as const, text: 'Bot Telegram oficial não configurado' };
+  }, [isTelegramLoading, telegramStatus]);
 
   const handleClose = () => {
     if (typeof onClose === 'function') {
@@ -172,6 +296,14 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
       .then((payload) => setSearchProviderStatus(payload))
       .catch(() => setSearchProviderStatus(null))
       .finally(() => setIsSearchProviderLoading(false));
+  };
+
+  const refreshTelegramStatus = () => {
+    setIsTelegramLoading(true);
+    return apiRequest<AdminTelegramStatus>({ path: '/api/admin/telegram', auth: true })
+      .then((payload) => setTelegramStatus(payload))
+      .catch(() => setTelegramStatus(null))
+      .finally(() => setIsTelegramLoading(false));
   };
 
   const handleSaveSearchProviderKeys = async () => {
@@ -220,6 +352,43 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
     }
   };
 
+  const handleSaveTelegramBotToken = async () => {
+    if (isSavingTelegram) return;
+    const token = telegramBotToken.trim();
+    if (!token) {
+      toast({
+        title: 'Atenção',
+        description: 'Informe o token do bot oficial para salvar.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    setIsSavingTelegram(true);
+    try {
+      await apiRequest<void>({
+        path: '/api/admin/telegram',
+        method: 'PUT',
+        auth: true,
+        body: { token },
+      });
+      setTelegramBotToken('');
+      await refreshTelegramStatus();
+      toast({
+        title: 'Configuração salva',
+        description: 'Token do bot oficial atualizado com sucesso.',
+      });
+    } catch (e) {
+      const message = typeof (e as { message?: unknown })?.message === 'string' ? (e as { message: string }).message : null;
+      toast({
+        title: 'Erro',
+        description: message || 'Não foi possível salvar o token agora.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSavingTelegram(false);
+    }
+  };
+
   const handleToggleRegistrations = (enabled: boolean) => {
     const previous = allowNewRegistrations;
     setAllowNewRegistrations(enabled);
@@ -229,7 +398,7 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
       path: '/api/admin/settings',
       method: 'PUT',
       auth: true,
-      body: { allowRegistrations: enabled },
+      body: { allowRegistrations: enabled, ticketsEnabled },
     })
       .then(() => {
         refreshDashboard();
@@ -247,6 +416,220 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
           variant: "destructive",
         });
       });
+  };
+
+  const handleToggleTicketsEnabled = (enabled: boolean) => {
+    if (isSavingTicketsSettings) return;
+    const previous = ticketsEnabled;
+    setTicketsEnabled(enabled);
+    setIsSavingTicketsSettings(true);
+    apiRequest<void>({
+      path: '/api/admin/settings',
+      method: 'PUT',
+      auth: true,
+      body: { allowRegistrations: allowNewRegistrations, ticketsEnabled: enabled },
+    })
+      .then(() => {
+        window.dispatchEvent(new CustomEvent('mediahub:ticketsSettingsChanged', { detail: { enabled } }));
+        toast({
+          title: 'Configuração atualizada',
+          description: `Tickets ${enabled ? 'habilitados' : 'desabilitados'}.`,
+        });
+      })
+      .catch(() => {
+        setTicketsEnabled(previous);
+        toast({
+          title: 'Erro',
+          description: 'Não foi possível atualizar o status dos tickets agora.',
+          variant: 'destructive',
+        });
+      })
+      .finally(() => setIsSavingTicketsSettings(false));
+  };
+
+  const refreshFootballAdmin = () => {
+    setIsFootballLoading(true);
+    return apiRequest<FootballAdminPayload>({ path: '/api/admin/football/settings', auth: true })
+      .then((payload) => {
+        setFootballSettings(payload.settings);
+        setFootballSources(payload.sources);
+        setFootballReadWindowStart(payload.settings.readWindowStart || '19:30');
+        setFootballReadWindowEnd(payload.settings.readWindowEnd || '20:00');
+        setFootballExcludedChannels(
+          Array.isArray(payload.settings.excludedChannels) && payload.settings.excludedChannels.length
+            ? payload.settings.excludedChannels.join('\n')
+            : 'PPV ONEFOOTBALL'
+        );
+        setFootballExcludedCompetitions(
+          Array.isArray(payload.settings.excludedCompetitions) && payload.settings.excludedCompetitions.length
+            ? payload.settings.excludedCompetitions.join('\n')
+            : 'Inglês 5ª Divisão'
+        );
+      })
+      .catch(() => {
+        setFootballSettings(null);
+        setFootballSources([]);
+      })
+      .finally(() => setIsFootballLoading(false));
+  };
+
+  const handleSaveFootballSettings = async () => {
+    if (isSavingFootballSettings) return;
+    const readWindowStart = footballReadWindowStart.trim();
+    const readWindowEnd = footballReadWindowEnd.trim();
+    if (!/^\d{2}:\d{2}$/.test(readWindowStart) || !/^\d{2}:\d{2}$/.test(readWindowEnd)) {
+      toast({
+        title: 'Atenção',
+        description: 'Informe janela válida (HH:MM até HH:MM).',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsSavingFootballSettings(true);
+    try {
+      await apiRequest<void>({
+        path: '/api/admin/football/settings',
+        method: 'PUT',
+        auth: true,
+        body: {
+          readWindowStart,
+          readWindowEnd,
+          excludedChannels: footballExcludedChannels
+            .split(/\r?\n|[,;]+/g)
+            .map((item) => item.trim())
+            .filter(Boolean),
+          excludedCompetitions: footballExcludedCompetitions
+            .split(/\r?\n|[,;]+/g)
+            .map((item) => item.trim())
+            .filter(Boolean),
+        },
+      });
+      await refreshFootballAdmin();
+      toast({
+        title: 'Configuração salva',
+        description: 'Configurações de leitura e exclusões atualizadas.',
+      });
+    } catch (e) {
+      const message = typeof (e as { message?: unknown })?.message === 'string' ? (e as { message: string }).message : null;
+      toast({
+        title: 'Erro',
+        description: message || 'Não foi possível salvar agora. Tente novamente.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSavingFootballSettings(false);
+    }
+  };
+
+  const handleCreateFootballSource = async () => {
+    if (isCreatingFootballSource) return;
+    const name = footballSourceDraft.name.trim();
+    const url = footballSourceDraft.url.trim();
+    if (!name || !url) {
+      toast({ title: 'Erro', description: 'Preencha nome e URL.', variant: 'destructive' });
+      return;
+    }
+    setIsCreatingFootballSource(true);
+    try {
+      await apiRequest<{ source: FootballSource }>({
+        path: '/api/admin/football/sources',
+        method: 'POST',
+        auth: true,
+        body: { name, url },
+      });
+      setFootballSourceDraft({ name: '', url: '' });
+      await refreshFootballAdmin();
+      toast({ title: 'Fonte adicionada', description: 'A fonte foi cadastrada com sucesso.' });
+    } catch (e) {
+      const message = typeof (e as { message?: unknown })?.message === 'string' ? (e as { message: string }).message : null;
+      toast({ title: 'Erro', description: message || 'Não foi possível salvar agora. Tente novamente.', variant: 'destructive' });
+    } finally {
+      setIsCreatingFootballSource(false);
+    }
+  };
+
+  const handleStartEditFootballSource = (source: FootballSource) => {
+    setEditingFootballSourceId(source.id);
+    setFootballSourceEdit({ name: source.name, url: source.url });
+  };
+
+  const handleCancelEditFootballSource = () => {
+    setEditingFootballSourceId(null);
+    setFootballSourceEdit({ name: '', url: '' });
+  };
+
+  const handleSaveFootballSourceEdit = async () => {
+    if (!editingFootballSourceId || isUpdatingFootballSource) return;
+    const name = footballSourceEdit.name.trim();
+    const url = footballSourceEdit.url.trim();
+    if (!name || !url) {
+      toast({ title: 'Erro', description: 'Preencha nome e URL.', variant: 'destructive' });
+      return;
+    }
+    setIsUpdatingFootballSource(true);
+    try {
+      await apiRequest<{ source: FootballSource }>({
+        path: `/api/admin/football/sources/${editingFootballSourceId}`,
+        method: 'PUT',
+        auth: true,
+        body: { name, url },
+      });
+      setEditingFootballSourceId(null);
+      setFootballSourceEdit({ name: '', url: '' });
+      await refreshFootballAdmin();
+      toast({ title: 'Fonte atualizada', description: 'As alterações foram salvas.' });
+    } catch (e) {
+      const message = typeof (e as { message?: unknown })?.message === 'string' ? (e as { message: string }).message : null;
+      toast({ title: 'Erro', description: message || 'Não foi possível salvar agora. Tente novamente.', variant: 'destructive' });
+    } finally {
+      setIsUpdatingFootballSource(false);
+    }
+  };
+
+  const handleToggleFootballSource = async (source: FootballSource, enabled: boolean) => {
+    const previous = footballSources;
+    setFootballSources((current) => current.map((s) => (s.id === source.id ? { ...s, isActive: enabled } : s)));
+    try {
+      await apiRequest<{ source: FootballSource }>({
+        path: `/api/admin/football/sources/${source.id}`,
+        method: 'PATCH',
+        auth: true,
+        body: { isActive: enabled },
+      });
+      await refreshFootballAdmin();
+    } catch (e) {
+      setFootballSources(previous);
+      const message = typeof (e as { message?: unknown })?.message === 'string' ? (e as { message: string }).message : null;
+      toast({ title: 'Erro', description: message || 'Não foi possível atualizar agora. Tente novamente.', variant: 'destructive' });
+    }
+  };
+
+  const handleRefreshFootballSchedule = async () => {
+    if (isRefreshingFootball) return;
+    const date = footballRefreshDate.trim();
+    const body = date ? { date } : {};
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      toast({ title: 'Erro', description: 'Informe a data no formato AAAA-MM-DD.', variant: 'destructive' });
+      return;
+    }
+    setIsRefreshingFootball(true);
+    try {
+      await apiRequest<{ started?: boolean; date?: string }>({
+        path: '/api/admin/football/refresh',
+        method: 'POST',
+        auth: true,
+        body,
+        timeoutMs: 120_000,
+      });
+      toast({ title: 'Atualização iniciada', description: 'A coleta foi colocada em fila e terminará em instantes.' });
+      await refreshFootballAdmin();
+    } catch (e) {
+      const message = typeof (e as { message?: unknown })?.message === 'string' ? (e as { message: string }).message : null;
+      toast({ title: 'Erro', description: message || 'Não foi possível atualizar agora. Tente novamente.', variant: 'destructive' });
+    } finally {
+      setIsRefreshingFootball(false);
+    }
   };
 
   const handleCreateUser = () => {
@@ -312,6 +695,34 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
           variant: "destructive",
         });
       });
+  };
+
+  const handleQuickPlanAction = async (u: AdminUser, action: 'renew30' | 'cancelPremium' | 'setFree') => {
+    const today = new Date();
+    const currentEnd = u.subscriptionEnd ? new Date(u.subscriptionEnd) : null;
+    const base = currentEnd && currentEnd.getTime() > today.getTime() ? currentEnd : today;
+    const next = new Date(base);
+    if (action === 'renew30') next.setDate(next.getDate() + 30);
+    const body =
+      action === 'renew30'
+        ? { type: 'premium', subscriptionEnd: next.toISOString().slice(0, 10), isActive: true }
+        : action === 'cancelPremium'
+          ? { type: 'free', subscriptionEnd: '', isActive: u.isActive }
+          : { type: 'free', subscriptionEnd: '', isActive: true };
+    try {
+      const payload = await apiRequest<{ user: AdminUser }>({
+        path: `/api/admin/users/${u.id}`,
+        method: 'PATCH',
+        auth: true,
+        body,
+      });
+      setUsers((current) => current.map((item) => (item.id === payload.user.id ? payload.user : item)));
+      await refreshDashboard();
+      toast({ title: 'Plano atualizado', description: 'A ação de plano foi concluída com sucesso.' });
+    } catch (e) {
+      const message = typeof (e as { message?: unknown })?.message === 'string' ? (e as { message: string }).message : null;
+      toast({ title: 'Erro', description: message || 'Não foi possível atualizar o plano.', variant: 'destructive' });
+    }
   };
 
   const handleStartEditUser = (u: AdminUser) => {
@@ -494,7 +905,7 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
   const tabs = (
     <>
       <Tabs defaultValue="dashboard" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="dashboard" className="flex items-center space-x-2">
               <BarChart3 className="h-4 w-4" />
               <span>Dashboard</span>
@@ -502,6 +913,10 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
             <TabsTrigger value="users" className="flex items-center space-x-2">
               <Users className="h-4 w-4" />
               <span>Usuários</span>
+            </TabsTrigger>
+            <TabsTrigger value="football" className="flex items-center space-x-2">
+              <CalendarDays className="h-4 w-4" />
+              <span>Futebol</span>
             </TabsTrigger>
             <TabsTrigger value="settings" className="flex items-center space-x-2">
               <Settings className="h-4 w-4" />
@@ -724,6 +1139,17 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
                             <p className="text-xs text-muted-foreground mt-1">
                               Criado: {new Date(u.createdAt).toLocaleDateString('pt-BR')} • Atualizado: {new Date(u.updatedAt).toLocaleDateString('pt-BR')}
                             </p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <Button type="button" variant="outline" size="sm" onClick={() => void handleQuickPlanAction(u, 'renew30')}>
+                                Renovar +30 dias
+                              </Button>
+                              <Button type="button" variant="outline" size="sm" onClick={() => void handleQuickPlanAction(u, 'cancelPremium')}>
+                                Cancelar Premium
+                              </Button>
+                              <Button type="button" variant="outline" size="sm" onClick={() => void handleQuickPlanAction(u, 'setFree')}>
+                                Alterar para Free
+                              </Button>
+                            </div>
                           </div>
 
                           <div className="flex items-center justify-between md:justify-end gap-3">
@@ -885,6 +1311,195 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
             </Card>
           </TabsContent>
 
+          <TabsContent value="football" className="space-y-4">
+            <Card>
+              <CardHeader className="space-y-2">
+                <CardTitle className="text-base">Atualização diária</CardTitle>
+                <div className="flex flex-col md:flex-row gap-2 md:items-center md:justify-between">
+                  <div className="min-w-0 text-sm text-muted-foreground">
+                    {footballSettings ? `Fuso: ${footballSettings.timeZone}` : 'Carregando…'}
+                  </div>
+                  <Button type="button" variant="outline" onClick={refreshFootballAdmin} disabled={isFootballLoading}>
+                    {isFootballLoading ? 'Carregando…' : 'Recarregar'}
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="footballReadWindowStart">Janela início</Label>
+                    <Input
+                      id="footballReadWindowStart"
+                      type="time"
+                      value={footballReadWindowStart}
+                      onChange={(e) => setFootballReadWindowStart(e.target.value)}
+                      step={60}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="footballReadWindowEnd">Janela fim</Label>
+                    <Input
+                      id="footballReadWindowEnd"
+                      type="time"
+                      value={footballReadWindowEnd}
+                      onChange={(e) => setFootballReadWindowEnd(e.target.value)}
+                      step={60}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Última execução</Label>
+                    <div className="rounded-md border px-3 py-2 text-sm text-muted-foreground">
+                      {footballSettings?.lastRunDate ? footballSettings.lastRunDate : '—'}
+                    </div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="footballExcludedChannels">Excluir jogos por canal exclusivo</Label>
+                    <Textarea
+                      id="footballExcludedChannels"
+                      value={footballExcludedChannels}
+                      onChange={(e) => setFootballExcludedChannels(e.target.value)}
+                      rows={3}
+                      placeholder="PPV ONEFOOTBALL"
+                    />
+                    <p className="text-xs text-muted-foreground">Um canal por linha ou separado por vírgula.</p>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="footballExcludedCompetitions">Excluir competições</Label>
+                    <Textarea
+                      id="footballExcludedCompetitions"
+                      value={footballExcludedCompetitions}
+                      onChange={(e) => setFootballExcludedCompetitions(e.target.value)}
+                      rows={3}
+                      placeholder="Inglês 5ª Divisão"
+                    />
+                    <p className="text-xs text-muted-foreground">Um termo por linha ou separado por vírgula.</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3 items-end">
+                  <div className="grid gap-2">
+                    <Label htmlFor="footballRefreshDate">Atualizar agora (data opcional)</Label>
+                    <Input
+                      id="footballRefreshDate"
+                      value={footballRefreshDate}
+                      onChange={(e) => setFootballRefreshDate(e.target.value)}
+                      placeholder="Ex: 2026-03-13"
+                      spellCheck={false}
+                      inputMode="text"
+                    />
+                  </div>
+                  <Button type="button" onClick={() => void handleRefreshFootballSchedule()} disabled={isRefreshingFootball}>
+                    {isRefreshingFootball ? 'Atualizando…' : 'Atualizar dados'}
+                  </Button>
+                </div>
+                <div className="flex flex-col-reverse md:flex-row md:justify-end gap-2">
+                  <Button type="button" onClick={() => void handleSaveFootballSettings()} disabled={isSavingFootballSettings}>
+                    {isSavingFootballSettings ? 'Salvando…' : 'Salvar'}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Fontes</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="footballSourceName">Nome</Label>
+                    <Input
+                      id="footballSourceName"
+                      value={footballSourceDraft.name}
+                      onChange={(e) => setFootballSourceDraft((current) => ({ ...current, name: e.target.value }))}
+                      placeholder="Ex: Guia de jogos"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="footballSourceUrl">URL</Label>
+                    <Input
+                      id="footballSourceUrl"
+                      value={footballSourceDraft.url}
+                      onChange={(e) => setFootballSourceDraft((current) => ({ ...current, url: e.target.value }))}
+                      placeholder="https://..."
+                      spellCheck={false}
+                      inputMode="url"
+                    />
+                  </div>
+                </div>
+                <Button type="button" onClick={() => void handleCreateFootballSource()} disabled={isCreatingFootballSource} className="w-full">
+                  <Plus className="h-4 w-4 mr-2" />
+                  {isCreatingFootballSource ? 'Adicionando…' : 'Adicionar fonte'}
+                </Button>
+
+                {footballSources.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">{isFootballLoading ? 'Carregando…' : 'Nenhuma fonte cadastrada.'}</p>
+                ) : (
+                  <div className="space-y-3">
+                    {footballSources.map((source) => (
+                      <div key={source.id} className="rounded-lg border p-4 space-y-3">
+                        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-medium">{source.name}</p>
+                              <Badge variant={source.isActive ? 'outline' : 'secondary'}>{source.isActive ? 'ativa' : 'inativa'}</Badge>
+                            </div>
+                            <p className="text-sm text-muted-foreground break-all">{source.url}</p>
+                          </div>
+                          <div className="flex items-center gap-2 justify-between md:justify-end">
+                            <Button type="button" variant="outline" size="sm" onClick={() => handleStartEditFootballSource(source)}>
+                              <Pencil className="h-4 w-4 mr-2" />
+                              Editar
+                            </Button>
+                            <div className="flex items-center gap-2">
+                              <Label className="text-sm">Ativa</Label>
+                              <Switch checked={source.isActive} onCheckedChange={(checked) => void handleToggleFootballSource(source, checked)} />
+                            </div>
+                          </div>
+                        </div>
+
+                        {editingFootballSourceId === source.id && (
+                          <div className="border-t pt-3 space-y-3">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div className="grid gap-2">
+                                <Label htmlFor="footballEditName">Nome</Label>
+                                <Input
+                                  id="footballEditName"
+                                  value={footballSourceEdit.name}
+                                  onChange={(e) => setFootballSourceEdit((current) => ({ ...current, name: e.target.value }))}
+                                />
+                              </div>
+                              <div className="grid gap-2">
+                                <Label htmlFor="footballEditUrl">URL</Label>
+                                <Input
+                                  id="footballEditUrl"
+                                  value={footballSourceEdit.url}
+                                  onChange={(e) => setFootballSourceEdit((current) => ({ ...current, url: e.target.value }))}
+                                  spellCheck={false}
+                                  inputMode="url"
+                                />
+                              </div>
+                            </div>
+                            <div className="flex flex-col-reverse md:flex-row md:justify-end gap-2">
+                              <Button type="button" variant="outline" onClick={handleCancelEditFootballSource} disabled={isUpdatingFootballSource}>
+                                Cancelar
+                              </Button>
+                              <Button type="button" onClick={() => void handleSaveFootballSourceEdit()} disabled={isUpdatingFootballSource}>
+                                {isUpdatingFootballSource ? 'Salvando…' : 'Salvar'}
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+          </TabsContent>
+
           <TabsContent value="settings" className="space-y-4">
             <Card>
               <CardHeader>
@@ -893,13 +1508,18 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
               <CardContent className="space-y-6">
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant={searchProviderStatus?.primaryConfigured ? 'outline' : 'secondary'}>
-                      Chave principal {searchProviderStatus?.primaryConfigured ? 'configurada' : 'não configurada'}
-                    </Badge>
-                    <Badge variant={searchProviderStatus?.secondaryConfigured ? 'outline' : 'secondary'}>
-                      Chave secundária {searchProviderStatus?.secondaryConfigured ? 'configurada' : 'não configurada'}
-                    </Badge>
-                    <Button type="button" variant="outline" size="sm" onClick={refreshSearchProviderStatus} disabled={isSearchProviderLoading}>
+                    <Badge variant={searchPrimaryBadge.variant}>{searchPrimaryBadge.text}</Badge>
+                    <Badge variant={searchSecondaryBadge.variant}>{searchSecondaryBadge.text}</Badge>
+                    <Badge variant={searchAdminBadge.variant}>{searchAdminBadge.text}</Badge>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        void refreshSearchProviderStatus();
+                      }}
+                      disabled={isSearchProviderLoading}
+                    >
                       {isSearchProviderLoading ? 'Carregando…' : 'Recarregar'}
                     </Button>
                   </div>
@@ -910,7 +1530,12 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="grid gap-2">
-                      <Label htmlFor="searchProviderPrimaryKey">Chave principal</Label>
+                      <div className="flex items-center justify-between gap-2">
+                        <Label htmlFor="searchProviderPrimaryKey">Chave principal</Label>
+                        <Badge variant={searchProviderStatus?.primaryConfigured ? 'outline' : 'secondary'}>
+                          {searchProviderStatus?.primaryConfigured ? 'Configurada' : 'Não configurada'}
+                        </Badge>
+                      </div>
                       <div className="flex gap-2">
                         <Input
                           id="searchProviderPrimaryKey"
@@ -931,10 +1556,31 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
                           {showSearchProviderPrimaryKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                         </Button>
                       </div>
+                      <div
+                        className={`rounded-md border px-3 py-2 text-xs ${
+                          searchProviderStatus?.primaryConfigured
+                            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                            : 'border-muted-foreground/20 bg-muted/20 text-muted-foreground'
+                        }`}
+                      >
+                        {searchProviderStatus?.primaryConfigured
+                          ? 'Ja existe uma chave principal configurada no sistema.'
+                          : 'Nenhuma chave principal configurada no sistema.'}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {searchProviderStatus?.primaryConfigured
+                          ? 'Ja existe uma chave principal salva. Informe nova chave apenas se quiser substituir.'
+                          : 'Nenhuma chave principal cadastrada ate o momento.'}
+                      </p>
                     </div>
 
                     <div className="grid gap-2">
-                      <Label htmlFor="searchProviderSecondaryKey">Chave secundária (opcional)</Label>
+                      <div className="flex items-center justify-between gap-2">
+                        <Label htmlFor="searchProviderSecondaryKey">Chave secundária (opcional)</Label>
+                        <Badge variant={searchProviderStatus?.secondaryConfigured ? 'outline' : 'secondary'}>
+                          {searchProviderStatus?.secondaryConfigured ? 'Configurada' : 'Não configurada'}
+                        </Badge>
+                      </div>
                       <div className="flex gap-2">
                         <Input
                           id="searchProviderSecondaryKey"
@@ -955,6 +1601,22 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
                           {showSearchProviderSecondaryKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                         </Button>
                       </div>
+                      <div
+                        className={`rounded-md border px-3 py-2 text-xs ${
+                          searchProviderStatus?.secondaryConfigured
+                            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                            : 'border-muted-foreground/20 bg-muted/20 text-muted-foreground'
+                        }`}
+                      >
+                        {searchProviderStatus?.secondaryConfigured
+                          ? 'Ja existe uma chave secundaria configurada no sistema.'
+                          : 'Nenhuma chave secundaria configurada no sistema.'}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {searchProviderStatus?.secondaryConfigured
+                          ? 'Ja existe uma chave secundaria salva. Informe nova chave apenas se quiser substituir.'
+                          : 'Nenhuma chave secundaria cadastrada ate o momento.'}
+                      </p>
                     </div>
                   </div>
 
@@ -979,6 +1641,87 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
                     </Button>
                   </div>
                 </div>
+
+                <div className="space-y-3 border-t pt-6">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant={telegramBadge.variant}>{telegramBadge.text}</Badge>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        void refreshTelegramStatus();
+                      }}
+                      disabled={isTelegramLoading}
+                    >
+                      {isTelegramLoading ? 'Carregando…' : 'Recarregar'}
+                    </Button>
+                  </div>
+
+                  <div
+                    className={`rounded-md border px-3 py-2 text-xs ${
+                      telegramStatus?.configured
+                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                        : 'border-muted-foreground/20 bg-muted/20 text-muted-foreground'
+                    }`}
+                  >
+                    {telegramStatus?.configured
+                      ? 'Ja existe um token de bot oficial configurado no sistema.'
+                      : 'Nenhum token de bot oficial configurado no sistema.'}
+                  </div>
+
+                  <div className="rounded-md border bg-muted/20 p-4 text-sm text-muted-foreground">
+                    O token do bot oficial é protegido: após salvar, ele não é exibido. Para alterar, informe novamente e salve.
+                  </div>
+
+                  <div className="grid gap-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label htmlFor="telegramBotToken">Token do bot oficial</Label>
+                      <Badge variant={telegramStatus?.configured ? 'outline' : 'secondary'}>
+                        {telegramStatus?.configured ? 'Configurado' : 'Não configurado'}
+                      </Badge>
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        id="telegramBotToken"
+                        type={showTelegramBotToken ? 'text' : 'password'}
+                        value={telegramBotToken}
+                        onChange={(e) => setTelegramBotToken(e.target.value)}
+                        placeholder="Ex.: 123456:ABCDEF..."
+                        autoComplete="off"
+                        spellCheck={false}
+                        inputMode="text"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setShowTelegramBotToken((v) => !v)}
+                        aria-label={showTelegramBotToken ? 'Ocultar token do bot' : 'Mostrar token do bot'}
+                      >
+                        {showTelegramBotToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {telegramStatus?.configured
+                        ? 'Ja existe um token salvo no sistema. Informe novo token apenas se quiser substituir.'
+                        : 'Nenhum token de bot oficial cadastrado ate o momento.'}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col-reverse md:flex-row md:justify-end gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setTelegramBotToken('')}
+                      disabled={isSavingTelegram}
+                    >
+                      Limpar
+                    </Button>
+                    <Button type="button" onClick={() => void handleSaveTelegramBotToken()} disabled={isSavingTelegram}>
+                      {isSavingTelegram ? 'Salvando…' : 'Salvar token do bot'}
+                    </Button>
+                  </div>
+                </div>
               </CardContent>
             </Card>
 
@@ -995,6 +1738,15 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
                     </p>
                   </div>
                   <Switch checked={allowNewRegistrations} onCheckedChange={handleToggleRegistrations} />
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <Label className="text-base font-medium">Ativar sistema de tickets</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Quando desativado, usuários não verão “Suporte & Tickets”.
+                    </p>
+                  </div>
+                  <Switch checked={ticketsEnabled} onCheckedChange={handleToggleTicketsEnabled} disabled={isSavingTicketsSettings} />
                 </div>
               </CardContent>
             </Card>
@@ -1028,7 +1780,7 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
   if (renderAsModal) {
     return (
       <Dialog open onOpenChange={(open) => !open && handleClose()}>
-        <DialogContent className="sm:max-w-6xl max-h-[90vh] overflow-y-auto">
+        <DialogContent variant="complex" className="sm:max-w-6xl max-h-[90vh]">
           <DialogHeader className="space-y-3">
             <DialogTitle className="sr-only">Painel Administrativo</DialogTitle>
             {header}

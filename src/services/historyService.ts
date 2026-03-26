@@ -95,9 +95,10 @@ class HistoryService {
         path: '/api/history',
         method: 'POST',
         auth: true,
+        timeoutMs: 45_000,
         body: {
           query: newItem.query,
-          results: newItem.results,
+          results: [],
           type: newItem.type,
           timestamp: newItem.timestamp,
         },
@@ -117,6 +118,7 @@ class HistoryService {
       const payload = await apiRequest<{ items: Array<Omit<SearchHistoryItem, 'results'> & { results: unknown }> }>({
         path: '/api/history',
         auth: true,
+        timeoutMs: 45_000,
       });
 
       const serverItems: SearchHistoryItem[] = payload.items

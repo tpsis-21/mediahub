@@ -1,0 +1,834 @@
+openapi: 3.0.3
+info:
+  title: MediaHub API
+  description: |
+    Contrato mínimo gerado a partir de `server/server.mjs`.
+    Autenticação: header `Authorization: Bearer <JWT>` quando indicado.
+    Alguns endpoints de busca aceitam token opcional (chaves do provedor por usuário).
+  version: "1.0.0"
+
+servers:
+  - url: http://localhost:8081
+    description: API local (padrão `PORT` no .env)
+  - url: https://api.example.com
+    description: Substituir pela URL real em produção
+
+tags:
+  - name: health
+  - name: auth
+  - name: me
+  - name: search
+  - name: video
+  - name: football
+  - name: assets
+  - name: telegram
+  - name: history
+  - name: tickets
+  - name: admin
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    ErrorMessage:
+      type: object
+      properties:
+        message:
+          type: string
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/health:
+    get:
+      tags: [health]
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: OK
+
+  /api/search/status:
+    get:
+      tags: [search]
+      summary: Status da configuração do provedor de busca
+      security: []
+      responses:
+        "200":
+          description: Configurado ou não (corpo definido pelo servidor)
+
+  /api/search/query:
+    get:
+      tags: [search]
+      summary: Busca multi, filme ou série
+      description: Token opcional (melhora uso de chaves por usuário).
+      security: []
+      parameters:
+        - in: query
+          name: type
+          schema:
+            type: string
+            enum: [multi, movie, tv]
+          description: Padrão multi
+        - in: query
+          name: query
+          required: true
+          schema:
+            type: string
+            maxLength: 120
+        - in: query
+          name: language
+          schema:
+            type: string
+            default: pt-BR
+        - in: query
+          name: year
+          schema:
+            type: string
+            pattern: '^\d{4}$'
+      responses:
+        "200":
+          description: Payload no formato do provedor (ex. TMDb-like)
+        "400":
+          description: Consulta inválida
+        "429":
+          description: Rate limit
+
+  /api/search/videos:
+    get:
+      tags: [search]
+      summary: Vídeos (trailers) do título
+      security: []
+      parameters:
+        - in: query
+          name: mediaType
+          schema:
+            type: string
+            enum: [movie, tv]
+        - in: query
+          name: id
+          required: true
+          schema:
+            type: integer
+        - in: query
+          name: language
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Lista de vídeos
+        "400":
+          description: Dados inválidos
+
+  /api/search/details:
+    get:
+      tags: [search]
+      summary: Detalhes completos do título
+      parameters:
+        - in: query
+          name: mediaType
+          schema:
+            type: string
+            enum: [movie, tv]
+        - in: query
+          name: id
+          required: true
+          schema:
+            type: integer
+        - in: query
+          name: language
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Detalhes do provedor
+
+  /api/search/trending:
+    get:
+      tags: [search]
+      summary: Trending
+      parameters:
+        - in: query
+          name: mediaType
+          schema:
+            type: string
+        - in: query
+          name: language
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Lista trending
+
+  /api/search/image:
+    get:
+      tags: [search]
+      summary: Proxy de imagem do provedor
+      security: []
+      parameters:
+        - in: query
+          name: path
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: size
+          schema:
+            type: string
+        - in: query
+          name: download
+          schema:
+            type: string
+        - in: query
+          name: filename
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Binário imagem
+
+  /api/trailer/download:
+    post:
+      tags: [video]
+      summary: Baixa trailer (servidor)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mediaType:
+                  type: string
+                  enum: [movie, tv]
+                id:
+                  type: integer
+                trailerId:
+                  type: string
+                previewSeconds:
+                  type: integer
+      responses:
+        "200":
+          description: Vídeo (binário)
+
+  /api/video-branding/trailer:
+    post:
+      tags: [video]
+      summary: Gera vídeo com trailer + branding (premium/admin)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Vídeo gerado
+
+  /api/auth/register:
+    post:
+      tags: [auth]
+      summary: Registro
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Sucesso
+
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: Login
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Token / usuário
+
+  /api/auth/password-reset/start:
+    post:
+      tags: [auth]
+      summary: Inicia reset de senha
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+
+  /api/auth/password-reset/confirm:
+    post:
+      tags: [auth]
+      summary: Confirma reset de senha
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+
+  /api/auth/password-reset/request:
+    post:
+      tags: [auth]
+      summary: Solicita reset (fluxo alternativo)
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+
+  /api/me:
+    get:
+      tags: [me]
+      summary: Perfil autenticado
+      responses:
+        "200":
+          description: Usuário
+    put:
+      tags: [me]
+      summary: Atualiza perfil
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Atualizado
+
+  /api/history:
+    get:
+      tags: [history]
+      summary: Histórico de buscas (servidor)
+      responses:
+        "200":
+          description: Itens
+    post:
+      tags: [history]
+      summary: Adiciona entrada
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+
+  /api/football/schedule:
+    get:
+      tags: [football]
+      summary: Jogos do dia (premium/admin)
+      parameters:
+        - in: query
+          name: date
+          schema:
+            type: string
+            format: date
+          description: YYYY-MM-DD opcional
+      responses:
+        "200":
+          description: date, updatedAt, matches[]
+
+  /api/football/crest:
+    get:
+      tags: [football]
+      summary: Proxy de escudo (imagem)
+      security: []
+      parameters:
+        - in: query
+          name: url
+          required: true
+          schema:
+            type: string
+            maxLength: 800
+      responses:
+        "200":
+          description: Imagem
+
+  /api/football/schedule/refresh:
+    get:
+      tags: [football]
+      summary: Dispara/atualiza coleta (cron interno)
+      security: []
+      responses:
+        "200":
+          description: OK
+
+  /api/assets/image:
+    get:
+      tags: [assets]
+      summary: Proxy de imagem externa (premium/admin)
+      parameters:
+        - in: query
+          name: url
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Imagem
+
+  /api/telegram/send:
+    post:
+      tags: [telegram]
+      summary: Envia mensagem/mídia via Telegram
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+
+  /api/telegram/send-trailer-video:
+    post:
+      tags: [telegram]
+      summary: Envia trailer para Telegram
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+
+  /api/telegram/send-upload:
+    post:
+      tags: [telegram]
+      summary: Upload imagem para Telegram (body raw)
+      requestBody:
+        content:
+          image/png:
+            schema:
+              type: string
+              format: binary
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: OK
+
+  /api/telegram/send-video-upload:
+    post:
+      tags: [telegram]
+      summary: Upload vídeo multipart
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                video:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: OK
+
+  /api/telegram/send-media-group-upload:
+    post:
+      tags: [telegram]
+      summary: Duas imagens em um buffer composto
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: OK
+
+  /api/telegram/send-document-upload:
+    post:
+      tags: [telegram]
+      summary: Upload ZIP/documento
+      requestBody:
+        content:
+          application/zip:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: OK
+
+  /api/tickets/settings:
+    get:
+      tags: [tickets]
+      summary: Tickets habilitados?
+      security: []
+      responses:
+        "200":
+          description: enabled
+
+  /api/tickets:
+    get:
+      tags: [tickets]
+      summary: Lista tickets do usuário
+      responses:
+        "200":
+          description: Lista
+    post:
+      tags: [tickets]
+      summary: Cria ticket
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                subject:
+                  type: string
+                message:
+                  type: string
+      responses:
+        "200":
+          description: Criado
+
+  /api/tickets/{id}:
+    get:
+      tags: [tickets]
+      summary: Ticket + mensagens
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: ticket + messages
+
+  /api/tickets/{id}/messages:
+    post:
+      tags: [tickets]
+      summary: Nova mensagem no ticket
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+      responses:
+        "200":
+          description: OK
+
+  /api/tickets/stats:
+    get:
+      tags: [tickets]
+      summary: Estatísticas (usuário)
+      responses:
+        "200":
+          description: Stats
+
+  /api/admin/dashboard:
+    get:
+      tags: [admin]
+      summary: Dashboard admin
+      responses:
+        "200":
+          description: Métricas
+
+  /api/admin/users:
+    get:
+      tags: [admin]
+      summary: Lista usuários
+      responses:
+        "200":
+          description: items[]
+    post:
+      tags: [admin]
+      summary: Cria usuário
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+
+  /api/admin/users/{id}:
+    patch:
+      tags: [admin]
+      summary: Atualiza usuário
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+    delete:
+      tags: [admin]
+      summary: Remove usuário
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+
+  /api/admin/users/{id}/reset-password:
+    post:
+      tags: [admin]
+      summary: Reset de senha (admin)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+
+  /api/admin/settings:
+    get:
+      tags: [admin]
+      summary: Configurações do sistema
+      responses:
+        "200":
+          description: Settings
+    put:
+      tags: [admin]
+      summary: Atualiza configurações
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+
+  /api/admin/search-provider:
+    get:
+      tags: [admin]
+      summary: Status provedor de busca
+      responses:
+        "200":
+          description: OK
+    put:
+      tags: [admin]
+      summary: Atualiza provedor
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+
+  /api/admin/telegram:
+    get:
+      tags: [admin]
+      summary: Config Telegram
+      responses:
+        "200":
+          description: OK
+    put:
+      tags: [admin]
+      summary: Atualiza Telegram
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+
+  /api/admin/football/settings:
+    get:
+      tags: [admin]
+      summary: Config futebol
+      responses:
+        "200":
+          description: OK
+    put:
+      tags: [admin]
+      summary: Atualiza config futebol
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+
+  /api/admin/football/sources:
+    post:
+      tags: [admin]
+      summary: Nova fonte
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+
+  /api/admin/football/sources/{id}:
+    put:
+      tags: [admin]
+      summary: Substitui fonte
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+    patch:
+      tags: [admin]
+      summary: Atualização parcial (ex. ativar)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+
+  /api/admin/football/refresh:
+    post:
+      tags: [admin]
+      summary: Força refresh da programação
+      responses:
+        "200":
+          description: OK
+        "202":
+          description: Job iniciado
+
+  /api/admin/tickets/settings:
+    put:
+      tags: [admin]
+      summary: Liga/desliga tickets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+      responses:
+        "200":
+          description: OK
+
+  /api/admin/tickets:
+    get:
+      tags: [admin]
+      summary: Todos os tickets
+      responses:
+        "200":
+          description: Lista
+
+  /api/admin/tickets/{id}/status:
+    put:
+      tags: [admin]
+      summary: Atualiza status do ticket
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+      responses:
+        "200":
+          description: OK
+
+  /api/admin/password-reset-requests:
+    get:
+      tags: [admin]
+      summary: Lista pedidos de reset
+      responses:
+        "200":
+          description: Lista
+
+  /api/admin/password-reset-requests/{id}/reset:
+    post:
+      tags: [admin]
+      summary: Executa reset por pedido
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK

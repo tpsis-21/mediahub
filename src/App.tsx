@@ -10,6 +10,7 @@ import { I18nProvider } from "./contexts/I18nContext";
 import Index from "./pages/Index";
 import AppPage from "./pages/AppPage";
 import NotFound from "./pages/NotFound";
+import ResetPasswordPage from "./pages/ResetPasswordPage";
 import AdminPage from "./components/AdminModal";
 
 const queryClient = new QueryClient();
@@ -33,6 +34,7 @@ const App = () => (
             <BrowserRouter>
               <Routes>
                 <Route path="/" element={<Index />} />
+                <Route path="/reset" element={<ResetPasswordPage />} />
                 <Route path="/app" element={<AppPage />} />
                 <Route path="/admin" element={<AdminRoute />} />
                 <Route path="*" element={<NotFound />} />

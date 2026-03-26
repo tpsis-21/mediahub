@@ -33,7 +33,7 @@ export const ticketService = {
   
   getTickets: () => apiRequest<Ticket[]>({ path: '/api/tickets', auth: true }),
   
-  createTicket: (data: { subject: string; message: string; priority: string }) => 
+  createTicket: (data: { subject: string; message: string }) => 
     apiRequest<{ id: number }>({ path: '/api/tickets', method: 'POST', body: data, auth: true }),
     
   getTicket: (id: number) => 

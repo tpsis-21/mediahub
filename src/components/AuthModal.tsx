@@ -30,10 +30,8 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
   });
   const [error, setError] = useState('');
   const [showReset, setShowReset] = useState(false);
-  const [resetStage, setResetStage] = useState<'request' | 'confirm'>('request');
-  const [resetToken, setResetToken] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [resetRequested, setResetRequested] = useState(false);
+  const [resetDevUrl, setResetDevUrl] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,7 +80,7 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent variant="compact" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{mode === 'login' ? t('auth.login') : t('auth.register')}</DialogTitle>
         </DialogHeader>
@@ -93,6 +91,9 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
             onValueChange={(value) => {
               setMode(value === 'register' ? 'register' : 'login');
               setError('');
+              setShowReset(false);
+              setResetRequested(false);
+              setResetDevUrl('');
             }}
           >
             <TabsList className="grid w-full grid-cols-2">
@@ -104,11 +105,11 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
           {mode === 'login' && showReset && (
             <Alert>
               <Info className="h-4 w-4" />
-              <AlertTitle>{resetStage === 'request' ? 'Recuperação de senha' : 'Digite o código recebido'}</AlertTitle>
+              <AlertTitle>Recuperação de senha</AlertTitle>
               <AlertDescription>
-                {resetStage === 'request'
-                  ? <p>Informe seu e‑mail e enviaremos o link de redefinição.</p>
-                  : <p>Insira o código do email e defina sua nova senha.</p>}
+                {!resetRequested
+                  ? <p>Informe seu e-mail e enviaremos um link de redefinição.</p>
+                  : <p>Se existir conta para esse e-mail, o link já foi enviado. Verifique caixa de entrada e spam.</p>}
               </AlertDescription>
             </Alert>
           )}
@@ -186,7 +187,12 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
                   <button
                     type="button"
                     className="text-xs text-primary hover:underline"
-                    onClick={() => setShowReset((v) => !v)}
+                    onClick={() => {
+                      setShowReset((v) => !v);
+                      setResetRequested(false);
+                      setError('');
+                      setResetDevUrl('');
+                    }}
                   >
                     Esqueci minha senha
                   </button>
@@ -202,12 +208,13 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
                             return;
                           }
                           const { apiRequest } = await import('../services/apiClient');
-                          await apiRequest<{ ok: boolean }>({
+                          const payload = await apiRequest<{ ok: boolean; devResetUrl?: string }>({
                             path: '/api/auth/password-reset/start',
                             method: 'POST',
                             body: { email },
                           });
-                          setResetStage('confirm');
+                          setResetRequested(true);
+                          setResetDevUrl(typeof payload?.devResetUrl === 'string' ? payload.devResetUrl : '');
                           setShowReset(true);
                           setError('');
                         } catch (e) {
@@ -222,75 +229,16 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
               )}
             </div>
 
-            {mode === 'login' && showReset && resetStage === 'confirm' && (
-              <div className="space-y-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="resetToken">Código</Label>
-                  <Input
-                    id="resetToken"
-                    value={resetToken}
-                    onChange={(e) => setResetToken(e.target.value)}
-                    placeholder="Cole o código do email"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="newPassword">Nova senha</Label>
-                  <Input
-                    id="newPassword"
-                    type="password"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="Defina sua nova senha"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="confirmNewPassword">Confirmar nova senha</Label>
-                  <Input
-                    id="confirmNewPassword"
-                    type="password"
-                    value={confirmNewPassword}
-                    onChange={(e) => setConfirmNewPassword(e.target.value)}
-                    placeholder="Repita a nova senha"
-                  />
-                </div>
-                <div className="flex justify-end">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={async () => {
-                      try {
-                        setError('');
-                        const token = resetToken.trim();
-                        const pass = newPassword.trim();
-                        const pass2 = confirmNewPassword.trim();
-                        if (!token || !pass || !pass2) {
-                          setError('Preencha código e senhas.');
-                          return;
-                        }
-                        if (pass !== pass2) {
-                          setError('As senhas não coincidem.');
-                          return;
-                        }
-                        const { apiRequest } = await import('../services/apiClient');
-                        await apiRequest<{ ok: boolean }>({
-                          path: '/api/auth/password-reset/confirm',
-                          method: 'POST',
-                          body: { token, password: pass },
-                        });
-                        setShowReset(false);
-                        setResetStage('request');
-                        setResetToken('');
-                        setNewPassword('');
-                        setConfirmNewPassword('');
-                      } catch (e) {
-                        setError('Não foi possível redefinir a senha. Verifique o código e tente novamente.');
-                      }
-                    }}
-                  >
-                    Redefinir senha
-                  </Button>
-                </div>
-              </div>
+            {mode === 'login' && showReset && resetRequested && resetDevUrl && (
+              <Alert>
+                <Info className="h-4 w-4" />
+                <AlertTitle>Ambiente de desenvolvimento</AlertTitle>
+                <AlertDescription>
+                  <a className="underline break-all" href={resetDevUrl}>
+                    Abrir link de redefinição
+                  </a>
+                </AlertDescription>
+              </Alert>
             )}
 
             {mode === 'register' && (

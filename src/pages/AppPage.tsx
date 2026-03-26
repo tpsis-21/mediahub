@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState, useMemo } from "react";
+import { Suspense, lazy, useEffect, useState, useMemo, Component, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { Download, Loader2, Moon, Sun, Settings, LogOut, UserCog, ShieldCheck, Sparkles } from "lucide-react";
 
@@ -47,6 +47,58 @@ const BulkBannerModal = lazy(() => import("../components/BulkBannerModal"));
 const AuthModal = lazy(() => import("../components/AuthModal"));
 const UserAreaModal = lazy(() => import("../components/UserAreaModal"));
 const SupportModal = lazy(() => import("../components/SupportModal"));
+const FootballBannerModal = lazy(() => import("../components/FootballBannerModal"));
+
+type SearchResultGroup = {
+  label: string;
+  results: MovieData[];
+};
+
+type BulkSearchSummary = {
+  submittedLines: number;
+  validLines: number;
+  withResults: number;
+  withoutResults: number;
+};
+
+class ModalErrorBoundary extends Component<{ onReset: () => void; children: ReactNode }, { hasError: boolean }> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error("modal_error_boundary", error);
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>Não foi possível abrir este recurso</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Tente recarregar a página. Se continuar, faça logout e login novamente.
+            </p>
+            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <Button type="button" variant="outline" onClick={this.props.onReset}>
+                Fechar
+              </Button>
+              <Button type="button" onClick={() => window.location.reload()}>
+                Recarregar
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+}
 
 const AppPage = () => {
   const navigate = useNavigate();
@@ -62,13 +114,25 @@ const AppPage = () => {
   const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
   const [showBulkBannerModal, setShowBulkBannerModal] = useState(false);
   const [showTop10BannerModal, setShowTop10BannerModal] = useState(false);
+  const [showFootballBannerModal, setShowFootballBannerModal] = useState(false);
   const [showSupportModal, setShowSupportModal] = useState(false);
+  const [searchResultGroups, setSearchResultGroups] = useState<SearchResultGroup[]>([]);
+  const [lastSearchType, setLastSearchType] = useState<"individual" | "bulk" | null>(null);
+  const [bulkSearchSummary, setBulkSearchSummary] = useState<BulkSearchSummary | null>(null);
 
   // Modals state (moved from Header)
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showUserAreaModal, setShowUserAreaModal] = useState(false);
 
   const isPremiumUser = isPremiumActive();
+  const closeAllModals = () => {
+    setShowBulkBannerModal(false);
+    setShowTop10BannerModal(false);
+    setShowFootballBannerModal(false);
+    setShowSupportModal(false);
+    setShowAuthModal(false);
+    setShowUserAreaModal(false);
+  };
 
   useEffect(() => {
     if (!user && !authLoading) {
@@ -111,6 +175,25 @@ const AppPage = () => {
       setShowTop10BannerModal(true);
     };
     window.addEventListener("mediahub:openTop10BannerModal", openTop10BannerModal);
+    const openFootballBannerModal = () => {
+      if (!isPremiumUser) {
+        toast({
+          title: isPremiumExpired() ? "Assinatura expirada" : "Recurso Premium",
+          description: isPremiumExpired()
+            ? "Gerar Banner de Futebol está indisponível porque sua assinatura Premium expirou."
+            : "Gerar Banner de Futebol está disponível apenas para contas Premium.",
+          variant: "destructive",
+          action: (
+            <ToastAction altText="Ver plano" onClick={() => window.dispatchEvent(new Event("mediahub:openUserAreaModal"))}>
+              Ver plano
+            </ToastAction>
+          ),
+        });
+        return;
+      }
+      setShowFootballBannerModal(true);
+    };
+    window.addEventListener("mediahub:openFootballBannerModal", openFootballBannerModal);
     const openSupportModal = () => setShowSupportModal(true);
     window.addEventListener("mediahub:openSupportModal", openSupportModal);
 
@@ -119,6 +202,7 @@ const AppPage = () => {
       window.removeEventListener("mediahub:openAdminModal", openAdminModal);
       window.removeEventListener("mediahub:openUserAreaModal", openUserAreaModal);
       window.removeEventListener("mediahub:openTop10BannerModal", openTop10BannerModal);
+      window.removeEventListener("mediahub:openFootballBannerModal", openFootballBannerModal);
       window.removeEventListener("mediahub:openSupportModal", openSupportModal);
     };
   }, [isPremiumExpired, isPremiumUser, navigate, toast]);
@@ -262,18 +346,47 @@ const AppPage = () => {
     setIsLoading(true);
     setSelectedItems(new Set());
     setMovies([]);
+    setSearchResultGroups([]);
+    setLastSearchType(type);
+    setBulkSearchSummary(null);
     try {
       let allResults: MovieData[] = [];
+      const nextGroups: SearchResultGroup[] = [];
+      const normalizedQueries = queries
+        .map((query) => searchService.parseSearchQuery(query))
+        .filter((item) => item.title.trim().length > 0);
 
-      for (const query of queries) {
-        const { title, year } = searchService.parseSearchQuery(query);
+      if (normalizedQueries.length === 0) {
+        toast({
+          title: "Lista inválida",
+          description: "Não encontrei títulos válidos. Removi emojis/numeração, mas nenhum título sobrou para buscar.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      for (const { title, year } of normalizedQueries) {
         const data = await searchService.searchByType(title, mediaType, year, "pt-BR");
-        allResults = [...allResults, ...data.results];
+        const uniquePerTerm = data.results.filter((movie, index, self) => index === self.findIndex((m) => m.id === movie.id));
+        const label = year ? `${title} (${year})` : title;
+        nextGroups.push({ label, results: uniquePerTerm });
+        allResults = [...allResults, ...uniquePerTerm];
       }
 
       const uniqueResults = allResults.filter((movie, index, self) => index === self.findIndex((m) => m.id === movie.id));
+      const withResults = nextGroups.filter((group) => group.results.length > 0).length;
+      const withoutResults = nextGroups.length - withResults;
 
       setMovies(uniqueResults);
+      setSearchResultGroups(nextGroups);
+      if (type === "bulk") {
+        setBulkSearchSummary({
+          submittedLines: queries.length,
+          validLines: normalizedQueries.length,
+          withResults,
+          withoutResults,
+        });
+      }
       incrementSearch();
 
       historyService.addToHistory({
@@ -546,16 +659,55 @@ const AppPage = () => {
                     )}
                   </CardHeader>
                   <CardContent>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                      {movies.map((movie) => (
-                        <MovieCard
-                          key={movie.id}
-                          movie={movie}
-                          onToggleSelect={() => handleItemToggleSelect(movie.id)}
-                          isSelected={selectedItems.has(movie.id)}
-                        />
-                      ))}
-                    </div>
+                    {lastSearchType === "bulk" && searchResultGroups.length > 0 ? (
+                      <div className="space-y-6">
+                        <p className="text-sm text-muted-foreground">
+                          Cada linha da busca em massa é tratada como 1 conteúdo. Os resultados ficam separados por termo.
+                        </p>
+                        {bulkSearchSummary && (
+                          <p className="text-sm text-muted-foreground">
+                            Resumo: {bulkSearchSummary.submittedLines} linhas enviadas, {bulkSearchSummary.validLines} reconhecidas,{" "}
+                            {bulkSearchSummary.withResults} com resultado e {bulkSearchSummary.withoutResults} sem resultado.
+                          </p>
+                        )}
+                        {searchResultGroups.map((group, index) => (
+                          <div key={`${group.label}-${index}`} className="space-y-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Badge variant="outline">{`Termo ${index + 1}`}</Badge>
+                              <span className="font-medium">{group.label}</span>
+                              <span className="text-sm text-muted-foreground">
+                                {group.results.length} {group.results.length === 1 ? "resultado" : "resultados"}
+                              </span>
+                            </div>
+                            {group.results.length > 0 ? (
+                              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                                {group.results.map((movie) => (
+                                  <MovieCard
+                                    key={`${group.label}-${movie.id}`}
+                                    movie={movie}
+                                    onToggleSelect={() => handleItemToggleSelect(movie.id)}
+                                    isSelected={selectedItems.has(movie.id)}
+                                  />
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-sm text-muted-foreground">Sem resultados para este termo.</p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                        {movies.map((movie) => (
+                          <MovieCard
+                            key={movie.id}
+                            movie={movie}
+                            onToggleSelect={() => handleItemToggleSelect(movie.id)}
+                            isSelected={selectedItems.has(movie.id)}
+                          />
+                        ))}
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </section>
@@ -583,19 +735,36 @@ const AppPage = () => {
 
       {showTermsModal && <TermsModal onClose={() => setShowTermsModal(false)} />}
 
-      <Suspense fallback={null}>
-        {showBulkBannerModal && user && isPremiumUser && (
-          <BulkBannerModal movies={getSelectedMovies()} onClose={() => setShowBulkBannerModal(false)} />
-        )}
+      <ModalErrorBoundary onReset={closeAllModals}>
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+              <Card className="w-full max-w-sm">
+                <CardContent className="flex items-center justify-center gap-3 p-6">
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  <span className="text-sm">Carregando…</span>
+                </CardContent>
+              </Card>
+            </div>
+          }
+        >
+          {showBulkBannerModal && user && isPremiumUser && (
+            <BulkBannerModal movies={getSelectedMovies()} onClose={() => setShowBulkBannerModal(false)} />
+          )}
 
-        {showTop10BannerModal && user && isPremiumUser && (
-          <BulkBannerModal movies={[]} initialMode="ranking" modeLocked onClose={() => setShowTop10BannerModal(false)} />
-        )}
+          {showTop10BannerModal && user && isPremiumUser && (
+            <BulkBannerModal movies={[]} initialMode="ranking" modeLocked onClose={() => setShowTop10BannerModal(false)} />
+          )}
 
-        {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} />}
-        {showUserAreaModal && <UserAreaModal onClose={() => setShowUserAreaModal(false)} />}
-        {showSupportModal && <SupportModal isOpen={true} onClose={() => setShowSupportModal(false)} />}
-      </Suspense>
+          {showFootballBannerModal && (
+            <FootballBannerModal isOpen={true} onClose={() => setShowFootballBannerModal(false)} />
+          )}
+
+          {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} />}
+          {showUserAreaModal && <UserAreaModal onClose={() => setShowUserAreaModal(false)} />}
+          {showSupportModal && <SupportModal isOpen={true} onClose={() => setShowSupportModal(false)} />}
+        </Suspense>
+      </ModalErrorBoundary>
     </SidebarProvider>
   );
 };

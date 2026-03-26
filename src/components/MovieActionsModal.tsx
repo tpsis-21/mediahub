@@ -1,6 +1,7 @@
 import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Copy, Download, Image, Loader2, Play, RefreshCw, Send } from 'lucide-react';
 import { MovieData, searchService } from '../services/searchService';
+import type { TrailerBrandingOptions, TrailerBrandingStage } from '../services/exportService';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
 import { apiRequest } from '../services/apiClient';
@@ -11,6 +12,7 @@ import { Checkbox } from './ui/checkbox';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
+import { Progress } from './ui/progress';
 import { RadioGroup, RadioGroupItem } from './ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Textarea } from './ui/textarea';
@@ -24,6 +26,14 @@ interface MovieActionsModalProps {
   onClose: () => void;
   mode?: 'modal' | 'page';
 }
+
+type BrandingTaskHistoryItem = {
+  id: string;
+  action: 'preview' | 'download';
+  status: 'success' | 'error' | 'cancelled';
+  detail: string;
+  createdAt: number;
+};
 
 const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, onClose, mode = 'modal' }) => {
   const { user, isPremiumActive } = useAuth();
@@ -54,23 +64,25 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
   const [brandingManualUrl, setBrandingManualUrl] = useState('');
   const [brandingTrailerLayout, setBrandingTrailerLayout] = useState<'portrait' | 'feed'>('portrait');
   const [brandingIncludeLogo, setBrandingIncludeLogo] = useState(() => Boolean(user?.brandLogo));
-  const brandingIncludeSynopsis = true;
   const [brandingIncludeCta, setBrandingIncludeCta] = useState(true);
   const [brandingLimitDuration, setBrandingLimitDuration] = useState(false);
-  const [brandingIncludeWebsite, setBrandingIncludeWebsite] = useState(() => Boolean(user?.website?.trim()));
-  const [brandingIncludePhone, setBrandingIncludePhone] = useState(() => {
-    const hasWebsite = Boolean(user?.website?.trim());
-    return !hasWebsite && Boolean(user?.phone?.trim());
-  });
+  const [brandingIncludeWebsite, setBrandingIncludeWebsite] = useState(false);
+  const [brandingIncludePhone, setBrandingIncludePhone] = useState(false);
   const [brandingCtaText, setBrandingCtaText] = useState('Dica de Conteúdo');
   const [brandingSynopsisTheme, setBrandingSynopsisTheme] = useState<
     'elegant-black' | 'highlight-yellow' | 'brand'
   >('brand');
   const [isDownloadingBrandingVideo, setIsDownloadingBrandingVideo] = useState(false);
   const [isGeneratingBrandingPreview, setIsGeneratingBrandingPreview] = useState(false);
+  const [brandingTaskStatus, setBrandingTaskStatus] = useState<'idle' | 'running' | 'cancelling'>('idle');
+  const [brandingTaskStage, setBrandingTaskStage] = useState<TrailerBrandingStage | null>(null);
+  const [brandingTaskProgress, setBrandingTaskProgress] = useState(0);
+  const [brandingTaskAction, setBrandingTaskAction] = useState<'preview' | 'download' | null>(null);
+  const [brandingTaskHistory, setBrandingTaskHistory] = useState<BrandingTaskHistoryItem[]>([]);
   const [brandingPreviewUrl, setBrandingPreviewUrl] = useState<string | null>(null);
   const [brandingPreviewBlob, setBrandingPreviewBlob] = useState<Blob | null>(null);
   const brandingPreviewUrlRef = useRef<string | null>(null);
+  const brandingTaskAbortRef = useRef<AbortController | null>(null);
   const [showTelegramInline, setShowTelegramInline] = useState(false);
   const [telegramPurpose, setTelegramPurpose] = useState<'cover' | 'video'>('cover');
   const [isDownloading, setIsDownloading] = useState(false);
@@ -91,6 +103,8 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
   const title = movie.title || movie.name || 'Título não disponível';
   const releaseDate = movie.release_date || movie.first_air_date || '';
   const year = releaseDate ? new Date(releaseDate).getFullYear() : '';
+  const brandingPhoneAvailable = typeof user?.phone === 'string' && Boolean(user.phone.trim());
+  const brandingWebsiteAvailable = typeof user?.website === 'string' && Boolean(user.website.trim());
   const previewPrimary =
     typeof user?.brandColors?.primary === 'string' && user.brandColors.primary.trim() ? user.brandColors.primary.trim() : '#7c3aed';
   const previewSecondary =
@@ -115,6 +129,7 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
 
   useEffect(() => {
     return () => {
+      brandingTaskAbortRef.current?.abort();
       const current = brandingPreviewUrlRef.current;
       if (current) URL.revokeObjectURL(current);
     };
@@ -139,6 +154,11 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
     brandingTrailerSource,
     brandingManualUrl,
   ]);
+
+  useEffect(() => {
+    if (!brandingPhoneAvailable && brandingIncludePhone) setBrandingIncludePhone(false);
+    if (!brandingWebsiteAvailable && brandingIncludeWebsite) setBrandingIncludeWebsite(false);
+  }, [brandingIncludePhone, brandingIncludeWebsite, brandingPhoneAvailable, brandingWebsiteAvailable]);
 
   useEffect(() => {
     setTelegramTrailerId('');
@@ -454,18 +474,7 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
     }
   };
 
-  const openBrandingTelegramComposer = (args: { includeSynopsis: boolean; includeCta: boolean; includePhone: boolean; ctaText: string }) => {
-    setTelegramPurpose('cover');
-    setTelegramIncludeCover(Boolean(movie.poster_path));
-    setTelegramIncludeTrailer(false);
-    setTelegramTrailerError(null);
-    setTelegramIncludeSynopsis(true);
-    setTelegramText(buildBrandingTelegramText({ ...args, includeSynopsis: true }));
-    setTelegramTextDirty(false);
-    setShowTelegramInline(true);
-  };
-
-  const getBrandingBaseInput = () => ({
+  const getBrandingBaseInput = (): TrailerBrandingOptions => ({
     brandName: user?.brandName,
     brandColors: user?.brandColors,
     brandLogo: user?.brandLogo,
@@ -474,12 +483,11 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
     includeLogo: brandingIncludeLogo,
     includeSynopsis: true,
     includeCta: brandingIncludeCta,
-    includePhone: brandingIncludePhone,
-    includeWebsite: brandingIncludeWebsite,
+    includePhone: brandingPhoneAvailable && brandingIncludePhone && !brandingIncludeWebsite,
+    includeWebsite: brandingWebsiteAvailable && brandingIncludeWebsite && !brandingIncludePhone,
     ctaText: brandingCtaText,
     synopsisTheme: brandingSynopsisTheme,
     layout: brandingTrailerLayout,
-    trailerSource: brandingTrailerSource,
     limitDuration: brandingLimitDuration,
   });
 
@@ -497,9 +505,77 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
     return automaticId;
   };
 
+  const brandingStageLabel = (() => {
+    if (brandingTaskStatus === 'cancelling') return 'Cancelando geração...';
+    if (!brandingTaskStage) return null;
+    if (brandingTaskStage === 'resolvendo-trailer') return 'Buscando trailer...';
+    if (brandingTaskStage === 'gerando-servidor') return 'Gerando vídeo no servidor...';
+    if (brandingTaskStage === 'gerando-local') return 'Gerando vídeo localmente...';
+    if (brandingTaskStage === 'finalizando') return 'Finalizando vídeo...';
+    return null;
+  })();
+
+  const isBrandingTaskRunning = brandingTaskStatus === 'running' || brandingTaskStatus === 'cancelling';
+  const brandingProgressValue = Math.max(0, Math.min(100, Math.round(brandingTaskProgress)));
+
+  const appendBrandingTaskHistory = (
+    action: 'preview' | 'download',
+    status: 'success' | 'error' | 'cancelled',
+    detail: string
+  ) => {
+    setBrandingTaskHistory((current) => [
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        action,
+        status,
+        detail,
+        createdAt: Date.now(),
+      },
+      ...current,
+    ].slice(0, 5));
+  };
+
+  useEffect(() => {
+    if (!isBrandingTaskRunning || !brandingTaskStage) return;
+    const stageBase: Record<TrailerBrandingStage, number> = {
+      'resolvendo-trailer': 16,
+      'gerando-servidor': 54,
+      'gerando-local': 66,
+      'finalizando': 90,
+    };
+    const stageCap: Record<TrailerBrandingStage, number> = {
+      'resolvendo-trailer': 34,
+      'gerando-servidor': 84,
+      'gerando-local': 88,
+      'finalizando': 97,
+    };
+    setBrandingTaskProgress((current) => Math.max(current, stageBase[brandingTaskStage]));
+    const timer = window.setInterval(() => {
+      setBrandingTaskProgress((current) => {
+        if (brandingTaskStatus === 'cancelling') return Math.min(99, current + 1);
+        const cap = stageCap[brandingTaskStage];
+        if (current >= cap) return current;
+        return Math.min(cap, current + 1);
+      });
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [isBrandingTaskRunning, brandingTaskStage, brandingTaskStatus]);
+
+  const cancelBrandingGeneration = () => {
+    if (!brandingTaskAbortRef.current) return;
+    setBrandingTaskStatus('cancelling');
+    brandingTaskAbortRef.current.abort();
+  };
+
   const handleDownloadBrandingVideo = async () => {
-    if (isDownloadingBrandingVideo) return;
+    if (isDownloadingBrandingVideo || isBrandingTaskRunning) return;
     setIsDownloadingBrandingVideo(true);
+    setBrandingTaskStatus('running');
+    setBrandingTaskStage('resolvendo-trailer');
+    setBrandingTaskAction('download');
+    setBrandingTaskProgress(6);
+    const controller = new AbortController();
+    brandingTaskAbortRef.current = controller;
     const { exportService } = await import('../services/exportService');
     const baseInput = getBrandingBaseInput();
 
@@ -510,7 +586,16 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
       });
 
       const trailerId = await resolveBrandingTrailerId();
-      await exportService.downloadTrailerBranding(movie, { ...baseInput, trailerId });
+      await exportService.downloadTrailerBranding(
+        movie,
+        { ...baseInput, trailerId },
+        {
+          signal: controller.signal,
+          onStageChange: setBrandingTaskStage,
+        }
+      );
+      setBrandingTaskProgress(100);
+      appendBrandingTaskHistory('download', 'success', 'Download iniciado com sucesso.');
 
       toast({
         title: 'Sucesso!',
@@ -518,6 +603,14 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Não foi possível gerar o vídeo. Tente novamente.';
+      if (message.toLowerCase().includes('cancelada')) {
+        appendBrandingTaskHistory('download', 'cancelled', 'Geração cancelada pelo usuário.');
+        toast({
+          title: 'Geração cancelada',
+          description: 'A geração foi cancelada com sucesso.',
+        });
+        return;
+      }
       if (message === 'Faça login para usar este recurso.') {
         toastLoginRequired('gerar o vídeo branding');
         return;
@@ -526,15 +619,34 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
         title: 'Erro no Download',
         description: message,
         variant: 'destructive',
+        action: (
+          <ToastAction altText="Tentar novamente" onClick={handleDownloadBrandingVideo}>
+            Tentar novamente
+          </ToastAction>
+        ),
       });
+      appendBrandingTaskHistory('download', 'error', message);
     } finally {
+      if (brandingTaskAbortRef.current === controller) {
+        brandingTaskAbortRef.current = null;
+      }
       setIsDownloadingBrandingVideo(false);
+      setBrandingTaskStatus('idle');
+      setBrandingTaskStage(null);
+      setBrandingTaskAction(null);
+      window.setTimeout(() => setBrandingTaskProgress(0), 600);
     }
   };
 
   const handlePreviewBrandingVideo = async () => {
-    if (isGeneratingBrandingPreview) return;
+    if (isGeneratingBrandingPreview || isBrandingTaskRunning) return;
     setIsGeneratingBrandingPreview(true);
+    setBrandingTaskStatus('running');
+    setBrandingTaskStage('resolvendo-trailer');
+    setBrandingTaskAction('preview');
+    setBrandingTaskProgress(6);
+    const controller = new AbortController();
+    brandingTaskAbortRef.current = controller;
     const { exportService } = await import('../services/exportService');
     const baseInput = getBrandingBaseInput();
 
@@ -545,15 +657,32 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
       });
 
       const trailerId = await resolveBrandingTrailerId();
-      const blob = await exportService.generateTrailerBrandingPreviewBlob(movie, { ...baseInput, trailerId });
+      const blob = await exportService.generateTrailerBrandingBlob(
+        movie,
+        { ...baseInput, trailerId },
+        {
+          signal: controller.signal,
+          onStageChange: setBrandingTaskStage,
+        }
+      );
       updateBrandingPreview(blob);
+      setBrandingTaskProgress(100);
+      appendBrandingTaskHistory('preview', 'success', 'Vídeo completo gerado com sucesso.');
 
       toast({
         title: 'Vídeo pronto!',
-        description: 'Confira o vídeo e depois faça o download.',
+        description: 'Confira o vídeo completo e depois faça o download.',
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Não foi possível gerar o vídeo. Tente novamente.';
+      if (message.toLowerCase().includes('cancelada')) {
+        appendBrandingTaskHistory('preview', 'cancelled', 'Geração cancelada pelo usuário.');
+        toast({
+          title: 'Geração cancelada',
+          description: 'A geração foi cancelada com sucesso.',
+        });
+        return;
+      }
       if (message === 'Faça login para usar este recurso.') {
         toastLoginRequired('gerar o preview do vídeo');
         return;
@@ -562,9 +691,22 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
         title: 'Erro no vídeo',
         description: message,
         variant: 'destructive',
+        action: (
+          <ToastAction altText="Tentar novamente" onClick={handlePreviewBrandingVideo}>
+            Tentar novamente
+          </ToastAction>
+        ),
       });
+      appendBrandingTaskHistory('preview', 'error', message);
     } finally {
+      if (brandingTaskAbortRef.current === controller) {
+        brandingTaskAbortRef.current = null;
+      }
       setIsGeneratingBrandingPreview(false);
+      setBrandingTaskStatus('idle');
+      setBrandingTaskStage(null);
+      setBrandingTaskAction(null);
+      window.setTimeout(() => setBrandingTaskProgress(0), 600);
     }
   };
 
@@ -681,7 +823,13 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
   const canSendTelegram = Boolean(user?.telegramChatId?.trim());
 
   const content = (
-    <div className={mode === 'modal' ? 'flex h-[90vh] max-h-[90vh] flex-col' : 'flex min-h-[70vh] flex-col rounded-2xl border bg-background shadow-sm'}>
+    <div
+      className={
+        mode === 'modal'
+          ? 'flex h-[88vh] max-h-[88vh] sm:h-[90vh] sm:max-h-[90vh] flex-col'
+          : 'flex min-h-[70vh] flex-col rounded-2xl border bg-background shadow-sm'
+      }
+    >
       <div className="border-b px-6 py-4">
         {mode === 'page' ? (
           <div className="space-y-1 text-left">
@@ -1148,55 +1296,127 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
                                 </div>
 
                                   <div className="space-y-2 pt-2 border-t">
-                                    <Label className="text-sm font-medium">Contato (Selecione um)</Label>
+                                    <Label className="text-sm font-medium">Contato (Opcional)</Label>
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                      <Label className="flex items-center gap-2 cursor-pointer">
-                                        <Checkbox
-                                          checked={brandingIncludePhone}
-                                          onCheckedChange={(v) => {
-                                            const next = Boolean(v);
-                                            setBrandingIncludePhone(next);
-                                            if (next) setBrandingIncludeWebsite(false);
-                                          }}
-                                        />
-                                        Mostrar telefone
-                                      </Label>
-                                      <Label className="flex items-center gap-2 cursor-pointer">
-                                        <Checkbox
-                                          checked={brandingIncludeWebsite}
-                                          onCheckedChange={(v) => {
-                                            const next = Boolean(v);
-                                            setBrandingIncludeWebsite(next);
-                                            if (next) setBrandingIncludePhone(false);
-                                          }}
-                                        />
-                                        Mostrar site
-                                      </Label>
+                                      {brandingPhoneAvailable && (
+                                        <Label className="flex items-center gap-2 cursor-pointer">
+                                          <Checkbox
+                                            checked={brandingIncludePhone}
+                                            onCheckedChange={(v) => {
+                                              const next = Boolean(v);
+                                              setBrandingIncludePhone(next);
+                                              if (next) setBrandingIncludeWebsite(false);
+                                            }}
+                                          />
+                                          Mostrar telefone
+                                        </Label>
+                                      )}
+                                      {brandingWebsiteAvailable && (
+                                        <Label className="flex items-center gap-2 cursor-pointer">
+                                          <Checkbox
+                                            checked={brandingIncludeWebsite}
+                                            onCheckedChange={(v) => {
+                                              const next = Boolean(v);
+                                              setBrandingIncludeWebsite(next);
+                                              if (next) setBrandingIncludePhone(false);
+                                            }}
+                                          />
+                                          Mostrar site
+                                        </Label>
+                                      )}
                                     </div>
+                                    {!brandingPhoneAvailable && !brandingWebsiteAvailable && (
+                                      <p className="text-xs text-muted-foreground">
+                                        Para exibir contato no vídeo, cadastre telefone ou site na Minha Área.
+                                      </p>
+                                    )}
                                   </div>
                                 </div>
                               </div>
 
-                              <div className="flex justify-center pt-6 border-t mt-6">
-                                <Button
-                                  onClick={handlePreviewBrandingVideo}
-                                  disabled={isGeneratingBrandingPreview}
-                                  className="w-full sm:w-auto sm:min-w-[200px] font-semibold shadow-md"
-                                  size="lg"
-                                >
-                                  {isGeneratingBrandingPreview ? (
-                                    <>
-                                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                                      Gerando Vídeo...
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Play className="mr-2 h-5 w-5 fill-current" />
-                                      Gerar Vídeo
-                                    </>
+                              <div className="flex flex-col items-center gap-3 pt-6 border-t mt-6">
+                                {brandingStageLabel && (
+                                  <p className="text-sm text-muted-foreground">{brandingStageLabel}</p>
+                                )}
+                                {isBrandingTaskRunning && (
+                                  <div className="w-full max-w-lg space-y-2">
+                                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                      <span>{brandingTaskAction === 'download' ? 'Gerando para download' : 'Gerando prévia'}</span>
+                                      <span>{brandingProgressValue}%</span>
+                                    </div>
+                                    <Progress value={brandingProgressValue} className="h-2" />
+                                  </div>
+                                )}
+                                <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
+                                  <Button
+                                    onClick={handlePreviewBrandingVideo}
+                                    disabled={isBrandingTaskRunning}
+                                    className="w-full sm:min-w-[200px] font-semibold shadow-md"
+                                    size="lg"
+                                  >
+                                    {isGeneratingBrandingPreview ? (
+                                      <>
+                                        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                                        Gerando Vídeo...
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Play className="mr-2 h-5 w-5 fill-current" />
+                                        Gerar Vídeo
+                                      </>
+                                    )}
+                                  </Button>
+                                  {isBrandingTaskRunning && (
+                                    <Button
+                                      variant="destructive"
+                                      onClick={cancelBrandingGeneration}
+                                      disabled={brandingTaskStatus === 'cancelling'}
+                                      className="w-full sm:min-w-[160px]"
+                                      size="lg"
+                                    >
+                                      {brandingTaskStatus === 'cancelling' ? (
+                                        <>
+                                          <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                                          Cancelando...
+                                        </>
+                                      ) : (
+                                        'Cancelar geração'
+                                      )}
+                                    </Button>
                                   )}
-                                </Button>
+                                </div>
                               </div>
+                              {brandingTaskHistory.length > 0 && (
+                                <div className="rounded-md border bg-muted/20 p-3 space-y-2">
+                                  <div className="text-xs font-semibold tracking-wide text-muted-foreground">
+                                    Últimas gerações
+                                  </div>
+                                  <div className="space-y-2">
+                                    {brandingTaskHistory.map((item) => {
+                                      const badgeVariant =
+                                        item.status === 'success' ? 'default' : item.status === 'cancelled' ? 'secondary' : 'destructive';
+                                      const actionLabel = item.action === 'download' ? 'Download' : 'Prévia';
+                                      const dateLabel = new Date(item.createdAt).toLocaleTimeString('pt-BR', {
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                      });
+                                      return (
+                                        <div key={item.id} className="flex items-center justify-between gap-2 rounded border bg-background px-2 py-1.5">
+                                          <div className="min-w-0">
+                                            <div className="text-xs font-medium">
+                                              {actionLabel} • {dateLabel}
+                                            </div>
+                                            <div className="truncate text-xs text-muted-foreground">{item.detail}</div>
+                                          </div>
+                                          <Badge variant={badgeVariant}>
+                                            {item.status === 'success' ? 'Sucesso' : item.status === 'cancelled' ? 'Cancelado' : 'Erro'}
+                                          </Badge>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
                             </div>
 
                             {brandingPreviewUrl && (
@@ -1225,7 +1445,7 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
                                   <Button
                                     variant="outline"
                                     onClick={handleDownloadBrandingVideo}
-                                    disabled={isDownloadingBrandingVideo}
+                                    disabled={isDownloadingBrandingVideo || isBrandingTaskRunning}
                                     className="w-full h-12 text-base shadow-sm"
                                   >
                                     {isDownloadingBrandingVideo ? (
@@ -1238,7 +1458,7 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
                                   <Button
                                     variant="default"
                                     onClick={handleSendBrandingToTelegram}
-                                    disabled={isSendingTelegram}
+                                    disabled={isSendingTelegram || isBrandingTaskRunning}
                                     className="w-full h-12 text-base shadow-sm bg-[#229ED9] hover:bg-[#229ED9]/90 text-white transition-all hover:scale-[1.02]"
                                   >
                                     {isSendingTelegram ? (
@@ -1464,7 +1684,7 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
         onClose();
       }}
     >
-      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-3xl lg:max-w-5xl max-h-[90vh] overflow-hidden p-0">
+      <DialogContent variant="complex" className="sm:max-w-3xl lg:max-w-5xl overflow-hidden p-0">
         {content}
       </DialogContent>
     </Dialog>

@@ -14,6 +14,42 @@ let lastRequestTime = 0;
 const MIN_REQUEST_INTERVAL = 250;
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const normalizeForCompare = (value: string) =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+
+const STOPWORDS = new Set([
+  'a', 'o', 'as', 'os', 'um', 'uma', 'uns', 'umas',
+  'de', 'da', 'do', 'das', 'dos', 'e', 'em', 'no', 'na', 'nos', 'nas', 'para', 'por', 'com',
+  'the', 'a', 'an', 'of', 'and', 'in', 'on', 'to', 'for', 'with',
+]);
+
+const PT_EN_TERM_MAP: Record<string, string> = {
+  armadilha: 'trap',
+  coelho: 'rabbit',
+  guerra: 'war',
+  maquina: 'machine',
+  ultimo: 'last',
+  refúgio: 'refuge',
+  refugio: 'refuge',
+  noturna: 'night',
+  patrulha: 'patrol',
+  soldado: 'soldier',
+  furia: 'fury',
+  fúria: 'fury',
+  limite: 'limit',
+  velocidade: 'speed',
+  coracao: 'heart',
+  coração: 'heart',
+  gigante: 'giant',
+  porao: 'basement',
+  porão: 'basement',
+  rua: 'street',
+  grito: 'scream',
+};
 
 const isRecord = (value: unknown): value is UnknownRecord => typeof value === 'object' && value !== null;
 
@@ -57,6 +93,66 @@ export type SearchVideosResponse = {
 export type MediaType = 'movie' | 'tv' | 'multi';
 
 class SearchService {
+  private buildEmptyResult(): SearchResult {
+    return { page: 1, results: [], total_pages: 0, total_results: 0 };
+  }
+
+  private sanitizeQueryInput(rawQuery: string): string {
+    const withoutQuotes = String(rawQuery || '').replace(/^["'`]+|["'`]+$/g, '').trim();
+    if (!withoutQuotes) return '';
+    const withoutEmojiPrefix = withoutQuotes.replace(/^[\p{Extended_Pictographic}\p{Emoji_Presentation}\p{Emoji}\uFE0F\u20E3\s•▪▫*\-_.]+/gu, '').trim();
+    const withoutNumberPrefix = withoutEmojiPrefix
+      .replace(/^(?:#\s*)?\d{1,2}\s*(?:[.)º°:-]+)?\s*/u, '')
+      .replace(/^(?:top\s*)?\d{1,2}\s*[-:]\s*/iu, '')
+      .trim();
+    return withoutNumberPrefix;
+  }
+
+  private buildAlternativeQueries(title: string): string[] {
+    const clean = this.sanitizeQueryInput(title);
+    if (!clean) return [];
+    const normalized = normalizeForCompare(clean);
+    const words = normalized.match(/[a-z0-9]+/g) || [];
+    const translated = words.map((word) => PT_EN_TERM_MAP[word] || word);
+    const significant = translated.filter((word) => !STOPWORDS.has(word));
+    const originalSignificant = words.filter((word) => !STOPWORDS.has(word));
+
+    const candidates = new Set<string>();
+    if (significant.length > 0) candidates.add(significant.join(' '));
+    if (significant.length > 1) candidates.add([...significant].reverse().join(' '));
+    if (originalSignificant.length > 0) candidates.add(originalSignificant.join(' '));
+    candidates.add(normalized);
+
+    candidates.delete(normalizeForCompare(title));
+    return Array.from(candidates).filter((item) => item.length >= 3).slice(0, 6);
+  }
+
+  private async searchByTypeExact(query: string, mediaType: MediaType, year?: string, language: string = 'pt-BR'): Promise<SearchResult> {
+    if (mediaType === 'multi') {
+      return this.searchMulti(query, language);
+    }
+    if (mediaType === 'movie') {
+      return this.searchMovie(query, year, language);
+    }
+    return this.searchTV(query, year, language);
+  }
+
+  private filterResultsByYear(result: SearchResult, year?: string): SearchResult {
+    if (!year) return result;
+    const normalizedYear = String(year).trim();
+    if (!/^\d{4}$/.test(normalizedYear)) return result;
+    const filtered = result.results.filter((item) => {
+      const date = item.media_type === 'tv' ? item.first_air_date : item.release_date;
+      return typeof date === 'string' && date.startsWith(`${normalizedYear}-`);
+    });
+    return {
+      ...result,
+      results: filtered,
+      total_results: filtered.length,
+      total_pages: filtered.length > 0 ? 1 : 0,
+    };
+  }
+
   private async makeRequest<T>(path: string, params: Record<string, string | number | undefined>): Promise<T> {
     const now = Date.now();
     const timeSinceLastRequest = now - lastRequestTime;
@@ -113,13 +209,40 @@ class SearchService {
   }
 
   async searchByType(query: string, mediaType: MediaType, year?: string, language: string = 'pt-BR'): Promise<SearchResult> {
-    if (mediaType === 'multi') {
-      return this.searchMulti(query, language);
+    const parsed = this.parseSearchQuery(query);
+    const cleanTitle = parsed.title;
+    const effectiveYear = year || parsed.year;
+    if (!cleanTitle) return this.buildEmptyResult();
+
+    const primary = this.filterResultsByYear(
+      await this.searchByTypeExact(cleanTitle, mediaType, effectiveYear, language),
+      effectiveYear
+    );
+    if (Array.isArray(primary.results) && primary.results.length > 0) return primary;
+
+    const fallbackLanguage = language.toLowerCase().startsWith('pt') ? 'en-US' : 'pt-BR';
+    const fallbackWithLanguage = this.filterResultsByYear(
+      await this.searchByTypeExact(cleanTitle, mediaType, effectiveYear, fallbackLanguage),
+      effectiveYear
+    );
+    if (Array.isArray(fallbackWithLanguage.results) && fallbackWithLanguage.results.length > 0) return fallbackWithLanguage;
+
+    const alternatives = this.buildAlternativeQueries(cleanTitle);
+    for (const alternative of alternatives) {
+      const alternativeResult = this.filterResultsByYear(
+        await this.searchByTypeExact(alternative, mediaType, effectiveYear, 'en-US'),
+        effectiveYear
+      );
+      if (Array.isArray(alternativeResult.results) && alternativeResult.results.length > 0) {
+        return alternativeResult;
+      }
     }
-    if (mediaType === 'movie') {
-      return this.searchMovie(query, year, language);
+
+    if (effectiveYear) {
+      return this.buildEmptyResult();
     }
-    return this.searchTV(query, year, language);
+
+    return primary;
   }
 
   async searchMulti(query: string, language: string = 'pt-BR'): Promise<SearchResult> {
@@ -178,16 +301,18 @@ class SearchService {
   }
 
   parseSearchQuery(query: string): { title: string; year?: string } {
+    const sanitizedQuery = this.sanitizeQueryInput(query);
+    if (!sanitizedQuery) return { title: '' };
     const patterns = [/^(.+?)\s*\((\d{4})\)$/, /^(.+?)\s*-\s*(\d{4})$/, /^(.+?)\s+(\d{4})$/];
 
     for (const pattern of patterns) {
-      const match = query.trim().match(pattern);
+      const match = sanitizedQuery.match(pattern);
       if (match) {
         return { title: match[1].trim(), year: match[2] };
       }
     }
 
-    return { title: query.trim() };
+    return { title: sanitizedQuery };
   }
 }
 

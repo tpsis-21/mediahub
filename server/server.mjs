@@ -5914,11 +5914,12 @@ app.get('/api/football/schedule', requireAuth, requirePremiumOrAdmin, async (req
           const channels = Array.isArray(item?.channels) ? item.channels.map((c) => String(c || '').trim()).filter(Boolean) : []
           const homeCrestUrl = normalizeFootballCrestUrl(typeof item?.homeCrestUrl === 'string' ? item.homeCrestUrl.trim() : '')
           const awayCrestUrl = normalizeFootballCrestUrl(typeof item?.awayCrestUrl === 'string' ? item.awayCrestUrl.trim() : '')
+          const href = typeof item?.href === 'string' ? item.href.trim() : ''
           if (!time || !home || !away) continue
           const key = `${time}::${normalizeFootballSearchText(home)}::${normalizeFootballSearchText(away)}`
           const existing = mergedMap.get(key)
           if (!existing) {
-            mergedMap.set(key, { time, home, away, competition, channels, homeCrestUrl, awayCrestUrl })
+            mergedMap.set(key, { time, home, away, competition, channels, homeCrestUrl, awayCrestUrl, href })
             continue
           }
           if (!existing.competition && competition) existing.competition = competition
@@ -5940,6 +5941,7 @@ app.get('/api/football/schedule', requireAuth, requirePremiumOrAdmin, async (req
           } else if (!existingAway && awayCrestUrl) {
             existing.awayCrestUrl = awayCrestUrl
           }
+          if (!existing.href && href) existing.href = href
         }
       }
       const merged = [...mergedMap.values()]
@@ -5983,6 +5985,12 @@ app.get('/api/football/schedule', requireAuth, requirePremiumOrAdmin, async (req
 
     merged = merged.filter((match) => !shouldExcludeFootballMatch(match, settings))
 
+    // Evita resposta com escudos vazios quando o refresh em background ainda não concluiu.
+    const shouldEnrichNow = shouldRefreshFootballScheduleBecauseCrestsMissing({ merged, scheduleDateIso: responseDate })
+    if (shouldEnrichNow && merged.length > 0) {
+      merged = await enrichFutebolNaTvMatchesWithCrests(merged)
+    }
+
     if (
       shouldRefreshFootballScheduleBecauseTooFew({ merged, scheduleDateIso: responseDate }) ||
       shouldRefreshFootballScheduleBecauseCrestsMissing({ merged, scheduleDateIso: responseDate })
@@ -5990,7 +5998,16 @@ app.get('/api/football/schedule', requireAuth, requirePremiumOrAdmin, async (req
       void refreshFootballSchedule({ scheduleDateIso: responseDate, timeZone: settings.timeZone }).catch(() => undefined)
     }
 
-    res.json({ date: responseDate, updatedAt, matches: merged })
+    const publicMatches = merged.map((m) => ({
+      time: m.time,
+      home: m.home,
+      away: m.away,
+      competition: m.competition,
+      channels: Array.isArray(m.channels) ? m.channels : [],
+      homeCrestUrl: m.homeCrestUrl || '',
+      awayCrestUrl: m.awayCrestUrl || '',
+    }))
+    res.json({ date: responseDate, updatedAt, matches: publicMatches })
   } catch {
     res.status(200).json({
       date: explicitDate || new Date().toISOString().slice(0, 10),

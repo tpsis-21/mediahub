@@ -4,3 +4,6 @@ YOUTUBE_DL_SKIP_PYTHON_CHECK = "1"
 
 [phases.setup]
 nixPkgs = ["nodejs_20", "bun", "python3"]
+
+[start]
+cmd = "node server/server.mjs"

@@ -322,6 +322,31 @@ const resolveFootballAssetUrl = (rawUrl: string) => {
   return buildApiUrl(`/api/football/crest?url=${encodeURIComponent(value)}`);
 };
 
+const resolveFootballAssetCandidates = (rawUrl: string) => {
+  const value = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+  if (!value) return [];
+  if (value.startsWith('data:')) return [value];
+  if (value.startsWith('/')) {
+    if (value.startsWith('/upload/teams/')) {
+      const absolute = `https://www.futebolnatv.com.br${value}`;
+      return [
+        buildApiUrl(`/api/football/crest?url=${encodeURIComponent(absolute)}`),
+        absolute,
+      ];
+    }
+    return [value];
+  }
+  const absolute = value.startsWith('//') ? `https:${value}` : value;
+  const httpsCandidate = absolute.replace(/^http:\/\//i, 'https://');
+  return Array.from(
+    new Set([
+      buildApiUrl(`/api/football/crest?url=${encodeURIComponent(absolute)}`),
+      httpsCandidate,
+      absolute,
+    ].filter(Boolean))
+  );
+};
+
 const stripDiacritics = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
 const toTeamInitials = (teamName: string) => {
@@ -346,6 +371,11 @@ const hashString = (value: string) => {
 };
 
 const isPlaceholderCrestUrl = (value: string) => String(value || '').includes('/assets/img/loadteam.png');
+const hasRenderableCrest = (value?: string) => {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  return !isPlaceholderCrestUrl(raw);
+};
 
 const computeFootballBannerItemsPerPage = (args: {
   format: BannerFormat;
@@ -468,13 +498,19 @@ const generateFootballBanner = async (args: {
   const backgroundImg = args.preloadedBackgroundImg !== undefined ? args.preloadedBackgroundImg : await loadImage(FOOTBALL_BACKGROUND_URL);
   const fontStack = getCanvasFontStack();
   const crestImages = args.crestCache ?? new Map<string, HTMLImageElement | null>();
-  const ensureCrestImages = async (urls: string[]) => {
-    const unique = Array.from(new Set(urls.filter(Boolean)));
-    const missing = unique.filter((url) => !crestImages.has(url));
-    if (missing.length === 0) return;
+  const ensureCrestImages = async (rawUrls: string[]) => {
+    const uniqueRaw = Array.from(new Set(rawUrls.filter(Boolean)));
+    const missingRaw = uniqueRaw.filter((raw) => {
+      const key = resolveFootballAssetUrl(raw);
+      return Boolean(key) && !crestImages.has(key);
+    });
+    if (missingRaw.length === 0) return;
     await Promise.all(
-      missing.map(async (url) => {
-        crestImages.set(url, await loadImage(url));
+      missingRaw.map(async (raw) => {
+        const key = resolveFootballAssetUrl(raw);
+        if (!key) return;
+        const img = await loadImageFirstAvailable(resolveFootballAssetCandidates(raw));
+        crestImages.set(key, img);
       })
     );
   };
@@ -615,7 +651,7 @@ const generateFootballBanner = async (args: {
     const rowsMax = 6;
     const visibleCount = Math.min(args.matches.length, rowsMax);
     const items = args.matches.slice(0, visibleCount);
-    const crestUrlList = items.flatMap((m) => [resolveFootballAssetUrl(m.homeCrestUrl || ''), resolveFootballAssetUrl(m.awayCrestUrl || '')]).filter(Boolean);
+    const crestUrlList = items.flatMap((m) => [m.homeCrestUrl || '', m.awayCrestUrl || '']).filter(Boolean);
     await ensureCrestImages(crestUrlList);
 
     const rowRatio = promoFlagsImg ? ((promoFlagsImg.naturalHeight || promoFlagsImg.height) / Math.max(1, (promoFlagsImg.naturalWidth || promoFlagsImg.width))) : (124 / 727);
@@ -806,7 +842,7 @@ const generateFootballBanner = async (args: {
     const rowsMax = 5;
     const visibleCount = Math.min(args.matches.length, rowsMax);
     const items = args.matches.slice(0, visibleCount);
-    const crestUrlList = items.flatMap((m) => [resolveFootballAssetUrl(m.homeCrestUrl || ''), resolveFootballAssetUrl(m.awayCrestUrl || '')]).filter(Boolean);
+    const crestUrlList = items.flatMap((m) => [m.homeCrestUrl || '', m.awayCrestUrl || '']).filter(Boolean);
     await ensureCrestImages(crestUrlList);
 
     // Usa o próprio arquivo do modelo 3; se vier com canvas grande, recorta a faixa útil automaticamente.
@@ -1158,7 +1194,7 @@ const generateFootballBanner = async (args: {
   const contentPad = 28;
   const baseY = listY + contentPad;
   const crestUrlList = rows
-    .flatMap((m) => [resolveFootballAssetUrl(m.homeCrestUrl || ''), resolveFootballAssetUrl(m.awayCrestUrl || '')])
+    .flatMap((m) => [m.homeCrestUrl || '', m.awayCrestUrl || ''])
     .filter(Boolean);
   await ensureCrestImages(crestUrlList);
 
@@ -1806,6 +1842,34 @@ const FootballBannerModal: React.FC<FootballBannerModalProps> = ({ isOpen, onClo
     }
     setIsGenerating(true);
     try {
+      let matchesForGeneration = selectedMatches;
+      const shouldAttemptRefreshForCrests =
+        matchesForGeneration.length > 0 &&
+        matchesForGeneration.every((m) => !hasRenderableCrest(m.homeCrestUrl) && !hasRenderableCrest(m.awayCrestUrl));
+
+      if (shouldAttemptRefreshForCrests) {
+        try {
+          await triggerScheduleRefresh(schedule.date);
+          const refreshed = await apiRequest<FootballScheduleResponse>({
+            path: `/api/football/schedule?date=${encodeURIComponent(schedule.date)}`,
+            method: 'GET',
+            auth: true,
+            timeoutMs: 20_000,
+          });
+          writeCachedFootballSchedule(refreshed);
+          applySchedule(refreshed);
+          const selectedKeys = new Set(selectedMatches.map((m) => footballMatchKey(m)));
+          const remapped = (Array.isArray(refreshed.matches) ? refreshed.matches : []).filter((m) =>
+            selectedKeys.has(footballMatchKey(m))
+          );
+          if (remapped.length > 0) {
+            matchesForGeneration = remapped;
+          }
+        } catch {
+          // Se não conseguir atualizar, segue com os dados atuais para não bloquear a geração.
+        }
+      }
+
       const modelDefault = FOOTBALL_TEMPLATE_DEFAULT_COLORS[selectedTemplateId] || { primary: '#2563eb', secondary: '#7c3aed' };
       clearGenerated();
       const { blobs, pageCount } = await generateFootballBanners({
@@ -1816,7 +1880,7 @@ const FootballBannerModal: React.FC<FootballBannerModalProps> = ({ isOpen, onClo
         footerText,
         footerContactType: includeFooterPhone ? 'phone' : includeFooterWebsite ? 'website' : undefined,
         date: schedule.date,
-        matches: selectedMatches,
+        matches: matchesForGeneration,
         format,
         templateId: selectedTemplateId,
       });

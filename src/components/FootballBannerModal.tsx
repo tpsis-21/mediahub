@@ -304,39 +304,33 @@ const loadBrandLogoImage = async (rawUrl: string): Promise<HTMLImageElement | nu
   }
 };
 
-const resolveFootballAssetUrl = (rawUrl: string) => {
+const normalizeFootballAssetInput = (rawUrl: string) => {
   const value = typeof rawUrl === 'string' ? rawUrl.trim() : '';
   if (!value) return '';
   if (value.startsWith('data:')) return value;
-  if (value.startsWith('//')) {
-    const absolute = `https:${value}`;
-    return buildApiUrl(`/api/football/crest?url=${encodeURIComponent(absolute)}`);
-  }
-  // Alguns provedores retornam caminho relativo do futebolnatv para escudos.
-  // Sem normalização, o browser tenta carregar no domínio da app e falha.
-  if (value.startsWith('/upload/teams/')) {
-    const absolute = `https://www.futebolnatv.com.br${value}`;
-    return buildApiUrl(`/api/football/crest?url=${encodeURIComponent(absolute)}`);
-  }
-  if (value.startsWith('/')) return value;
-  return buildApiUrl(`/api/football/crest?url=${encodeURIComponent(value)}`);
+  if (value.startsWith('//')) return `https:${value}`;
+  if (value.startsWith('/upload/teams/')) return `https://www.futebolnatv.com.br${value}`;
+  if (value.startsWith('upload/teams/')) return `https://www.futebolnatv.com.br/${value}`;
+  if (/^www\.futebolnatv\.com\.br\//i.test(value)) return `https://${value}`;
+  return value;
+};
+
+const resolveFootballAssetUrl = (rawUrl: string) => {
+  const normalized = normalizeFootballAssetInput(rawUrl);
+  if (!normalized) return '';
+  if (normalized.startsWith('data:')) return normalized;
+  if (normalized.startsWith('/')) return normalized;
+  return buildApiUrl(`/api/football/crest?url=${encodeURIComponent(normalized)}`);
 };
 
 const resolveFootballAssetCandidates = (rawUrl: string) => {
-  const value = typeof rawUrl === 'string' ? rawUrl.trim() : '';
-  if (!value) return [];
-  if (value.startsWith('data:')) return [value];
-  if (value.startsWith('/')) {
-    if (value.startsWith('/upload/teams/')) {
-      const absolute = `https://www.futebolnatv.com.br${value}`;
-      return [
-        buildApiUrl(`/api/football/crest?url=${encodeURIComponent(absolute)}`),
-        absolute,
-      ];
-    }
-    return [value];
+  const normalized = normalizeFootballAssetInput(rawUrl);
+  if (!normalized) return [];
+  if (normalized.startsWith('data:')) return [normalized];
+  if (normalized.startsWith('/')) {
+    return [normalized];
   }
-  const absolute = value.startsWith('//') ? `https:${value}` : value;
+  const absolute = normalized;
   const httpsCandidate = absolute.replace(/^http:\/\//i, 'https://');
   return Array.from(
     new Set([

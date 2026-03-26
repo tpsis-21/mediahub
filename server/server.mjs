@@ -1422,6 +1422,25 @@ const normalizeFootballSearchText = (value) => {
 
 const isPlaceholderFootballTeamCrestUrl = (value) => String(value || '').includes('/assets/img/loadteam.png')
 
+const normalizeFootballCrestUrl = (value) => {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  if (raw.startsWith('data:')) return raw
+  if (raw.startsWith('//')) return `https:${raw}`
+  if (raw.startsWith('/')) return `https://www.futebolnatv.com.br${raw}`
+  if (raw.startsWith('upload/')) return `https://www.futebolnatv.com.br/${raw}`
+  try {
+    const parsed = new URL(raw)
+    if (parsed.protocol === 'http:') {
+      parsed.protocol = 'https:'
+      return parsed.toString()
+    }
+    return parsed.toString()
+  } catch {
+    return raw
+  }
+}
+
 const parseFutebolNaTvBrSchedule = ({ html }) => {
   const rawHtml = String(html || '')
   const anchorRe = /<a\b[^>]*href="([^"]*\/aovivo\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi
@@ -5893,8 +5912,8 @@ app.get('/api/football/schedule', requireAuth, requirePremiumOrAdmin, async (req
           const away = typeof item?.away === 'string' ? item.away.trim() : ''
           const competition = typeof item?.competition === 'string' ? item.competition.trim() : ''
           const channels = Array.isArray(item?.channels) ? item.channels.map((c) => String(c || '').trim()).filter(Boolean) : []
-          const homeCrestUrl = typeof item?.homeCrestUrl === 'string' ? item.homeCrestUrl.trim() : ''
-          const awayCrestUrl = typeof item?.awayCrestUrl === 'string' ? item.awayCrestUrl.trim() : ''
+          const homeCrestUrl = normalizeFootballCrestUrl(typeof item?.homeCrestUrl === 'string' ? item.homeCrestUrl.trim() : '')
+          const awayCrestUrl = normalizeFootballCrestUrl(typeof item?.awayCrestUrl === 'string' ? item.awayCrestUrl.trim() : '')
           if (!time || !home || !away) continue
           const key = `${time}::${normalizeFootballSearchText(home)}::${normalizeFootballSearchText(away)}`
           const existing = mergedMap.get(key)

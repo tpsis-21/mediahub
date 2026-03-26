@@ -8,7 +8,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __rootDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
-dotenv.config({ path: path.join(__rootDir, '.env') })
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config({ path: path.join(__rootDir, '.env') })
+}
 
 import express from 'express'
 import helmet from 'helmet'
@@ -169,7 +171,10 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 } // 50MB
 })
 
-const PORT = Number(process.env.PORT || 8081)
+const isProductionEnv = process.env.NODE_ENV === 'production'
+const rawPort = String(process.env.PORT || '').trim()
+const PORT = Number(rawPort || 8081)
+const HOST = process.env.HOST || '0.0.0.0'
 const DATABASE_URL = process.env.DATABASE_URL || ''
 const JWT_SECRET = process.env.JWT_SECRET || ''
 const ALLOWED_ORIGINS_RAW = process.env.ALLOWED_ORIGIN || ''
@@ -211,7 +216,39 @@ if (!JWT_SECRET) {
   throw new Error('JWT_SECRET não configurado')
 }
 
-const pool = new Pool({ connectionString: DATABASE_URL })
+if (isProductionEnv && rawPort.length === 0) {
+  throw new Error('PORT não configurado em produção')
+}
+
+if (!Number.isFinite(PORT) || PORT <= 0) {
+  throw new Error('PORT inválida')
+}
+
+const resolvePgSsl = () => {
+  const sslModeRaw = String(process.env.PGSSLMODE || process.env.PGSSL || '').trim().toLowerCase()
+  if (sslModeRaw) {
+    if (['disable', 'off', 'false', '0'].includes(sslModeRaw)) return false
+    if (['require', 'verify-ca', 'verify-full', 'on', 'true', '1'].includes(sslModeRaw)) {
+      return { rejectUnauthorized: false }
+    }
+  }
+
+  try {
+    const url = new URL(DATABASE_URL)
+    const host = String(url.hostname || '').toLowerCase()
+    const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '::1'
+    if (isLocalHost) return false
+  } catch {
+    return false
+  }
+
+  return { rejectUnauthorized: false }
+}
+
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: resolvePgSsl(),
+})
 
 const initDb = async () => {
   try {
@@ -7409,9 +7446,9 @@ const maxListenRecoveries = 3
 const attachHttpServer = () => {
   freeProjectListenPort()
   const runtimeBuildTag = 'video-branding-fallback-v10'
-  server = app.listen(PORT, () => {
+  server = app.listen(PORT, HOST, () => {
     startFootballScheduler()
-    console.log(`API pronta em http://localhost:${PORT} (${runtimeBuildTag})`)
+    console.log(`API pronta em http://${HOST}:${PORT} (${runtimeBuildTag})`)
   })
   // Geração de vídeo pode levar vários minutos sem enviar o primeiro byte; timeouts padrão do Node podem derrubar o socket.
   try {

@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useState, useMemo, Component, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { Download, Loader2, Moon, Sun, Settings, LogOut, UserCog, ShieldCheck, Sparkles } from "lucide-react";
 
 import SearchForm from "../components/SearchForm";
@@ -515,7 +515,16 @@ const AppPage = () => {
     setShowTop10BannerModal(true);
   };
 
-  if (!user) return null;
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin mr-2" />
+        <span>Carregando sessão...</span>
+      </div>
+    );
+  }
+
+  if (!user) return <Navigate to="/" replace />;
 
   return (
     <SidebarProvider>

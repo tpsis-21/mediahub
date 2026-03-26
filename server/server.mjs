@@ -2137,16 +2137,36 @@ const extractFutebolNaTvTeamCrestsFromHtml = (html) => {
   const $ = cheerio.load(raw);
   const urls = [];
 
+  const isTeamCrestUrl = (u) => {
+    const s = String(u || '').trim();
+    if (!s) return false;
+    if (s.includes('/assets/img/loadteam.png')) return false;
+    // Aceita variações de caminho do provedor (upload/teams, upload/team, teams/<...>)
+    return /(\/upload\/teams\/|\/upload\/team\/|\/teams\/)/i.test(s);
+  }
+
   $('img').each((i, elem) => {
     const src = $(elem).attr('src') || $(elem).attr('data-src') || $(elem).attr('data-original') || $(elem).attr('data-lazy-src') || $(elem).attr('data-lazy');
-    const abs = toAbsFutebolNaTvAssetUrl(src);
-    if (abs) {
-      urls.push(abs);
+    const srcset = $(elem).attr('srcset');
+
+    if (src) urls.push(toAbsFutebolNaTvAssetUrl(src));
+    if (srcset) {
+      // srcset pode vir como: "url1 1x, url2 2x"
+      const first = String(srcset).split(',').map((p) => p.trim())[0];
+      const urlOnly = first ? first.split(/\s+/)[0] : '';
+      if (urlOnly) urls.push(toAbsFutebolNaTvAssetUrl(urlOnly));
     }
   });
 
+  // Alguns escudos podem aparecer no HTML em blocos/estilos e não necessariamente em img.src.
+  // Captura caminhos que contenham "teams" e normaliza.
+  const regexTeamUrls = raw.match(/(?:https?:\/\/(?:www\.)?futebolnatv\.com\.br)?\/(?:upload\/)?teams\/[^"'\\s)]+/gi) || [];
+  for (const m of regexTeamUrls) {
+    urls.push(toAbsFutebolNaTvAssetUrl(m));
+  }
+
   const unique = uniqStrings(urls);
-  const teamUrls = unique.filter((u) => u.includes('/upload/teams/'));
+  const teamUrls = unique.filter((u) => isTeamCrestUrl(u));
   return { homeCrestUrl: teamUrls[0] || '', awayCrestUrl: teamUrls[1] || '' };
 }
 
@@ -2156,12 +2176,20 @@ const extractFutebolNaTvTeamCrestsFromMarkdown = (markdown) => {
   const urls = []
   const re = /!\[[^\]]*\]\(([^)\s]+)\)/gi
   let m
+
+  const isTeamCrestUrl = (u) => {
+    const s = String(u || '').trim();
+    if (!s) return false;
+    if (s.includes('/assets/img/loadteam.png')) return false;
+    return /(\/upload\/teams\/|\/upload\/team\/|\/teams\/)/i.test(s);
+  }
+
   while ((m = re.exec(raw)) !== null) {
     const abs = toAbsFutebolNaTvAssetUrl(String(m[1] || '').trim())
     if (abs) urls.push(abs)
   }
   const unique = uniqStrings(urls)
-  const teamUrls = unique.filter((u) => u.includes('/upload/teams/'))
+  const teamUrls = unique.filter((u) => isTeamCrestUrl(u))
   return { homeCrestUrl: teamUrls[0] || '', awayCrestUrl: teamUrls[1] || '' }
 }
 

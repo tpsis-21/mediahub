@@ -308,6 +308,16 @@ const resolveFootballAssetUrl = (rawUrl: string) => {
   const value = typeof rawUrl === 'string' ? rawUrl.trim() : '';
   if (!value) return '';
   if (value.startsWith('data:')) return value;
+  if (value.startsWith('//')) {
+    const absolute = `https:${value}`;
+    return buildApiUrl(`/api/football/crest?url=${encodeURIComponent(absolute)}`);
+  }
+  // Alguns provedores retornam caminho relativo do futebolnatv para escudos.
+  // Sem normalização, o browser tenta carregar no domínio da app e falha.
+  if (value.startsWith('/upload/teams/')) {
+    const absolute = `https://www.futebolnatv.com.br${value}`;
+    return buildApiUrl(`/api/football/crest?url=${encodeURIComponent(absolute)}`);
+  }
   if (value.startsWith('/')) return value;
   return buildApiUrl(`/api/football/crest?url=${encodeURIComponent(value)}`);
 };

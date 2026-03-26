@@ -5985,10 +5985,21 @@ app.get('/api/football/schedule', requireAuth, requirePremiumOrAdmin, async (req
 
     merged = merged.filter((match) => !shouldExcludeFootballMatch(match, settings))
 
-    // Evita resposta com escudos vazios quando o refresh em background ainda não concluiu.
+    // Se a cobertura de escudos estiver baixa, força refresh síncrono
+    // para evitar responder dados antigos sem href/escudos.
     const shouldEnrichNow = shouldRefreshFootballScheduleBecauseCrestsMissing({ merged, scheduleDateIso: responseDate })
-    if (shouldEnrichNow && merged.length > 0) {
-      merged = await enrichFutebolNaTvMatchesWithCrests(merged)
+    if (shouldEnrichNow) {
+      try {
+        await refreshFootballSchedule({ scheduleDateIso: responseDate, timeZone: settings.timeZone })
+        const refreshedRows = await loadRows(responseDate)
+        const refreshed = mergeRows(refreshedRows.rows)
+        merged = refreshed.merged.filter((match) => !shouldExcludeFootballMatch(match, settings))
+        updatedAt = refreshed.updatedAt || updatedAt
+      } catch {
+      }
+      if (merged.length > 0) {
+        merged = await enrichFutebolNaTvMatchesWithCrests(merged)
+      }
     }
 
     if (

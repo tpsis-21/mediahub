@@ -7367,57 +7367,27 @@ if (fs.existsSync(anexosDir)) {
 }
 
 if (fs.existsSync(distDir)) {
-  const assetsDir = path.join(distDir, 'assets')
-
-  const resolveHashedAssetFallback = (requestPath) => {
-    if (!requestPath || !requestPath.startsWith('/assets/')) return null
-    if (!fs.existsSync(assetsDir)) return null
-
-    const fileName = requestPath.slice('/assets/'.length)
-    const matched = fileName.match(/^([a-zA-Z0-9_-]+)-[a-zA-Z0-9_-]+\.(js|css)$/)
-    if (!matched) return null
-
-    const [, baseName, extension] = matched
-    let files = []
-    try {
-      files = fs.readdirSync(assetsDir)
-    } catch {
-      return null
-    }
-
-    const candidates = files
-      .filter((entry) => entry.startsWith(`${baseName}-`) && entry.endsWith(`.${extension}`))
-      .map((entry) => {
-        const absolutePath = path.join(assetsDir, entry)
-        try {
-          const stats = fs.statSync(absolutePath)
-          return { absolutePath, mtimeMs: stats.mtimeMs }
-        } catch {
-          return null
-        }
-      })
-      .filter(Boolean)
-
-    if (candidates.length === 0) return null
-    candidates.sort((a, b) => b.mtimeMs - a.mtimeMs)
-    return candidates[0].absolutePath
-  }
-
-  app.use(express.static(distDir))
+  app.use(express.static(distDir, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('index.html')) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+        return
+      }
+      if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+      }
+    },
+  }))
   app.get('*', (req, res) => {
     if (req.path && req.path.startsWith('/api/')) {
       res.status(404).json({ message: 'Rota não encontrada.' })
-      return
-    }
-    const fallbackAssetPath = resolveHashedAssetFallback(req.path)
-    if (fallbackAssetPath) {
-      res.sendFile(fallbackAssetPath)
       return
     }
     if (path.extname(req.path || '')) {
       res.status(404).type('text/plain').send('Not found')
       return
     }
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     res.sendFile(path.join(distDir, 'index.html'))
   })
 }

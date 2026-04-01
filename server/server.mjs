@@ -1,7 +1,9 @@
 import dotenv from 'dotenv'
 import crypto from 'node:crypto'
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
+import dns from 'node:dns'
 import fs from 'node:fs'
+import net from 'node:net'
 import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
@@ -10,6 +12,13 @@ import { fileURLToPath } from 'node:url'
 const __rootDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.join(__rootDir, '.env') })
+}
+
+try {
+  // Evita timeout em ambientes que resolvem IPv6 primeiro sem rota válida.
+  dns.setDefaultResultOrder('ipv4first')
+} catch {
+  void 0
 }
 
 import express from 'express'
@@ -175,7 +184,8 @@ const isProductionEnv = process.env.NODE_ENV === 'production'
 const rawPort = String(process.env.PORT || '').trim()
 const PORT = Number(rawPort || 8081)
 const HOST = process.env.HOST || '0.0.0.0'
-const DATABASE_URL = process.env.DATABASE_URL || ''
+/** URL direta do Postgres (obrigatória). Com Supabase em rede só IPv4, use também pooler — ver `getPgConnectionForPool`. */
+const DATABASE_URL_DIRECT = String(process.env.DATABASE_URL || '').trim()
 const JWT_SECRET = process.env.JWT_SECRET || ''
 const ALLOWED_ORIGINS_RAW = process.env.ALLOWED_ORIGIN || ''
 const ALLOWED_ORIGINS = String(ALLOWED_ORIGINS_RAW)
@@ -208,9 +218,48 @@ const SMTP_PASS = process.env.SMTP_PASS || ''
 const SMTP_FROM = process.env.SMTP_FROM || ''
 const APP_URL = process.env.APP_URL || ''
 
-if (!DATABASE_URL) {
+if (!DATABASE_URL_DIRECT) {
   throw new Error('DATABASE_URL não configurado')
 }
+
+/**
+ * Supabase: `db.<ref>.supabase.co` costuma resolver só em IPv6. O modo Session do Supavisor usa host `aws-0-<região>.pooler.supabase.com` (IPv4).
+ * Opções no .env: `DATABASE_POOLER_URL` (URI completa do painel, modo Session) ou `SUPABASE_POOLER_REGION=sa-east-1` ou `SUPABASE_POOLER_HOST=aws-0-....pooler.supabase.com`.
+ */
+const tryBuildSupabaseSessionPoolerUrl = (directUrl) => {
+  const hostOverride = String(process.env.SUPABASE_POOLER_HOST || '').trim()
+  const region = String(process.env.SUPABASE_POOLER_REGION || '').trim().replace(/^["']|["']$/g, '')
+  const poolerHostname = hostOverride || (region ? `aws-0-${region}.pooler.supabase.com` : '')
+  if (!directUrl || !poolerHostname) return null
+  try {
+    const u = new URL(directUrl)
+    const hn = u.hostname.toLowerCase()
+    const m = hn.match(/^db\.([a-z0-9]+)\.supabase\.co$/)
+    if (!m) return null
+    const ref = m[1]
+    const nu = new URL('postgresql://127.0.0.1/postgres')
+    nu.protocol = 'postgresql:'
+    nu.username = `postgres.${ref}`
+    nu.password = u.password
+    nu.hostname = poolerHostname
+    nu.port = '5432'
+    nu.pathname = u.pathname && u.pathname !== '/' ? u.pathname : '/postgres'
+    return nu.toString()
+  } catch {
+    return null
+  }
+}
+
+const getPgConnectionForPool = () => {
+  const poolerOpt = String(process.env.DATABASE_POOLER_URL || process.env.SUPABASE_DB_POOLER_URL || '').trim()
+  if (poolerOpt) return { url: poolerOpt, label: 'DATABASE_POOLER_URL' }
+  const built = tryBuildSupabaseSessionPoolerUrl(DATABASE_URL_DIRECT)
+  if (built) return { url: built, label: 'SUPABASE_POOLER_HOST|REGION' }
+  return { url: DATABASE_URL_DIRECT, label: 'DATABASE_URL' }
+}
+
+const pgConnectionForPool = getPgConnectionForPool()
+const PG_POOL_CONNECTION_STRING = pgConnectionForPool.url
 
 if (!JWT_SECRET) {
   throw new Error('JWT_SECRET não configurado')
@@ -224,7 +273,7 @@ if (!Number.isFinite(PORT) || PORT <= 0) {
   throw new Error('PORT inválida')
 }
 
-const resolvePgSsl = () => {
+const resolvePgSsl = (connectionUrl = PG_POOL_CONNECTION_STRING) => {
   const sslModeRaw = String(process.env.PGSSLMODE || process.env.PGSSL || '').trim().toLowerCase()
   if (sslModeRaw) {
     if (['disable', 'off', 'false', '0'].includes(sslModeRaw)) return false
@@ -234,7 +283,7 @@ const resolvePgSsl = () => {
   }
 
   try {
-    const url = new URL(DATABASE_URL)
+    const url = new URL(connectionUrl)
     const host = String(url.hostname || '').toLowerCase()
     const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '::1'
     if (isLocalHost) return false
@@ -245,10 +294,117 @@ const resolvePgSsl = () => {
   return { rejectUnauthorized: false }
 }
 
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: resolvePgSsl(),
-})
+/** Força IPv4 no host do Postgres quando possível (evita ETIMEDOUT em AAAA sem rota, comum no Windows). */
+const parsePgConnectionString = require('pg-connection-string')
+
+const buildPgPoolConfigAsync = async () => {
+  const connUrl = PG_POOL_CONNECTION_STRING
+  const sslFromHelper = resolvePgSsl(connUrl)
+  const fallback = { connectionString: connUrl, ssl: sslFromHelper }
+
+  const resolveHostnameToIpv4 = async (hostname) => {
+    const h = String(hostname || '').trim()
+    if (!h) return ''
+    try {
+      const records = await dns.promises.resolve4(h)
+      const first = Array.isArray(records) ? records[0] : ''
+      return first ? String(first).trim() : ''
+    } catch {
+      try {
+        const r = await dns.promises.lookup(h, { family: 4 })
+        return String(r?.address || '').trim()
+      } catch {
+        return ''
+      }
+    }
+  }
+
+  try {
+    const cfg = parsePgConnectionString.parseIntoClientConfig(connUrl)
+    const hostname = typeof cfg.host === 'string' ? cfg.host.trim() : ''
+    if (hostname.startsWith('/')) {
+      return { ...cfg, ssl: cfg.ssl !== undefined ? cfg.ssl : sslFromHelper }
+    }
+    const lower = hostname.toLowerCase()
+    const isLocalHost = lower === 'localhost' || lower === '127.0.0.1' || lower === '::1'
+    if (!hostname || isLocalHost) {
+      return { ...cfg, ssl: cfg.ssl !== undefined ? cfg.ssl : sslFromHelper }
+    }
+    const ipKind = net.isIP(hostname)
+    if (ipKind === 4 || ipKind === 6) {
+      return { ...cfg, ssl: cfg.ssl !== undefined ? cfg.ssl : sslFromHelper }
+    }
+
+    const ipv4 = await resolveHostnameToIpv4(hostname)
+    if (!ipv4 || net.isIP(ipv4) !== 4) return fallback
+
+    const next = { ...cfg, host: ipv4 }
+    const baseSsl = cfg.ssl !== undefined ? cfg.ssl : sslFromHelper
+    if (baseSsl && typeof baseSsl === 'object') {
+      next.ssl = { ...baseSsl, servername: hostname }
+    } else if (baseSsl === true) {
+      next.ssl = { rejectUnauthorized: false, servername: hostname }
+    } else {
+      next.ssl = baseSsl
+    }
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[pg] conexão Postgres via IPv4 (TLS servername = hostname do .env)')
+    }
+    return next
+  } catch {
+    void 0
+  }
+
+  try {
+    const url = new URL(connUrl)
+    const hostname = String(url.hostname || '').trim()
+    const lower = hostname.toLowerCase()
+    const isLocalHost = lower === 'localhost' || lower === '127.0.0.1' || lower === '::1'
+    if (!hostname || isLocalHost || net.isIP(hostname)) return fallback
+
+    const ipv4 = await resolveHostnameToIpv4(hostname)
+    if (!ipv4 || net.isIP(ipv4) !== 4) return fallback
+
+    url.hostname = ipv4
+    const ssl = sslFromHelper
+    const next = { connectionString: url.toString(), ssl }
+    if (ssl && typeof ssl === 'object') {
+      next.ssl = { ...ssl, servername: hostname }
+    }
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[pg] conexão Postgres via IPv4 (connection string reescrita)')
+    }
+    return next
+  } catch {
+    return fallback
+  }
+}
+
+const pool = new Pool(await buildPgPoolConfigAsync())
+
+if (process.env.NODE_ENV !== 'production') {
+  try {
+    const u = new URL(PG_POOL_CONNECTION_STRING)
+    if (pgConnectionForPool.label !== 'DATABASE_URL') {
+      console.log(`[pg] usando ${pgConnectionForPool.label} → ${u.hostname}:${u.port || '5432'}`)
+    }
+  } catch {
+    void 0
+  }
+  try {
+    const directHost = new URL(DATABASE_URL_DIRECT).hostname.toLowerCase()
+    const isDirectSb = /^db\.[a-z0-9]+\.supabase\.co$/.test(directHost)
+    if (isDirectSb && pgConnectionForPool.label === 'DATABASE_URL') {
+      console.warn(
+        '[pg] Supabase em host direto (db.*.supabase.co) = só IPv6. Sem IPv6 na rede → ETIMEDOUT e falha no login/banner futebol. ' +
+          'Corrija o .env: SUPABASE_POOLER_REGION=sa-east-1 (região em Project Settings → Infrastructure) ou DATABASE_POOLER_URL com a URI do modo Session (Connect → Session pooler). ' +
+          'Docs: https://supabase.com/docs/guides/database/connecting-to-postgres'
+      )
+    }
+  } catch {
+    void 0
+  }
+}
 
 const initDb = async () => {
   try {
@@ -308,6 +464,14 @@ const initDb = async () => {
       INSERT INTO football_sources (name, url, is_active)
       SELECT 'Futebol na TV', 'https://www.futebolnatv.com.br/', true
       WHERE NOT EXISTS (SELECT 1 FROM football_sources WHERE url ILIKE '%futebolnatv.com.br%');
+
+      INSERT INTO football_sources (name, url, is_active)
+      SELECT 'OneFootball', 'https://onefootball.com/pt-br/jogos', true
+      WHERE NOT EXISTS (SELECT 1 FROM football_sources WHERE url ILIKE '%onefootball.com/pt-br/jogos%');
+
+      INSERT INTO football_sources (name, url, is_active)
+      SELECT '365Scores TV', 'https://www.365scores.com/pt-br/where-to-watch', true
+      WHERE NOT EXISTS (SELECT 1 FROM football_sources WHERE url ILIKE '%365scores.com/pt-br/where-to-watch%');
     `)
     console.log('DB Init: Tabelas de tickets verificadas.')
   } catch (e) {
@@ -1994,6 +2158,98 @@ const parseFutebolNaTvBrMarkdownSchedule = ({ markdown }) => {
   return merged
 }
 
+const parseOneFootballMarkdownSchedule = ({ markdown }) => {
+  const raw = String(markdown || '')
+  if (!raw) return []
+  const lines = raw.split('\n')
+  const out = []
+  let currentCompetition = ''
+
+  const extractOneFootballCrestUrl = (rawUrl) => {
+    const value = String(rawUrl || '').trim()
+    if (!value) return ''
+    try {
+      const parsed = new URL(value)
+      const encoded = parsed.searchParams.get('image')
+      if (encoded) {
+        let decoded = encoded
+        for (let i = 0; i < 3; i++) {
+          try {
+            const next = decodeURIComponent(decoded)
+            if (next === decoded) break
+            decoded = next
+          } catch {
+            break
+          }
+        }
+        if (/^https?:\/\//i.test(decoded)) return decoded
+      }
+      return parsed.toString()
+    } catch {
+      return value
+    }
+  }
+
+  for (const originalLine of lines) {
+    const line = String(originalLine || '').trim()
+    if (!line) continue
+
+    const heading = line.match(/^##\s+(.+?)\s*$/)
+    if (heading) {
+      currentCompetition = normalizeFootballCompetitionLabel(heading[1])
+      continue
+    }
+
+    if (!/^\*\s+/.test(line)) continue
+    if (!/\/match\//i.test(line)) continue
+
+    const iconRe = /Icon:\s*([^)\]]+)\]\((https?:\/\/[^)\s]+)\)/gi
+    const teams = []
+    let m
+    while ((m = iconRe.exec(line)) !== null) {
+      const name = String(m[1] || '').replace(/\s+/g, ' ').trim()
+      const crest = extractOneFootballCrestUrl(m[2])
+      if (name) teams.push({ name, crest })
+      if (teams.length >= 2) break
+    }
+    if (teams.length < 2) continue
+
+    const timeMatch = line.match(/\b(\d{1,2}:\d{2})\b/)
+    const time = parseClockTime(timeMatch ? timeMatch[1] : '')
+    if (!time) continue
+
+    const hrefMatch = line.match(/\]\((https?:\/\/(?:www\.)?onefootball\.com\/[^)\s]*\/match\/\d+[^)\s]*)\)/i)
+    const href = hrefMatch ? String(hrefMatch[1]).trim() : ''
+
+    out.push({
+      time,
+      home: teams[0].name,
+      away: teams[1].name,
+      competition: currentCompetition,
+      channels: [],
+      homeCrestUrl: teams[0].crest || '',
+      awayCrestUrl: teams[1].crest || '',
+      href,
+    })
+  }
+
+  const mergedMap = new Map()
+  for (const m of out) {
+    const key = `${m.time}::${normalizeFootballSearchText(m.home)}::${normalizeFootballSearchText(m.away)}`
+    if (!mergedMap.has(key)) {
+      mergedMap.set(key, m)
+      continue
+    }
+    const existing = mergedMap.get(key)
+    if (!existing.competition && m.competition) existing.competition = m.competition
+    if (!existing.homeCrestUrl && m.homeCrestUrl) existing.homeCrestUrl = m.homeCrestUrl
+    if (!existing.awayCrestUrl && m.awayCrestUrl) existing.awayCrestUrl = m.awayCrestUrl
+  }
+  const merged = [...mergedMap.values()]
+  merged.sort((a, b) => a.time.localeCompare(b.time))
+  return merged
+}
+
 const isLikelyBlockedHtml = (html) => {
   const raw = String(html || '')
   if (!raw) return false
@@ -2049,6 +2305,18 @@ const resolveFootballSourceFetchUrl = ({ sourceUrl, scheduleDateIso, timeZone })
     if (scheduleDateIso === addDaysToIsoDate(today, 1)) return 'https://www.futebolnatv.com.br/jogos-amanha/'
     if (scheduleDateIso === addDaysToIsoDate(today, -1)) return 'https://www.futebolnatv.com.br/jogos-ontem/'
     return 'https://www.futebolnatv.com.br/'
+  } catch {
+    return sourceUrl
+  }
+}
+
+const resolveOneFootballFetchUrl = ({ sourceUrl, scheduleDateIso }) => {
+  try {
+    const url = new URL(String(sourceUrl || ''))
+    const host = (url.hostname || '').toLowerCase()
+    if (!host.endsWith('onefootball.com')) return sourceUrl
+    if (!scheduleDateIso) return 'https://onefootball.com/pt-br/jogos'
+    return `https://onefootball.com/pt-br/jogos?date=${encodeURIComponent(scheduleDateIso)}`
   } catch {
     return sourceUrl
   }
@@ -2376,7 +2644,10 @@ const refreshFootballSchedule = async ({ scheduleDateIso, timeZone }) => {
   for (const source of sources.rows) {
     const urlRaw = typeof source.url === 'string' ? source.url.trim() : ''
     if (!urlRaw || !isSafeExternalHttpUrl(urlRaw)) continue
-    const fetchUrl = resolveFootballSourceFetchUrl({ sourceUrl: urlRaw, scheduleDateIso, timeZone })
+    const fetchUrl = resolveOneFootballFetchUrl({
+      sourceUrl: resolveFootballSourceFetchUrl({ sourceUrl: urlRaw, scheduleDateIso, timeZone }),
+      scheduleDateIso,
+    })
     if (!fetchUrl || !isSafeExternalHttpUrl(fetchUrl)) continue
     let isFutebolNaTvBrSource = false
     try {
@@ -2388,12 +2659,36 @@ const refreshFootballSchedule = async ({ scheduleDateIso, timeZone }) => {
     let matches = []
     let ok = false
     try {
+      const isOneFootballSource = (() => {
+        try {
+          const host = (new URL(fetchUrl).hostname || '').toLowerCase()
+          return host.endsWith('onefootball.com')
+        } catch {
+          return false
+        }
+      })()
+
       if (isFutebolNaTvBrSource) {
         try {
           const readerUrl = toJinaReaderUrl(fetchUrl)
           const reader = await fetchTextWithHeaders(readerUrl)
           if (reader.ok && reader.text) {
             const readerMatches = parseFutebolNaTvBrMarkdownSchedule({ markdown: reader.text })
+            if (readerMatches.length > 0) {
+              matches = readerMatches
+              ok = true
+            }
+          }
+        } catch {
+        }
+      }
+
+      if (isOneFootballSource) {
+        try {
+          const readerUrl = toJinaReaderUrl(fetchUrl)
+          const reader = await fetchTextWithHeaders(readerUrl)
+          if (reader.ok && reader.text) {
+            const readerMatches = parseOneFootballMarkdownSchedule({ markdown: reader.text })
             if (readerMatches.length > 0) {
               matches = readerMatches
               ok = true

@@ -482,7 +482,13 @@ const initDb = async () => {
 
 const app = express()
 app.disable('x-powered-by')
-app.use(helmet({ contentSecurityPolicy: false }))
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    // Padrão same-origin impede `<img crossorigin>` no canvas quando o front está em outro host que o da API.
+    crossOriginResourcePolicy: false,
+  })
+)
 app.use(express.json({ limit: '6mb' }))
 app.use(express.urlencoded({ extended: false, limit: '1mb' }))
 
@@ -6399,7 +6405,22 @@ app.get('/api/football/schedule', requireAuth, requirePremiumOrAdmin, async (req
   }
 })
 
+const setFootballCrestCorsHeaders = (res) => {
+  // Imagem carregada no canvas no browser (crossOrigin=anonymous): precisa CORS + CORP permissivo.
+  // Em dev o Vite proxy mascara origem cruzada; em produção (front ≠ API) sem isso o onerror cai e só aparecem iniciais.
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin')
+}
+
+app.options('/api/football/crest', (_req, res) => {
+  setFootballCrestCorsHeaders(res)
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
+  res.setHeader('Access-Control-Max-Age', '86400')
+  res.status(204).end()
+})
+
 app.get('/api/football/crest', async (req, res) => {
+  setFootballCrestCorsHeaders(res)
   const urlRaw = typeof req.query?.url === 'string' ? req.query.url.trim() : ''
   if (!urlRaw || urlRaw.length > 800) {
     res.status(400).end()

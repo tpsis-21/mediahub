@@ -6450,7 +6450,7 @@ app.get('/api/football/crest', async (req, res) => {
       return
     }
     const buffer = Buffer.from(await response.arrayBuffer())
-    if (buffer.length > 600_000) {
+    if (buffer.length > 2_500_000) {
       res.status(413).end()
       return
     }

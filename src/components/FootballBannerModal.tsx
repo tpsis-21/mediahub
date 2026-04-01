@@ -341,6 +341,35 @@ const resolveFootballAssetCandidates = (rawUrl: string) => {
   );
 };
 
+const loadFootballCrestImage = async (rawUrl: string): Promise<HTMLImageElement | null> => {
+  const normalized = normalizeFootballAssetInput(rawUrl);
+  if (!normalized) return null;
+  if (normalized.startsWith('data:') || normalized.startsWith('/')) {
+    return await loadImageFirstAvailable(resolveFootballAssetCandidates(rawUrl));
+  }
+
+  const token = getAuthToken();
+  if (token) {
+    try {
+      const res = await fetch(buildApiUrl(`/api/assets/image?url=${encodeURIComponent(normalized)}`), {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}`, Accept: 'image/*' },
+      });
+      if (res.ok) {
+        const blob = await res.blob();
+        if (blob && blob.size > 0) {
+          const fromBlob = await loadImageFromBlob(blob);
+          if (fromBlob) return fromBlob;
+        }
+      }
+    } catch {
+      // fallback abaixo
+    }
+  }
+
+  return await loadImageFirstAvailable(resolveFootballAssetCandidates(rawUrl));
+};
+
 const stripDiacritics = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
 const toTeamInitials = (teamName: string) => {
@@ -503,7 +532,7 @@ const generateFootballBanner = async (args: {
       missingRaw.map(async (raw) => {
         const key = resolveFootballAssetUrl(raw);
         if (!key) return;
-        const img = await loadImageFirstAvailable(resolveFootballAssetCandidates(raw));
+        const img = await loadFootballCrestImage(raw);
         crestImages.set(key, img);
       })
     );

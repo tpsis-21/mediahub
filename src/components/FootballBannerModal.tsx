@@ -117,11 +117,28 @@ const readCachedFootballSchedule = (expectedDate: string): FootballScheduleRespo
   }
 };
 
+const stripInlineCrestsForStorage = (schedule: FootballScheduleResponse): FootballScheduleResponse => ({
+  ...schedule,
+  matches: (schedule.matches || []).map((m) => ({
+    ...m,
+    homeCrestUrl:
+      typeof m.homeCrestUrl === 'string' && m.homeCrestUrl.startsWith('data:') ? '' : m.homeCrestUrl,
+    awayCrestUrl:
+      typeof m.awayCrestUrl === 'string' && m.awayCrestUrl.startsWith('data:') ? '' : m.awayCrestUrl,
+  })),
+});
+
 const writeCachedFootballSchedule = (schedule: FootballScheduleResponse) => {
   try {
     const dateIso = typeof schedule?.date === 'string' ? schedule.date.trim() : '';
     if (!dateIso) return;
-    localStorage.setItem(getFootballScheduleCacheKey(dateIso), JSON.stringify({ cachedAt: Date.now(), schedule }));
+    const key = getFootballScheduleCacheKey(dateIso);
+    const payload = { cachedAt: Date.now(), schedule };
+    try {
+      localStorage.setItem(key, JSON.stringify(payload));
+    } catch {
+      localStorage.setItem(key, JSON.stringify({ ...payload, schedule: stripInlineCrestsForStorage(schedule) }));
+    }
   } catch {
     return;
   }
@@ -247,7 +264,10 @@ const loadImage = (src: string): Promise<HTMLImageElement | null> => {
       return;
     }
     const img = new Image();
-    img.crossOrigin = 'anonymous';
+    // data:/blob: não devem usar crossOrigin (evita falhas em alguns browsers ao desenhar no canvas).
+    if (!url.startsWith('data:') && !url.startsWith('blob:')) {
+      img.crossOrigin = 'anonymous';
+    }
     img.onload = () => resolve(img);
     img.onerror = () => resolve(null);
     img.src = url;
@@ -1607,7 +1627,8 @@ const FootballBannerModal: React.FC<FootballBannerModalProps> = ({ isOpen, onClo
         path: `/api/football/schedule${query}`,
         method: 'GET',
         auth: true,
-        timeoutMs: 20_000,
+        // Servidor pode embutir escudos (data URLs); precisa de margem acima do enrich + inline.
+        timeoutMs: 55_000,
       });
       lastScheduleFetchAtRef.current = Date.now();
       applySchedule(data);
@@ -1877,7 +1898,7 @@ const FootballBannerModal: React.FC<FootballBannerModalProps> = ({ isOpen, onClo
             path: `/api/football/schedule?date=${encodeURIComponent(schedule.date)}`,
             method: 'GET',
             auth: true,
-            timeoutMs: 20_000,
+            timeoutMs: 55_000,
           });
           writeCachedFootballSchedule(refreshed);
           applySchedule(refreshed);

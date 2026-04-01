@@ -2723,6 +2723,117 @@ const enrichFootballMatchesWithTeamNameBadges = async (matches) => {
   return list
 }
 
+/** Cache URL externa → data URL (evita canvas/CORS no browser: o schedule já traz pixels embutidos). */
+const footballCrestDataUrlCache = new Map()
+
+const sniffImageMimeFromBuffer = (buf) => {
+  if (!buf || buf.length < 12) return ''
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg'
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png'
+  if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 && buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) {
+    return 'image/webp'
+  }
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return 'image/gif'
+  return ''
+}
+
+const fetchExternalCrestAsDataUrl = async (rawUrl) => {
+  const normalized = normalizeFootballCrestUrl(rawUrl)
+  if (!normalized || normalized.startsWith('data:')) return ''
+  if (!isSafeExternalHttpUrl(normalized)) return ''
+  const hit = footballCrestDataUrlCache.get(normalized)
+  if (hit && hit.expiresAt > Date.now()) return String(hit.dataUrl || '')
+
+  try {
+    const url = new URL(normalized)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 6500)
+    let response
+    try {
+      response = await fetch(url.toString(), {
+        signal: controller.signal,
+        headers: {
+          'user-agent': 'Mozilla/5.0',
+          accept: 'image/*,*/*;q=0.8',
+          referer: `${url.origin}/`,
+        },
+      })
+    } finally {
+      clearTimeout(timer)
+    }
+    if (!response.ok) {
+      footballCrestDataUrlCache.set(normalized, { dataUrl: '', expiresAt: Date.now() + 12 * 60_000 })
+      return ''
+    }
+    const buf = Buffer.from(await response.arrayBuffer())
+    if (buf.length < 24 || buf.length > 96_000) {
+      footballCrestDataUrlCache.set(normalized, { dataUrl: '', expiresAt: Date.now() + 20 * 60_000 })
+      return ''
+    }
+    const ct = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase()
+    let mime = ct.startsWith('image/') && !ct.includes('svg') ? ct : ''
+    if (!mime) mime = sniffImageMimeFromBuffer(buf)
+    if (!mime) {
+      footballCrestDataUrlCache.set(normalized, { dataUrl: '', expiresAt: Date.now() + 20 * 60_000 })
+      return ''
+    }
+    const dataUrl = `data:${mime};base64,${buf.toString('base64')}`
+    footballCrestDataUrlCache.set(normalized, { dataUrl, expiresAt: Date.now() + 24 * 60 * 60_000 })
+    return dataUrl
+  } catch {
+    footballCrestDataUrlCache.set(normalized, { dataUrl: '', expiresAt: Date.now() + 8 * 60_000 })
+    return ''
+  }
+}
+
+/** Substitui homeCrestUrl/awayCrestUrl por data URLs quando o servidor consegue baixar a imagem (definitivo para produção). */
+const inlineFootballCrestUrlsAsDataUrls = async (matches, { budgetMs = 26_000 } = {}) => {
+  const list = Array.isArray(matches) ? matches : []
+  if (list.length === 0) return list
+
+  const seen = new Set()
+  const queue = []
+  for (const m of list) {
+    for (const field of ['homeCrestUrl', 'awayCrestUrl']) {
+      const raw = String(m[field] || '').trim()
+      if (!raw || raw.startsWith('data:') || isPlaceholderFootballTeamCrestUrl(raw)) continue
+      const norm = normalizeFootballCrestUrl(raw)
+      if (!norm || !isSafeExternalHttpUrl(norm)) continue
+      if (seen.has(norm)) continue
+      seen.add(norm)
+      queue.push(norm)
+    }
+  }
+  if (queue.length === 0) return list
+
+  const deadline = Date.now() + budgetMs
+  const urlToData = new Map()
+  const workerCount = Math.min(8, Math.max(1, queue.length))
+  const workQueue = [...queue]
+
+  await Promise.all(
+    Array.from({ length: workerCount }).map(async () => {
+      while (Date.now() < deadline && workQueue.length > 0) {
+        const u = workQueue.shift()
+        if (!u) return
+        const dataUrl = await fetchExternalCrestAsDataUrl(u)
+        if (dataUrl) urlToData.set(u, dataUrl)
+      }
+    })
+  )
+
+  for (const m of list) {
+    for (const field of ['homeCrestUrl', 'awayCrestUrl']) {
+      const raw = String(m[field] || '').trim()
+      if (!raw || raw.startsWith('data:') || isPlaceholderFootballTeamCrestUrl(raw)) continue
+      const norm = normalizeFootballCrestUrl(raw)
+      const embedded = urlToData.get(norm)
+      if (embedded) m[field] = embedded
+    }
+  }
+  return list
+}
+
 const refreshFootballSchedule = async ({ scheduleDateIso, timeZone }) => {
   // const sources = await query(
     //   `
@@ -6451,6 +6562,12 @@ app.get('/api/football/schedule', requireAuth, requirePremiumOrAdmin, async (req
         if (Array.isArray(byName) && byName.length > 0) merged = byName
       } catch {
       }
+    }
+
+    // Embute escudos como data URLs na resposta: o canvas não depende de CORS/proxy no browser.
+    try {
+      merged = await inlineFootballCrestUrlsAsDataUrls(merged, { budgetMs: 26_000 })
+    } catch {
     }
 
     if (

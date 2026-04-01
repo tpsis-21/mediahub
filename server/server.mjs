@@ -2615,6 +2615,114 @@ const enrichFutebolNaTvMatchesWithCrests = async (matches) => {
   return list
 }
 
+const footballTeamBadgeLookupCache = new Map()
+
+const normalizeFootballTeamForBadgeSearch = (value) => {
+  const base = String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\b(fc|ec|sc|ac|cf|cd|clube de regatas|clube)\b/gi, ' ')
+    .replace(/\b(w|women|feminino|fem|sub[-\s]?\d{2})\b/gi, ' ')
+    .replace(/[^a-z0-9\s]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+  return base
+}
+
+const fetchTeamBadgeByName = async (teamName) => {
+  const normalized = normalizeFootballTeamForBadgeSearch(teamName)
+  if (!normalized) return ''
+  const cached = footballTeamBadgeLookupCache.get(normalized)
+  if (cached && cached.expiresAt && Date.now() < cached.expiresAt) {
+    return String(cached.url || '').trim()
+  }
+
+  const tryNames = uniqStrings([
+    String(teamName || '').trim(),
+    normalized.replace(/\b(feminino|fem)\b/gi, '').trim(),
+    normalized.replace(/\bfc\b/gi, '').trim(),
+  ]).filter(Boolean)
+
+  let out = ''
+  for (const name of tryNames.slice(0, 2)) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 3500)
+    try {
+      const url = `https://www.thesportsdb.com/api/v1/json/3/searchteams.php?t=${encodeURIComponent(name)}`
+      const res = await fetch(url, {
+        headers: { accept: 'application/json', 'user-agent': 'Mozilla/5.0' },
+        signal: controller.signal,
+      })
+      if (!res.ok) continue
+      const payload = await res.json()
+      const teams = Array.isArray(payload?.teams) ? payload.teams : []
+      const exact = teams.find((t) => normalizeFootballTeamForBadgeSearch(t?.strTeam) === normalized)
+      const candidate = exact || teams[0]
+      const badge = String(candidate?.strTeamBadge || '').trim()
+      if (badge && isSafeExternalHttpUrl(badge)) {
+        out = badge
+        break
+      }
+    } catch {
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  footballTeamBadgeLookupCache.set(normalized, {
+    url: out,
+    expiresAt: Date.now() + (out ? 7 * 24 * 60 * 60_000 : 20 * 60_000),
+  })
+  return out
+}
+
+const enrichFootballMatchesWithTeamNameBadges = async (matches) => {
+  const list = Array.isArray(matches) ? matches : []
+  if (list.length === 0) return list
+
+  const missingNames = uniqStrings(
+    list.flatMap((m) => {
+      const out = []
+      const home = String(m?.homeCrestUrl || '').trim()
+      const away = String(m?.awayCrestUrl || '').trim()
+      if (!home || isPlaceholderFootballTeamCrestUrl(home)) out.push(String(m?.home || '').trim())
+      if (!away || isPlaceholderFootballTeamCrestUrl(away)) out.push(String(m?.away || '').trim())
+      return out
+    }).filter(Boolean)
+  ).slice(0, 24)
+
+  if (missingNames.length === 0) return list
+  const badgeMap = new Map()
+  const queue = [...missingNames]
+  const workerCount = Math.max(1, Math.min(6, queue.length))
+  await Promise.all(
+    Array.from({ length: workerCount }).map(async () => {
+      while (queue.length > 0) {
+        const team = queue.shift()
+        if (!team) return
+        const url = await fetchTeamBadgeByName(team)
+        if (url) badgeMap.set(team, url)
+      }
+    })
+  )
+
+  if (badgeMap.size === 0) return list
+  for (const m of list) {
+    const currentHome = String(m?.homeCrestUrl || '').trim()
+    const currentAway = String(m?.awayCrestUrl || '').trim()
+    if (!currentHome || isPlaceholderFootballTeamCrestUrl(currentHome)) {
+      const nextHome = badgeMap.get(String(m?.home || '').trim())
+      if (nextHome) m.homeCrestUrl = nextHome
+    }
+    if (!currentAway || isPlaceholderFootballTeamCrestUrl(currentAway)) {
+      const nextAway = badgeMap.get(String(m?.away || '').trim())
+      if (nextAway) m.awayCrestUrl = nextAway
+    }
+  }
+  return list
+}
+
 const refreshFootballSchedule = async ({ scheduleDateIso, timeZone }) => {
   // const sources = await query(
     //   `
@@ -6336,6 +6444,11 @@ app.get('/api/football/schedule', requireAuth, requirePremiumOrAdmin, async (req
       try {
         const enriched = await withTimeout(enrichFutebolNaTvMatchesWithCrests(merged))
         if (Array.isArray(enriched) && enriched.length > 0) merged = enriched
+      } catch {
+      }
+      try {
+        const byName = await withTimeout(enrichFootballMatchesWithTeamNameBadges(merged))
+        if (Array.isArray(byName) && byName.length > 0) merged = byName
       } catch {
       }
     }

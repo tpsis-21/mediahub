@@ -2913,9 +2913,11 @@ const fetchExternalCrestAsDataUrl = async (rawUrl) => {
       response = await fetch(url.toString(), {
         signal: controller.signal,
         headers: {
-          'user-agent': 'Mozilla/5.0',
-          accept: 'image/*,*/*;q=0.8',
+          'user-agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
           referer: `${url.origin}/`,
+          'accept-language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
         },
       })
     } finally {
@@ -2932,8 +2934,14 @@ const fetchExternalCrestAsDataUrl = async (rawUrl) => {
       return ''
     }
     const ct = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase()
-    let mime = ct.startsWith('image/') && !ct.includes('svg') ? ct : ''
+    let mime = ct.startsWith('image/') ? ct : ''
     if (!mime) mime = sniffImageMimeFromBuffer(buf)
+    if (!mime) {
+      const headUtf8 = buf.slice(0, Math.min(256, buf.length)).toString('utf8').trimStart()
+      if (headUtf8.startsWith('<svg') || headUtf8.startsWith('<?xml') || /<svg[\s>]/i.test(headUtf8)) {
+        mime = 'image/svg+xml'
+      }
+    }
     if (!mime) {
       footballCrestDataUrlCache.set(normalized, { dataUrl: '', expiresAt: Date.now() + 20 * 60_000 })
       return ''
@@ -6811,21 +6819,35 @@ app.get('/api/football/crest', async (req, res) => {
     const url = new URL(normalized)
     const response = await fetch(url.toString(), {
       headers: {
-        'user-agent': 'Mozilla/5.0',
-        accept: 'image/*',
+        'user-agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
         referer: `${url.origin}/`,
+        'accept-language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
       },
     })
     if (!response.ok) {
       res.status(502).end()
       return
     }
-    const contentType = String(response.headers.get('content-type') || '')
-    if (!contentType.startsWith('image/')) {
+    const buffer = Buffer.from(await response.arrayBuffer())
+    if (buffer.length < 8) {
       res.status(502).end()
       return
     }
-    const buffer = Buffer.from(await response.arrayBuffer())
+    const headerCt = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase()
+    let contentType = headerCt.startsWith('image/') ? headerCt : ''
+    if (!contentType) contentType = sniffImageMimeFromBuffer(buffer)
+    if (!contentType) {
+      const headUtf8 = buffer.slice(0, Math.min(256, buffer.length)).toString('utf8').trimStart()
+      if (headUtf8.startsWith('<svg') || headUtf8.startsWith('<?xml') || /<svg[\s>]/i.test(headUtf8)) {
+        contentType = 'image/svg+xml'
+      }
+    }
+    if (!contentType || !contentType.startsWith('image/')) {
+      res.status(502).end()
+      return
+    }
     if (buffer.length > 2_500_000) {
       res.status(413).end()
       return

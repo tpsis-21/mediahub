@@ -7,6 +7,7 @@ import {
   apiRequestGetTryCandidates,
   apiRequestRaw,
   buildApiUrl,
+  collectSameOriginApiGetCandidates,
   getAuthToken,
   type ApiError,
 } from '../services/apiClient';
@@ -327,18 +328,23 @@ const loadBrandLogoImage = async (rawUrl: string): Promise<HTMLImageElement | nu
   if (!/^https?:\/\//i.test(url)) return await loadImage(url);
   const token = getAuthToken();
   if (!token) return null;
-  try {
-    const res = await fetch(buildApiUrl(`/api/assets/image?url=${encodeURIComponent(url)}`), {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${token}`, Accept: 'image/*' },
-    });
-    if (!res.ok) return null;
-    const blob = await res.blob();
-    if (!blob || blob.size === 0) return null;
-    return await loadImageFromBlob(blob);
-  } catch {
-    return null;
+  const path = `/api/assets/image?url=${encodeURIComponent(url)}`;
+  for (const fetchUrl of collectSameOriginApiGetCandidates(path)) {
+    try {
+      const res = await fetch(fetchUrl, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}`, Accept: 'image/*' },
+      });
+      if (!res.ok) continue;
+      const blob = await res.blob();
+      if (!blob || blob.size === 0) continue;
+      const img = await loadImageFromBlob(blob);
+      if (img) return img;
+    } catch {
+      continue;
+    }
   }
+  return null;
 };
 
 const normalizeFootballAssetInput = (rawUrl: string) => {
@@ -369,12 +375,11 @@ const resolveFootballAssetCandidates = (rawUrl: string) => {
   }
   const absolute = normalized;
   const httpsCandidate = absolute.replace(/^http:\/\//i, 'https://');
+  const crestPath = `/api/football/crest?url=${encodeURIComponent(absolute)}`;
   return Array.from(
-    new Set([
-      buildApiUrl(`/api/football/crest?url=${encodeURIComponent(absolute)}`),
-      httpsCandidate,
-      absolute,
-    ].filter(Boolean))
+    new Set(
+      [...collectSameOriginApiGetCandidates(crestPath), httpsCandidate, absolute].filter(Boolean)
+    )
   );
 };
 
@@ -387,20 +392,22 @@ const loadFootballCrestImage = async (rawUrl: string): Promise<HTMLImageElement 
 
   const token = getAuthToken();
   if (token) {
-    try {
-      const res = await fetch(buildApiUrl(`/api/assets/image?url=${encodeURIComponent(normalized)}`), {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}`, Accept: 'image/*' },
-      });
-      if (res.ok) {
+    const assetPath = `/api/assets/image?url=${encodeURIComponent(normalized)}`;
+    for (const fetchUrl of collectSameOriginApiGetCandidates(assetPath)) {
+      try {
+        const res = await fetch(fetchUrl, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}`, Accept: 'image/*' },
+        });
+        if (!res.ok) continue;
         const blob = await res.blob();
         if (blob && blob.size > 0) {
           const fromBlob = await loadImageFromBlob(blob);
           if (fromBlob) return fromBlob;
         }
+      } catch {
+        continue;
       }
-    } catch {
-      // fallback abaixo
     }
   }
 

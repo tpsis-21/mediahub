@@ -2,7 +2,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Download, Loader2, Copy, Send } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
-import { apiRequest, apiRequestRaw, buildApiUrl, getAuthToken, type ApiError } from '../services/apiClient';
+import {
+  apiRequest,
+  apiRequestGetTryCandidates,
+  apiRequestRaw,
+  buildApiUrl,
+  getAuthToken,
+  type ApiError,
+} from '../services/apiClient';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
@@ -1518,9 +1525,8 @@ const FootballBannerModal: React.FC<FootballBannerModalProps> = ({ isOpen, onClo
   const triggerScheduleRefresh = useCallback(async (dateIso: string) => {
     if (!dateIso) return;
     try {
-      await apiRequest<{ date?: string }>({
+      await apiRequestGetTryCandidates<{ date?: string }>({
         path: `/api/football/schedule/refresh?date=${encodeURIComponent(dateIso)}`,
-        method: 'GET',
         auth: false,
         timeoutMs: 20_000,
       });
@@ -1633,9 +1639,8 @@ const FootballBannerModal: React.FC<FootballBannerModalProps> = ({ isOpen, onClo
     if (!opts?.silent) setIsLoading(true);
     try {
       const query = targetDate ? `?date=${encodeURIComponent(targetDate)}` : '';
-      const data = await apiRequest<FootballScheduleResponse>({
+      const data = await apiRequestGetTryCandidates<FootballScheduleResponse>({
         path: `/api/football/schedule${query}`,
-        method: 'GET',
         auth: true,
         // Servidor pode embutir escudos (data URLs); precisa de margem acima do enrich + inline.
         timeoutMs: 55_000,
@@ -1916,9 +1921,8 @@ const FootballBannerModal: React.FC<FootballBannerModalProps> = ({ isOpen, onClo
       if (shouldAttemptRefreshForCrests) {
         try {
           await triggerScheduleRefresh(schedule.date);
-          const refreshed = await apiRequest<FootballScheduleResponse>({
+          const refreshed = await apiRequestGetTryCandidates<FootballScheduleResponse>({
             path: `/api/football/schedule?date=${encodeURIComponent(schedule.date)}`,
-            method: 'GET',
             auth: true,
             timeoutMs: 55_000,
           });

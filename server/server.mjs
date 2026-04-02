@@ -492,6 +492,15 @@ app.use(
 app.use(express.json({ limit: '6mb' }))
 app.use(express.urlencoded({ extended: false, limit: '1mb' }))
 
+// SPA em /app com proxy que encaminha /app/api/* sem remover o prefixo: alinha com as rotas /api/* do Express.
+app.use((req, res, next) => {
+  const raw = typeof req.url === 'string' ? req.url : ''
+  if (/^\/app\/api(\/|\?|$)/.test(raw)) {
+    req.url = raw.slice(4)
+  }
+  next()
+})
+
 const isDev = process.env.NODE_ENV !== 'production'
 if (isDev) {
   process.on('uncaughtException', (err) => {

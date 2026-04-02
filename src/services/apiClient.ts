@@ -206,6 +206,90 @@ export const warmupApiConnection = async (): Promise<void> => {
   }
 };
 
+/**
+ * URLs candidatas para o mesmo host quando a API não está na raiz (ex.: SPA em /app e proxy em /app/api/...).
+ */
+export const collectSameOriginApiGetCandidates = (path: string): string[] => {
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  const out: string[] = [buildApiUrl(normalized)];
+  if (typeof window === 'undefined') return [...new Set(out)];
+  const origin = window.location.origin;
+  out.push(`${origin}${normalized}`);
+  const { pathname } = window.location;
+  if (pathname === '/app' || pathname.startsWith('/app/')) {
+    out.push(`${origin}/app${normalized}`);
+  }
+  const viteSeg = String(import.meta.env.BASE_URL || '/').replace(/^\/+|\/+$/g, '');
+  if (viteSeg && viteSeg !== 'app') {
+    out.push(`${origin}/${viteSeg}${normalized}`);
+  }
+  return [...new Set(out)];
+};
+
+/** GET com várias URLs candidatas; em 404 tenta a próxima (útil para /app vs raiz). */
+export const apiRequestGetTryCandidates = async <T>(input: {
+  path: string;
+  auth?: boolean;
+  timeoutMs?: number;
+}): Promise<T> => {
+  const urls = collectSameOriginApiGetCandidates(input.path);
+  const headers: Record<string, string> = { Accept: 'application/json', 'Content-Type': 'application/json' };
+  if (input.auth) {
+    const token = getAuthToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+  }
+  const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let lastErr: ApiError = { status: 404, message: 'Rota não encontrada.' };
+
+  for (const url of urls) {
+    let res: Response | null = null;
+    const attemptDelays = [0, 900];
+    for (let attempt = 0; attempt < attemptDelays.length; attempt++) {
+      if (attemptDelays[attempt] > 0) await sleep(attemptDelays[attempt]);
+      try {
+        res = await fetchWithTimeout(url, { method: 'GET', headers }, timeoutMs);
+        if (res.ok) break;
+        if (res.status >= 500 && attempt < attemptDelays.length - 1) continue;
+        break;
+      } catch (e) {
+        if (isLikelyNetworkError(e) && attempt < attemptDelays.length - 1) continue;
+        if (isAbortError(e)) {
+          lastErr = { status: 0, message: 'Tempo excedido. Aguarde alguns segundos e tente novamente.' };
+        } else if (isLikelyNetworkError(e)) {
+          lastErr = { status: 0, message: 'Não foi possível conectar ao servidor agora. Tente novamente em instantes.' };
+        } else {
+          lastErr = { status: 0, message: 'Não foi possível concluir. Tente novamente.' };
+        }
+        res = null;
+        break;
+      }
+    }
+
+    if (!res) continue;
+
+    if (res.ok) {
+      if (res.status === 204) return undefined as T;
+      return await parseJsonResponse<T>(res);
+    }
+
+    let message = 'Não foi possível concluir. Tente novamente.';
+    try {
+      const payload = await parseJsonResponse<unknown>(res);
+      if (payload && typeof payload === 'object' && typeof (payload as { message?: unknown }).message === 'string') {
+        message = (payload as { message: string }).message;
+      }
+    } catch {
+      message = 'Não foi possível concluir. Tente novamente.';
+    }
+    lastErr = { status: res.status, message };
+    if (res.status === 401 || res.status === 403) throw lastErr;
+    if (res.status === 404) continue;
+    throw lastErr;
+  }
+
+  throw lastErr;
+};
+
 export const apiRequest = async <T>(
   input: { path: string; method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: unknown; auth?: boolean; timeoutMs?: number }
 ): Promise<T> => {

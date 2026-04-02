@@ -790,6 +790,120 @@ const runProcess = async ({ command, args, cwd, timeoutMs }) => {
   })
 }
 
+const FFMPEG_FONT_PATHS_REGULAR = [
+  '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+  '/usr/share/fonts/dejavu/DejaVuSans.ttf',
+  '/usr/share/fonts/TTF/DejaVuSans.ttf',
+  '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+  '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
+  '/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf',
+]
+
+const FFMPEG_FONT_PATHS_BOLD = [
+  '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+  '/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf',
+  '/usr/share/fonts/TTF/DejaVuSans-Bold.ttf',
+  '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+  '/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf',
+]
+
+const firstReadableFontFile = (candidates) => {
+  for (const p of candidates) {
+    if (!p || typeof p !== 'string') continue
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) return p
+    } catch {
+      // ignore
+    }
+  }
+  return ''
+}
+
+const ffmpegFilterFontPath = (absPath) => String(absPath || '').replace(/\\/g, '/').replace(':', '\\:')
+
+const copyFontToTmpForFfmpeg = (srcPath, destName, tmpDir) => {
+  if (!srcPath || !tmpDir) return ''
+  try {
+    const dest = path.join(tmpDir, destName)
+    fs.copyFileSync(srcPath, dest)
+    return ffmpegFilterFontPath(dest)
+  } catch {
+    return ''
+  }
+}
+
+/** Fontes TTF para video branding (Canvas + escapes do ffmpeg) em Linux/Docker sem só Debian paths. */
+const resolveVideoBrandingFonts = async (tmpDir) => {
+  let fontFile = ''
+  let fontBoldFile = ''
+  const isWin = process.platform === 'win32'
+
+  const envR = typeof process.env.VIDEO_BRANDING_FONT === 'string' ? process.env.VIDEO_BRANDING_FONT.trim() : ''
+  const envB = typeof process.env.VIDEO_BRANDING_FONT_BOLD === 'string' ? process.env.VIDEO_BRANDING_FONT_BOLD.trim() : ''
+
+  try {
+    if (isWin) {
+      const systemFontPath = 'C:\\Windows\\Fonts\\segoeui.ttf'
+      const systemFontBoldPath = 'C:\\Windows\\Fonts\\segoeuib.ttf'
+      const fallbackFontPath = 'C:\\Windows\\Fonts\\arial.ttf'
+      const fallbackFontBoldPath = 'C:\\Windows\\Fonts\\arialbd.ttf'
+
+      if (fs.existsSync(systemFontPath)) {
+        fontFile = copyFontToTmpForFfmpeg(systemFontPath, 'vb-font.ttf', tmpDir)
+      } else if (fs.existsSync(fallbackFontPath)) {
+        fontFile = copyFontToTmpForFfmpeg(fallbackFontPath, 'vb-font.ttf', tmpDir)
+      }
+
+      if (fs.existsSync(systemFontBoldPath)) {
+        fontBoldFile = copyFontToTmpForFfmpeg(systemFontBoldPath, 'vb-font-bold.ttf', tmpDir)
+      } else if (fs.existsSync(fallbackFontBoldPath)) {
+        fontBoldFile = copyFontToTmpForFfmpeg(fallbackFontBoldPath, 'vb-font-bold.ttf', tmpDir)
+      } else {
+        fontBoldFile = fontFile
+      }
+      return { fontFile, fontBoldFile }
+    }
+
+    let regSrc = envR && fs.existsSync(envR) ? envR : ''
+    let boldSrc = envB && fs.existsSync(envB) ? envB : ''
+
+    if (!regSrc) {
+      try {
+        const fm = await runProcess({ command: 'fc-match', args: ['-f', '%{file}', 'DejaVu Sans'], timeoutMs: 5000 })
+        if (fm.code === 0) {
+          const fp = fm.stdout.trim().split(/\n/)[0]?.trim()
+          if (fp && fs.existsSync(fp)) regSrc = fp
+        }
+      } catch {
+        // ignore
+      }
+    }
+    if (!boldSrc) {
+      try {
+        const fmB = await runProcess({ command: 'fc-match', args: ['-f', '%{file}', 'DejaVu Sans Bold'], timeoutMs: 5000 })
+        if (fmB.code === 0) {
+          const fp = fmB.stdout.trim().split(/\n/)[0]?.trim()
+          if (fp && fs.existsSync(fp)) boldSrc = fp
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (!regSrc) regSrc = firstReadableFontFile(FFMPEG_FONT_PATHS_REGULAR)
+    if (!boldSrc) boldSrc = firstReadableFontFile(FFMPEG_FONT_PATHS_BOLD)
+
+    fontFile = copyFontToTmpForFfmpeg(regSrc, 'vb-font.ttf', tmpDir)
+    fontBoldFile = copyFontToTmpForFfmpeg(boldSrc, 'vb-font-bold.ttf', tmpDir)
+    if (!fontBoldFile && fontFile) fontBoldFile = fontFile
+    if (!fontFile && fontBoldFile) fontFile = fontBoldFile
+  } catch (e) {
+    console.error('video-branding: font resolve failed', e)
+  }
+
+  return { fontFile, fontBoldFile }
+}
+
 const hasBinary = async (name, args) => {
   try {
     const result = await runProcess({ command: name, args, timeoutMs: 12000 })
@@ -1263,6 +1377,24 @@ const fetchSearchProviderJson = async ({ path, params, apiKeys }) => {
   const err = new Error('Search provider request failed')
   err.status = lastError?.status || 502
   throw err
+}
+
+/** TMDB omite media_type em /trending/movie|tv/week; o cliente filtrava e ficava sem itens. */
+const normalizeTrendingPayload = (payload, mediaType) => {
+  if (!payload || typeof payload !== 'object' || !Array.isArray(payload.results)) return payload
+  const results = payload.results.map((item) => {
+    if (!item || typeof item !== 'object') return item
+    const mt = item.media_type
+    if (mt === 'movie' || mt === 'tv' || mt === 'person') return item
+    if (mediaType === 'movie') return { ...item, media_type: 'movie' }
+    if (mediaType === 'tv') return { ...item, media_type: 'tv' }
+    const hasMovieFields = typeof item.title === 'string' || typeof item.release_date === 'string'
+    const hasTvFields = typeof item.name === 'string' || typeof item.first_air_date === 'string'
+    if (hasTvFields && !hasMovieFields) return { ...item, media_type: 'tv' }
+    if (hasMovieFields) return { ...item, media_type: 'movie' }
+    return item
+  })
+  return { ...payload, results }
 }
 
 const getAllowRegistrations = async () => {
@@ -3401,15 +3533,16 @@ app.get('/api/search/trending', requireAuth, async (req, res) => {
     const cacheKey = `trending:${mediaType}:week:${language}`
     const cached = getSearchProviderCache(cacheKey)
     if (cached) {
-      res.json(cached)
+      res.json(normalizeTrendingPayload(cached, mediaType))
       return
     }
 
-    const payload = await fetchSearchProviderJson({
+    const raw = await fetchSearchProviderJson({
       path: `/trending/${mediaType}/week`,
       params: { language },
       apiKeys,
     })
+    const payload = normalizeTrendingPayload(raw, mediaType)
     setSearchProviderCache({ key: cacheKey, data: payload, ttlMs: 10 * 60_000, maxEntries: 50 })
     res.json(payload)
   } catch (e) {
@@ -4111,39 +4244,9 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
       }
     }
 
-    // Font Logic
-    let fontFile = ''
-    let fontBoldFile = ''
-    try {
-      const isWin = process.platform === 'win32'
-      const systemFontPath = isWin ? 'C:\\Windows\\Fonts\\segoeui.ttf' : '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
-      const systemFontBoldPath = isWin ? 'C:\\Windows\\Fonts\\segoeuib.ttf' : '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
-      const fallbackFontPath = isWin ? 'C:\\Windows\\Fonts\\arial.ttf' : ''
-      const fallbackFontBoldPath = isWin ? 'C:\\Windows\\Fonts\\arialbd.ttf' : ''
-
-      if (fs.existsSync(systemFontPath)) {
-        const localFontPath = path.join(tmpDir, 'font.ttf')
-        fs.copyFileSync(systemFontPath, localFontPath)
-        fontFile = localFontPath.replace(/\\/g, '/').replace(':', '\\\\:')
-      } else if (isWin && fs.existsSync(fallbackFontPath)) {
-        const localFontPath = path.join(tmpDir, 'font.ttf')
-        fs.copyFileSync(fallbackFontPath, localFontPath)
-        fontFile = localFontPath.replace(/\\/g, '/').replace(':', '\\\\:')
-      }
-
-      if (fs.existsSync(systemFontBoldPath)) {
-        const localFontBoldPath = path.join(tmpDir, 'font-bold.ttf')
-        fs.copyFileSync(systemFontBoldPath, localFontBoldPath)
-        fontBoldFile = localFontBoldPath.replace(/\\/g, '/').replace(':', '\\\\:')
-      } else if (isWin && fs.existsSync(fallbackFontBoldPath)) {
-        const localFontBoldPath = path.join(tmpDir, 'font-bold.ttf')
-        fs.copyFileSync(fallbackFontBoldPath, localFontBoldPath)
-        fontBoldFile = localFontBoldPath.replace(/\\/g, '/').replace(':', '\\\\:')
-      } else {
-        fontBoldFile = fontFile
-      }
-    } catch (e) {
-      console.error('video-branding: font copy failed', e)
+    const { fontFile, fontBoldFile } = await resolveVideoBrandingFonts(tmpDir)
+    if (!fontFile && !fontBoldFile) {
+      console.warn('video-branding: nenhuma fonte TTF encontrada; Canvas usa fallback do sistema')
     }
 
     const outFile = path.join(tmpDir, 'out.mp4')
@@ -4301,14 +4404,14 @@ app.post('/api/video-branding/trailer', requireAuth, requirePremiumOrAdmin, asyn
     // ou limpar.
     
     // Recuperando caminhos limpos (sem escapes do ffmpeg)
-    const cleanFontFile = fontFile.replace(/\\\\:/g, ':').replace(/\//g, path.sep)
-    const cleanFontBoldFile = fontBoldFile.replace(/\\\\:/g, ':').replace(/\//g, path.sep)
-    
+    const cleanFontFile = fontFile ? fontFile.replace(/\\\\:/g, ':').replace(/\//g, path.sep) : ''
+    const cleanFontBoldFile = fontBoldFile ? fontBoldFile.replace(/\\\\:/g, ':').replace(/\//g, path.sep) : ''
+
     try {
-        GlobalFonts.registerFromPath(cleanFontFile, fontName)
-        GlobalFonts.registerFromPath(cleanFontBoldFile, fontBoldName)
+      if (cleanFontFile) GlobalFonts.registerFromPath(cleanFontFile, fontName)
+      if (cleanFontBoldFile) GlobalFonts.registerFromPath(cleanFontBoldFile, fontBoldName)
     } catch (e) {
-        console.error('Canvas font registration failed:', e)
+      console.error('Canvas font registration failed:', e)
     }
 
     const targetW = 1080

@@ -270,7 +270,16 @@ const BulkBannerModal: React.FC<BulkBannerModalProps> = ({
         auth: Boolean(user),
       });
       const results = Array.isArray(payload?.results) ? payload.results : [];
-      const top10 = results.filter((item) => item && (item.media_type === 'movie' || item.media_type === 'tv')).slice(0, 10);
+      const normalized = results.map((item) => {
+        if (!item || typeof item !== 'object') return item as MovieData;
+        if (item.media_type === 'movie' || item.media_type === 'tv') return item;
+        const hasMovieFields = typeof item.title === 'string' || typeof item.release_date === 'string';
+        const hasTvFields = typeof item.name === 'string' || typeof item.first_air_date === 'string';
+        if (hasMovieFields && !hasTvFields) return { ...item, media_type: 'movie' as const };
+        if (hasTvFields) return { ...item, media_type: 'tv' as const };
+        return item as MovieData;
+      });
+      const top10 = normalized.filter((item) => item && (item.media_type === 'movie' || item.media_type === 'tv')).slice(0, 10);
 
       if (top10.length === 0) {
         toast({ title: 'Sem dados', description: 'Não foi possível carregar o Top 10 agora.' });

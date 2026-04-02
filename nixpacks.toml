@@ -6,7 +6,7 @@ YOUTUBE_DL_SKIP_PYTHON_CHECK = "1"
 NPM_CONFIG_PRODUCTION = "false"
 
 [phases.setup]
-nixPkgs = ["nodejs_20", "bun", "python3"]
+nixPkgs = ["nodejs_20", "bun", "python3", "ffmpeg", "yt-dlp", "fontconfig", "dejavu_fonts"]
 
 [phases.install]
 cmds = ["npm ci --include=dev"]

@@ -1430,7 +1430,7 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
     return blob;
   };
 
-  const renderBannerBlobRef = useRef(renderBannerBlob);
+  const renderBannerBlobRef = useRef<typeof renderBannerBlob>(renderBannerBlob);
   renderBannerBlobRef.current = renderBannerBlob;
 
   useEffect(() => {
@@ -1440,7 +1440,7 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
     void (async () => {
       try {
         const previews = await Promise.all(
-          visibleTemplates.map(async (template) => {
+          visibleTemplates.map(async (template: BannerTemplate) => {
             const blob = await renderBannerBlobRef.current({ template, format, mime: 'image/png', quality: 1.0 });
             return { id: template.id, url: URL.createObjectURL(blob) };
           })

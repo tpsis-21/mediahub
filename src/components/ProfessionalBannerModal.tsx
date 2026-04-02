@@ -17,6 +17,16 @@ import { formatPhoneForDisplay, formatWebsiteForDisplay } from '../lib/utils';
 
 const WHATSAPP_ICON_URL = new URL('../../anexos/pngtree-whatsapp-icon-png-image_6315990.png', import.meta.url).href;
 
+type BannerTemplate = {
+  id: number;
+  name: string;
+  layout: 'classic' | 'inspired';
+  primaryColor: string;
+  secondaryColor: string;
+  gradientFrom: string;
+  gradientTo: string;
+};
+
 interface ProfessionalBannerModalProps {
   movie: MovieData;
   initialDestination?: 'download' | 'telegram';
@@ -130,16 +140,6 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
       setCaption(buildCaption({ includeSynopsis: includeSynopsisInCaption }));
     }
   }, [buildCaption, captionDirty, includeSynopsisInCaption]);
-  
-  type BannerTemplate = {
-    id: number;
-    name: string;
-    layout: 'classic' | 'inspired';
-    primaryColor: string;
-    secondaryColor: string;
-    gradientFrom: string;
-    gradientTo: string;
-  };
 
   const brandPrimary = user?.brandColors?.primary;
   const brandSecondary = user?.brandColors?.secondary;
@@ -1439,7 +1439,7 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
 
     void (async () => {
       try {
-        const previews = await Promise.all(
+        const previews: Array<{ id: number; url: string }> = await Promise.all(
           visibleTemplates.map(async (template: BannerTemplate) => {
             const blob = await renderBannerBlobRef.current({ template, format, mime: 'image/png', quality: 1.0 });
             return { id: template.id, url: URL.createObjectURL(blob) };
@@ -1450,7 +1450,7 @@ const ProfessionalBannerModal: React.FC<ProfessionalBannerModalProps> = ({ movie
         Object.values(previewUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
 
         const next: Record<number, string> = {};
-        previews.forEach((p) => {
+        previews.forEach((p: { id: number; url: string }) => {
           next[p.id] = p.url;
         });
         previewUrlsRef.current = next;

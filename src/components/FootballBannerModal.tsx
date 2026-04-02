@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Download, Loader2, Copy, Send } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
-import { apiRequest, apiRequestRaw, buildApiUrl, getAuthToken } from '../services/apiClient';
+import { apiRequest, apiRequestRaw, buildApiUrl, getAuthToken, type ApiError } from '../services/apiClient';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
@@ -1647,7 +1647,7 @@ const FootballBannerModal: React.FC<FootballBannerModalProps> = ({ isOpen, onClo
         emptyScheduleRetryCountRef.current = 0;
         clearEmptyScheduleRetryTimer();
       }
-    } catch {
+    } catch (e: unknown) {
       if (!schedule?.matches?.length) {
         const expectedDate = typeof targetDate === 'string' && targetDate.trim() ? targetDate.trim() : getDefaultFootballScheduleDate();
         const cached = readCachedFootballSchedule(expectedDate);
@@ -1655,9 +1655,21 @@ const FootballBannerModal: React.FC<FootballBannerModalProps> = ({ isOpen, onClo
           applySchedule(cached);
           return;
         }
+        const err = e as Partial<ApiError> | null;
+        const status = typeof err?.status === 'number' ? err.status : 0;
+        const serverMsg = typeof err?.message === 'string' && err.message.trim() ? err.message.trim() : '';
+        let description = serverMsg || 'Não foi possível carregar os jogos agora. Tente novamente.';
+        if (status === 401) {
+          description = 'Sessão expirada ou não autenticado. Faça login novamente.';
+        } else if (status === 403) {
+          description = serverMsg || 'Acesso negado. Verifique se sua conta tem permissão (Premium).';
+        } else if (status === 0 && !serverMsg) {
+          description =
+            'Não foi possível conectar à API. Se o site e a API estão em domínios diferentes, defina VITE_API_BASE_URL no build e ALLOWED_ORIGIN no servidor (inclua www e sem www, se usar os dois).';
+        }
         toast({
           title: 'Erro',
-          description: 'Não foi possível carregar os jogos agora. Tente novamente.',
+          description,
           variant: 'destructive',
           action: (
             <ToastAction altText="Tentar novamente" onClick={() => void fetchSchedule(expectedDate)}>

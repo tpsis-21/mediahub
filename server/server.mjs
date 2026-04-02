@@ -502,10 +502,27 @@ if (isDev) {
   })
 }
 
+const originsMatchModuloWww = (allowed, requestOrigin) => {
+  try {
+    const a = new URL(allowed)
+    const b = new URL(requestOrigin)
+    if (a.protocol !== b.protocol) return false
+    if (String(a.port || '') !== String(b.port || '')) return false
+    const ha = (a.hostname || '').toLowerCase().replace(/^www\./, '')
+    const hb = (b.hostname || '').toLowerCase().replace(/^www\./, '')
+    return ha === hb
+  } catch {
+    return false
+  }
+}
+
 const isAllowedOrigin = (origin) => {
-  if (!origin) return false
   if (ALLOWED_ORIGINS.length === 0) return true
+  if (!origin) return false
   if (ALLOWED_ORIGINS.includes(origin)) return true
+  for (const allowed of ALLOWED_ORIGINS) {
+    if (originsMatchModuloWww(allowed, origin)) return true
+  }
   if (!isDev) return false
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true
   if (/^https?:\/\/192\.168\.\d+\.\d+(:\d+)?$/.test(origin)) return true
@@ -548,9 +565,11 @@ const isSafeExternalHttpUrl = (raw) => {
 app.use((req, res, next) => {
   const origin = req.headers.origin
   if (isAllowedOrigin(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin)
-    res.setHeader('Vary', 'Origin')
-    res.setHeader('Access-Control-Allow-Credentials', 'true')
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin)
+      res.setHeader('Vary', 'Origin')
+      res.setHeader('Access-Control-Allow-Credentials', 'true')
+    }
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
   }

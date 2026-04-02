@@ -29,20 +29,30 @@ const isLocalApiBaseUrl = (raw: string): boolean => {
   }
 };
 
+/** Em produção, origem + `import.meta.env.BASE_URL` (ex.: app em /app/). Evita fetch em /api na raiz quando a SPA está em subcaminho. */
+const getSameOriginApiBase = (): string => {
+  if (typeof window === 'undefined') return '';
+  const origin = window.location.origin;
+  const rawBase = import.meta.env.BASE_URL;
+  if (typeof rawBase !== 'string' || rawBase === '/' || rawBase === '') return origin;
+  const segment = rawBase.replace(/^\/+|\/+$/g, '');
+  if (!segment) return origin;
+  return `${origin}/${segment}`;
+};
+
 export const getApiBaseUrl = () => {
   const env = import.meta.env.VITE_API_BASE_URL;
   if (typeof env === 'string' && env.trim().length > 0) {
     if (import.meta.env.DEV && isLocalApiBaseUrl(env)) return '';
     // Em produção, URL "local" no build aponta ao container/servidor — no browser do cliente não existe API aí.
     if (!import.meta.env.DEV && isLocalApiBaseUrl(env)) {
-      if (typeof window !== 'undefined' && window.location?.origin) {
-        return normalizeApiBaseUrl(window.location.origin);
-      }
-      return '';
+      return getSameOriginApiBase();
     }
     return normalizeApiBaseUrl(env);
   }
-  if (!import.meta.env.DEV) return '';
+  if (!import.meta.env.DEV) {
+    return typeof window !== 'undefined' ? getSameOriginApiBase() : '';
+  }
   return '';
 };
 
@@ -70,6 +80,7 @@ export const buildLongRunningApiUrl = (path: string): string => {
     const localHost = hostname === '127.0.0.1' ? '127.0.0.1' : 'localhost';
     return `http://${localHost}:${port}${normalized}`;
   }
+  if (typeof window !== 'undefined') return `${getSameOriginApiBase()}${normalized}`;
   return normalized;
 };
 

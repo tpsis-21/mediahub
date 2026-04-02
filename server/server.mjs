@@ -6556,7 +6556,7 @@ app.post('/api/admin/football/refresh', requireAuth, requireAdmin, async (req, r
   }
 })
 
-app.get('/api/football/schedule', requireAuth, requirePremiumOrAdmin, async (req, res) => {
+app.get(['/api/football/schedule', '/api/football/schedule/'], requireAuth, requirePremiumOrAdmin, async (req, res) => {
   const dateRaw = typeof req.query?.date === 'string' ? req.query.date.trim() : ''
   const explicitDate = /^\d{4}-\d{2}-\d{2}$/.test(dateRaw) ? dateRaw : null
 

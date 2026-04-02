@@ -23,6 +23,9 @@ type FootballMatch = {
   channels: string[];
   homeCrestUrl?: string;
   awayCrestUrl?: string;
+  /** URL https original quando o servidor embute o escudo em data: — usado ao persistir cache sem estourar quota. */
+  homeCrestUrlRemote?: string;
+  awayCrestUrlRemote?: string;
 };
 
 type FootballScheduleResponse = {
@@ -35,7 +38,7 @@ const footballMatchKey = (match: Pick<FootballMatch, 'time' | 'home' | 'away'>) 
   `${match.time}::${match.home}::${match.away}`.trim().toLowerCase();
 
 const FOOTBALL_SCHEDULE_CACHE_KEY_V1 = 'football_schedule_cache_v1';
-const getFootballScheduleCacheKey = (dateIso: string) => `football_schedule_cache_v2_${dateIso}`;
+const getFootballScheduleCacheKey = (dateIso: string) => `football_schedule_cache_v3_${dateIso}`;
 
 const parseClockTime = (value: string) => {
   const raw = typeof value === 'string' ? value.trim() : '';
@@ -119,13 +122,20 @@ const readCachedFootballSchedule = (expectedDate: string): FootballScheduleRespo
 
 const stripInlineCrestsForStorage = (schedule: FootballScheduleResponse): FootballScheduleResponse => ({
   ...schedule,
-  matches: (schedule.matches || []).map((m) => ({
-    ...m,
-    homeCrestUrl:
-      typeof m.homeCrestUrl === 'string' && m.homeCrestUrl.startsWith('data:') ? '' : m.homeCrestUrl,
-    awayCrestUrl:
-      typeof m.awayCrestUrl === 'string' && m.awayCrestUrl.startsWith('data:') ? '' : m.awayCrestUrl,
-  })),
+  matches: (schedule.matches || []).map((m) => {
+    const homeRemote = typeof m.homeCrestUrlRemote === 'string' ? m.homeCrestUrlRemote.trim() : '';
+    const awayRemote = typeof m.awayCrestUrlRemote === 'string' ? m.awayCrestUrlRemote.trim() : '';
+    const home =
+      typeof m.homeCrestUrl === 'string' && m.homeCrestUrl.startsWith('data:')
+        ? homeRemote || ''
+        : m.homeCrestUrl;
+    const away =
+      typeof m.awayCrestUrl === 'string' && m.awayCrestUrl.startsWith('data:')
+        ? awayRemote || ''
+        : m.awayCrestUrl;
+    const { homeCrestUrlRemote, awayCrestUrlRemote, ...rest } = m;
+    return { ...rest, homeCrestUrl: home, awayCrestUrl: away };
+  }),
 });
 
 const writeCachedFootballSchedule = (schedule: FootballScheduleResponse) => {

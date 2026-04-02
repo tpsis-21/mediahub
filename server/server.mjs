@@ -2898,7 +2898,8 @@ const fetchExternalCrestAsDataUrl = async (rawUrl) => {
       return ''
     }
     const buf = Buffer.from(await response.arrayBuffer())
-    if (buf.length < 24 || buf.length > 96_000) {
+    // Limite alinhado ao proxy /api/football/crest; acima disso o cliente usa a URL remota ou o proxy.
+    if (buf.length < 24 || buf.length > 280_000) {
       footballCrestDataUrlCache.set(normalized, { dataUrl: '', expiresAt: Date.now() + 20 * 60_000 })
       return ''
     }
@@ -2960,7 +2961,14 @@ const inlineFootballCrestUrlsAsDataUrls = async (matches, { budgetMs = 26_000 } 
       if (!raw || raw.startsWith('data:') || isPlaceholderFootballTeamCrestUrl(raw)) continue
       const norm = normalizeFootballCrestUrl(raw)
       const embedded = urlToData.get(norm)
-      if (embedded) m[field] = embedded
+      if (embedded) {
+        if (field === 'homeCrestUrl') {
+          if (!m.homeCrestUrlRemote) m.homeCrestUrlRemote = norm
+        } else if (!m.awayCrestUrlRemote) {
+          m.awayCrestUrlRemote = norm
+        }
+        m[field] = embedded
+      }
     }
   }
   return list
@@ -6719,15 +6727,22 @@ app.get('/api/football/schedule', requireAuth, requirePremiumOrAdmin, async (req
       footballScheduleCrestDebugLogCache.set(dateKey, Date.now())
     }
 
-    const publicMatches = merged.map((m) => ({
-      time: m.time,
-      home: m.home,
-      away: m.away,
-      competition: m.competition,
-      channels: Array.isArray(m.channels) ? m.channels : [],
-      homeCrestUrl: m.homeCrestUrl || '',
-      awayCrestUrl: m.awayCrestUrl || '',
-    }))
+    const publicMatches = merged.map((m) => {
+      const base = {
+        time: m.time,
+        home: m.home,
+        away: m.away,
+        competition: m.competition,
+        channels: Array.isArray(m.channels) ? m.channels : [],
+        homeCrestUrl: m.homeCrestUrl || '',
+        awayCrestUrl: m.awayCrestUrl || '',
+      }
+      const hr = typeof m.homeCrestUrlRemote === 'string' ? m.homeCrestUrlRemote.trim() : ''
+      const ar = typeof m.awayCrestUrlRemote === 'string' ? m.awayCrestUrlRemote.trim() : ''
+      if (hr) base.homeCrestUrlRemote = hr
+      if (ar) base.awayCrestUrlRemote = ar
+      return base
+    })
     res.json({ date: responseDate, updatedAt, matches: publicMatches })
   } catch {
     res.status(200).json({

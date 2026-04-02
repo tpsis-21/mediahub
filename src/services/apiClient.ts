@@ -33,6 +33,13 @@ export const getApiBaseUrl = () => {
   const env = import.meta.env.VITE_API_BASE_URL;
   if (typeof env === 'string' && env.trim().length > 0) {
     if (import.meta.env.DEV && isLocalApiBaseUrl(env)) return '';
+    // Em produção, URL "local" no build aponta ao container/servidor — no browser do cliente não existe API aí.
+    if (!import.meta.env.DEV && isLocalApiBaseUrl(env)) {
+      if (typeof window !== 'undefined' && window.location?.origin) {
+        return normalizeApiBaseUrl(window.location.origin);
+      }
+      return '';
+    }
     return normalizeApiBaseUrl(env);
   }
   if (!import.meta.env.DEV) return '';

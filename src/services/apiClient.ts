@@ -63,6 +63,59 @@ export const buildApiUrl = (path: string): string => {
   return `${base}${normalized}`;
 };
 
+/** IPv6 (::1) precisa de colchetes na URL; senão o browser interpreta mal o host. */
+const hostForDirectDevApiUrl = (hostname: string): string => {
+  const h = (hostname || '').trim();
+  if (!h) return 'localhost';
+  if (h.includes(':') && !h.startsWith('[')) return `[${h}]`;
+  return h;
+};
+
+const normalizeHostnameNoBrackets = (hostname: string) =>
+  String(hostname || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '');
+
+/** Loopback no browser: usar 127.0.0.1 na URL directa evita pedidos a [::1]:PORT falharem quando o Express ou o SO tratam IPv4/IPv6 de forma assimétrica (comum com Vite em `host: "::"`). */
+const isBrowserLoopbackHostname = (hostname: string): boolean => {
+  const h = normalizeHostnameNoBrackets(hostname);
+  return (
+    h === 'localhost' ||
+    h === '127.0.0.1' ||
+    h === '::1' ||
+    h === '0:0:0:0:0:0:0:1' ||
+    h === '::ffff:127.0.0.1'
+  );
+};
+
+/** Alinha à `read-env-port.mjs`: se `VITE_DEV_API_PORT` falhar (define desatualizado), usa a porta em `VITE_API_BASE_URL`. */
+const parseLocalhostPortFromViteApiBase = (raw: string): string => {
+  const v = String(raw || '')
+    .trim()
+    .replace(/^["']|["']$/g, '');
+  if (!v) return '';
+  try {
+    const u = new URL(v.includes('://') ? v : `http://${v}`);
+    const host = (u.hostname || '').toLowerCase();
+    if (host !== 'localhost' && host !== '127.0.0.1' && host !== '::1') return '';
+    if (!u.port) return '';
+    const n = Number(u.port);
+    return Number.isFinite(n) && n > 0 ? String(n) : '';
+  } catch {
+    return '';
+  }
+};
+
+const resolveDevDirectApiPort = (): string => {
+  const fromDefine = String(import.meta.env.VITE_DEV_API_PORT || '').trim();
+  const nDefine = Number(fromDefine);
+  if (fromDefine && Number.isFinite(nDefine) && nDefine > 0) return fromDefine;
+  const fromBase = parseLocalhostPortFromViteApiBase(String(import.meta.env.VITE_API_BASE_URL || ''));
+  if (fromBase) return fromBase;
+  return '8081';
+};
+
 /**
  * Em dev, geração de vídeo pode levar minutos sem enviar bytes; o proxy do Vite às vezes derruba a conexão.
  * Use esta URL para POST/stream longos: vai direto ao Express (mesma máquina), evitando o proxy.
@@ -72,13 +125,13 @@ export const buildLongRunningApiUrl = (path: string): string => {
   const base = getApiBaseUrl();
   if (base) return `${base}${normalized}`;
   if (import.meta.env.DEV) {
-    const port = String(import.meta.env.VITE_DEV_API_PORT || '8081').trim() || '8081';
-    const hostname =
-      typeof window !== 'undefined' && window.location?.hostname
-        ? window.location.hostname
-        : 'localhost';
-    const localHost = hostname === '127.0.0.1' ? '127.0.0.1' : 'localhost';
-    return `http://${localHost}:${port}${normalized}`;
+    const port = resolveDevDirectApiPort();
+    if (typeof window !== 'undefined' && window.location?.hostname) {
+      const h = window.location.hostname;
+      const hostInUrl = isBrowserLoopbackHostname(h) ? '127.0.0.1' : hostForDirectDevApiUrl(h);
+      return `http://${hostInUrl}:${port}${normalized}`;
+    }
+    return `http://127.0.0.1:${port}${normalized}`;
   }
   if (typeof window !== 'undefined') return `${getSameOriginApiBase()}${normalized}`;
   return normalized;

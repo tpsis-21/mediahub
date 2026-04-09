@@ -8,8 +8,51 @@ import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readEnvPort } from '../scripts/read-env-port.mjs'
 
 const __rootDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
+/** Raiz do monorepo (mediahub) — preferido para o Cursor ler a sessão. */
+const __debugAgentLogFootballPath = path.join(__rootDir, '..', 'debug-3ee3aa.log')
+/** Cópia dentro do pacote — útil se o processo CWD/paths divergirem do monorepo. */
+const __debugAgentLogFootballPathAlt = path.join(__rootDir, 'debug-3ee3aa.log')
+let __dbgFootballCrestServerLogs = 0
+let __dbgNdjsonAppendWarned = false
+/** Buffer em memória — o agente pode ler via GET /api/debug/session-ring sem depender do FS do workspace. */
+const __sessionDebugRingMax = 400
+const __sessionDebugRing = []
+
+const appendDebugNdjsonToSessionFiles = (payload) => {
+  try {
+    __sessionDebugRing.push({ ...payload, _ringOrder: __sessionDebugRing.length })
+    if (__sessionDebugRing.length > __sessionDebugRingMax) {
+      __sessionDebugRing.splice(0, __sessionDebugRing.length - __sessionDebugRingMax)
+    }
+  } catch {
+    void 0
+  }
+  const line = `${JSON.stringify(payload)}\n`
+  for (const target of [__debugAgentLogFootballPath, __debugAgentLogFootballPathAlt]) {
+    try {
+      fs.appendFileSync(target, line)
+    } catch (err) {
+      if (!__dbgNdjsonAppendWarned) {
+        __dbgNdjsonAppendWarned = true
+        console.error('[debug-3ee3aa] falha ao gravar NDJSON', target, err?.message || err)
+      }
+    }
+  }
+}
+
+const appendFootballDebugNdjson = (hypothesisId, location, message, data) => {
+  appendDebugNdjsonToSessionFiles({
+    sessionId: '3ee3aa',
+    hypothesisId,
+    timestamp: Date.now(),
+    location,
+    message,
+    data,
+  })
+}
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.join(__rootDir, '.env') })
 }
@@ -182,7 +225,9 @@ const upload = multer({
 
 const isProductionEnv = process.env.NODE_ENV === 'production'
 const rawPort = String(process.env.PORT || '').trim()
-const PORT = Number(rawPort || 8081)
+const resolvedListenPort = rawPort ? Number(rawPort) : readEnvPort()
+const PORT =
+  Number.isFinite(resolvedListenPort) && resolvedListenPort > 0 ? resolvedListenPort : 8081
 const HOST = process.env.HOST || '0.0.0.0'
 /** URL direta do Postgres (obrigatória). Com Supabase em rede só IPv4, use também pooler — ver `getPgConnectionForPool`. */
 const DATABASE_URL_DIRECT = String(process.env.DATABASE_URL || '').trim()
@@ -480,6 +525,9 @@ const initDb = async () => {
 }
 // initDb()
 
+/** Marca de arranque do processo — devolve em /api/debug/session-ring para saber se o ring é desta instância. */
+const __apiBootAt = Date.now()
+
 const app = express()
 app.disable('x-powered-by')
 app.use(
@@ -525,6 +573,44 @@ const originsMatchModuloWww = (allowed, requestOrigin) => {
   }
 }
 
+/** Host após remover [ ] do IPv6 — compara localhost, 127.0.0.1 e ::1 como equivalentes em dev. */
+const normalizeLoopbackHostname = (hostname) =>
+  String(hostname || '')
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '')
+
+const isNormalizedLoopbackHost = (h) =>
+  h === 'localhost' ||
+  h === '127.0.0.1' ||
+  h === '::1' ||
+  h === '0:0:0:0:0:0:0:1' ||
+  h === '::ffff:127.0.0.1'
+
+/** Vite com host `::` → Origin `http://[::1]:5173` enquanto ALLOWED_ORIGIN pode ser `http://localhost:5173`. */
+const isDevLoopbackOriginEquivalent = (origin, allowedList) => {
+  if (!isDev || !Array.isArray(allowedList) || allowedList.length === 0) return false
+  try {
+    const o = new URL(origin)
+    const op = o.port || (o.protocol === 'https:' ? '443' : '80')
+    const oh = normalizeLoopbackHostname(o.hostname)
+    if (!isNormalizedLoopbackHost(oh)) return false
+    for (const allowed of allowedList) {
+      try {
+        const a = new URL(allowed)
+        const ap = a.port || (a.protocol === 'https:' ? '443' : '80')
+        const ah = normalizeLoopbackHostname(a.hostname)
+        if (!isNormalizedLoopbackHost(ah)) continue
+        if (ap === op && o.protocol === a.protocol) return true
+      } catch {
+        void 0
+      }
+    }
+  } catch {
+    void 0
+  }
+  return false
+}
+
 const isAllowedOrigin = (origin) => {
   if (ALLOWED_ORIGINS.length === 0) return true
   if (!origin) return false
@@ -532,8 +618,11 @@ const isAllowedOrigin = (origin) => {
   for (const allowed of ALLOWED_ORIGINS) {
     if (originsMatchModuloWww(allowed, origin)) return true
   }
+  if (isDevLoopbackOriginEquivalent(origin, ALLOWED_ORIGINS)) return true
   if (!isDev) return false
-  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return true
+  if (/^https?:\/\/\[::1\](:\d+)?$/i.test(origin)) return true
+  if (/^https?:\/\/\[::ffff:127\.0\.0\.1\](:\d+)?$/i.test(origin)) return true
   if (/^https?:\/\/192\.168\.\d+\.\d+(:\d+)?$/.test(origin)) return true
   return false
 }
@@ -579,7 +668,8 @@ app.use((req, res, next) => {
       res.setHeader('Vary', 'Origin')
       res.setHeader('Access-Control-Allow-Credentials', 'true')
     }
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+    // `Accept` customizado no fetch (ex.: escudos) dispara preflight; sem isto o browser bloqueia antes do GET.
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept')
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
   }
 
@@ -589,6 +679,52 @@ app.use((req, res, next) => {
   }
 
   next()
+})
+
+/** NDJSON em mediahub/debug-3ee3aa.log (dev ou DEBUG_AGENT_LOG=1). */
+app.post('/api/debug/agent-log', (req, res) => {
+  // #region agent log
+  appendFootballDebugNdjson('H19', 'server.mjs:/api/debug/agent-log', 'agent_log_route_hit', {
+    isDev,
+    envDebugAgentLog: String(process.env.DEBUG_AGENT_LOG || '').trim(),
+    hasBody: Boolean(req.body && typeof req.body === 'object'),
+  })
+  // #endregion
+  if (!isDev && String(process.env.DEBUG_AGENT_LOG || '').trim() !== '1') {
+    res.status(404).end()
+    return
+  }
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {}
+    appendDebugNdjsonToSessionFiles({ ...body, _serverTs: Date.now() })
+    res.status(204).end()
+  } catch {
+    res.status(500).end()
+  }
+})
+
+app.get('/api/debug/session-ring', (_req, res) => {
+  if (!isDev && String(process.env.DEBUG_AGENT_LOG || '').trim() !== '1') {
+    res.status(404).end()
+    return
+  }
+  res.setHeader('Cache-Control', 'no-store')
+  res.json({
+    sessionId: '3ee3aa',
+    apiBootAt: __apiBootAt,
+    count: __sessionDebugRing.length,
+    items: __sessionDebugRing,
+  })
+})
+
+app.post('/api/debug/session-ring/clear', (_req, res) => {
+  if (!isDev && String(process.env.DEBUG_AGENT_LOG || '').trim() !== '1') {
+    res.status(404).end()
+    return
+  }
+  __sessionDebugRing.length = 0
+  appendFootballDebugNdjson('H20', 'server.mjs:/api/debug/session-ring/clear', 'session_ring_cleared', {})
+  res.status(204).end()
 })
 
 const query = async (text, params) => {
@@ -1759,6 +1895,10 @@ const normalizeFootballCrestUrl = (value) => {
   if (raw.startsWith('//')) return `https:${raw}`
   if (raw.startsWith('/')) return `https://www.futebolnatv.com.br${raw}`
   if (raw.startsWith('upload/')) return `https://www.futebolnatv.com.br/${raw}`
+  // Sem protocolo, new URL() falha e isSafeExternalHttpUrl rejeita — quebra o proxy /api/football/crest.
+  if (/^www\.futebolnatv\.com\.br(\/|$|\?|#)/i.test(raw) && !/^https?:\/\//i.test(raw)) {
+    return `https://${raw}`
+  }
   try {
     const parsed = new URL(raw)
     if (parsed.protocol === 'http:') {
@@ -2929,7 +3069,7 @@ const fetchExternalCrestAsDataUrl = async (rawUrl) => {
     }
     const buf = Buffer.from(await response.arrayBuffer())
     // Limite alinhado ao proxy /api/football/crest; acima disso o cliente usa a URL remota ou o proxy.
-    if (buf.length < 24 || buf.length > 280_000) {
+    if (buf.length < 24 || buf.length > 600_000) {
       footballCrestDataUrlCache.set(normalized, { dataUrl: '', expiresAt: Date.now() + 20 * 60_000 })
       return ''
     }
@@ -6763,6 +6903,11 @@ app.get(['/api/football/schedule', '/api/football/schedule/'], requireAuth, requ
       footballScheduleCrestDebugLogCache.set(dateKey, Date.now())
     }
 
+    const normalizeCrestFieldForClient = (u) => {
+      const s = typeof u === 'string' ? u.trim() : ''
+      if (!s || s.startsWith('data:')) return s
+      return normalizeFootballCrestUrl(s) || s
+    }
     const publicMatches = merged.map((m) => {
       const base = {
         time: m.time,
@@ -6770,15 +6915,31 @@ app.get(['/api/football/schedule', '/api/football/schedule/'], requireAuth, requ
         away: m.away,
         competition: m.competition,
         channels: Array.isArray(m.channels) ? m.channels : [],
-        homeCrestUrl: m.homeCrestUrl || '',
-        awayCrestUrl: m.awayCrestUrl || '',
+        homeCrestUrl: normalizeCrestFieldForClient(m.homeCrestUrl || ''),
+        awayCrestUrl: normalizeCrestFieldForClient(m.awayCrestUrl || ''),
       }
       const hr = typeof m.homeCrestUrlRemote === 'string' ? m.homeCrestUrlRemote.trim() : ''
       const ar = typeof m.awayCrestUrlRemote === 'string' ? m.awayCrestUrlRemote.trim() : ''
-      if (hr) base.homeCrestUrlRemote = hr
-      if (ar) base.awayCrestUrlRemote = ar
+      if (hr) base.homeCrestUrlRemote = normalizeCrestFieldForClient(hr)
+      if (ar) base.awayCrestUrlRemote = normalizeCrestFieldForClient(ar)
       return base
     })
+    // #region agent log
+    appendFootballDebugNdjson('H16,H17', 'server.mjs:/api/football/schedule', 'schedule_response_summary', {
+      date: responseDate,
+      totalMatches,
+      missingHome,
+      missingAway,
+      missingBoth,
+      missingAny,
+      sample: publicMatches.slice(0, 2).map((m) => ({
+        home: m.home,
+        away: m.away,
+        homeCrestUrlLen: String(m.homeCrestUrl || '').length,
+        awayCrestUrlLen: String(m.awayCrestUrl || '').length,
+      })),
+    })
+    // #endregion
     res.json({ date: responseDate, updatedAt, matches: publicMatches })
   } catch {
     res.status(200).json({
@@ -6789,6 +6950,32 @@ app.get(['/api/football/schedule', '/api/football/schedule/'], requireAuth, requ
   }
 })
 
+/** SVG no canvas 2D do browser falha muito (intrínseco 0×0). Converte para PNG quando o runtime canvas está OK. */
+const rasterizeFootballCrestSvgToPng = async (svgBuffer) => {
+  if (!isCanvasRuntimeHealthy) return null
+  try {
+    const img = await loadImage(svgBuffer)
+    let w = Number(img.width) || 0
+    let h = Number(img.height) || 0
+    if (!w || !h) {
+      w = 512
+      h = 512
+    }
+    const maxSide = 512
+    if (w > maxSide || h > maxSide) {
+      const scale = maxSide / Math.max(w, h)
+      w = Math.max(1, Math.floor(w * scale))
+      h = Math.max(1, Math.floor(h * scale))
+    }
+    const canvas = createCanvas(w, h)
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(img, 0, 0, w, h)
+    return canvas.toBuffer('image/png')
+  } catch {
+    return null
+  }
+}
+
 const setFootballCrestCorsHeaders = (res) => {
   // Imagem carregada no canvas no browser (crossOrigin=anonymous): precisa CORS + CORP permissivo.
   // Em dev o Vite proxy mascara origem cruzada; em produção (front ≠ API) sem isso o onerror cai e só aparecem iniciais.
@@ -6796,23 +6983,29 @@ const setFootballCrestCorsHeaders = (res) => {
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin')
 }
 
-app.options('/api/football/crest', (_req, res) => {
-  setFootballCrestCorsHeaders(res)
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
-  res.setHeader('Access-Control-Max-Age', '86400')
-  res.status(204).end()
-})
+const makeFootballCrestDbg = (routeTag) => (data) => {
+  if (__dbgFootballCrestServerLogs >= 30) return
+  __dbgFootballCrestServerLogs += 1
+  appendDebugNdjsonToSessionFiles({
+    sessionId: '3ee3aa',
+    hypothesisId: 'H1',
+    timestamp: Date.now(),
+    location: `server.mjs:${routeTag} /api/football/crest`,
+    message: 'crest_proxy',
+    data,
+  })
+}
 
-app.get('/api/football/crest', async (req, res) => {
-  setFootballCrestCorsHeaders(res)
-  const urlRaw = typeof req.query?.url === 'string' ? req.query.url.trim() : ''
-  if (!urlRaw || urlRaw.length > 800) {
-    res.status(400).end()
-    return
-  }
+const processFootballCrestProxy = async (res, urlRaw, dbgFootballCrest) => {
   try {
-    const normalized = urlRaw.startsWith('//') ? `https:${urlRaw}` : urlRaw
+    const normalized = normalizeFootballCrestUrl(urlRaw)
+    if (!normalized || normalized.startsWith('data:')) {
+      dbgFootballCrest({ sentStatus: 400, note: 'invalid_or_data_crest_url' })
+      res.status(400).end()
+      return
+    }
     if (!isSafeExternalHttpUrl(normalized)) {
+      dbgFootballCrest({ host: '', sentStatus: 403, note: 'unsafe_url' })
       res.status(403).end()
       return
     }
@@ -6827,11 +7020,13 @@ app.get('/api/football/crest', async (req, res) => {
       },
     })
     if (!response.ok) {
+      dbgFootballCrest({ host: url.hostname, upstreamStatus: response.status, sentStatus: 502, note: 'upstream_not_ok' })
       res.status(502).end()
       return
     }
     const buffer = Buffer.from(await response.arrayBuffer())
     if (buffer.length < 8) {
+      dbgFootballCrest({ host: url.hostname, upstreamStatus: response.status, sentStatus: 502, note: 'tiny_body' })
       res.status(502).end()
       return
     }
@@ -6845,19 +7040,92 @@ app.get('/api/football/crest', async (req, res) => {
       }
     }
     if (!contentType || !contentType.startsWith('image/')) {
+      dbgFootballCrest({ host: url.hostname, upstreamStatus: response.status, sentStatus: 502, note: 'not_image_mime', headerCt })
       res.status(502).end()
       return
     }
     if (buffer.length > 2_500_000) {
+      dbgFootballCrest({ host: url.hostname, sentStatus: 413, note: 'too_large' })
       res.status(413).end()
       return
     }
+    let crestProxyNote
+    if (contentType === 'image/svg+xml') {
+      const pngBuf = await rasterizeFootballCrestSvgToPng(buffer)
+      if (pngBuf && pngBuf.length >= 24) {
+        dbgFootballCrest({
+          host: url.hostname,
+          upstreamStatus: response.status,
+          sentStatus: 200,
+          bytes: pngBuf.length,
+          contentType: 'image/png',
+          note: 'svg_rasterized',
+        })
+        res.setHeader('Content-Type', 'image/png')
+        res.setHeader('Cache-Control', 'public, max-age=86400')
+        res.status(200).send(pngBuf)
+        return
+      }
+      crestProxyNote = 'svg_rasterize_miss'
+    }
+    dbgFootballCrest({
+      host: url.hostname,
+      upstreamStatus: response.status,
+      sentStatus: 200,
+      bytes: buffer.length,
+      contentType,
+      ...(crestProxyNote
+        ? { note: crestProxyNote, canvasHealthy: isCanvasRuntimeHealthy }
+        : {}),
+    })
     res.setHeader('Content-Type', contentType)
     res.setHeader('Cache-Control', 'public, max-age=86400')
     res.status(200).send(buffer)
   } catch {
+    dbgFootballCrest({ sentStatus: 400, note: 'catch' })
     res.status(400).end()
   }
+}
+
+app.options('/api/football/crest', (_req, res) => {
+  setFootballCrestCorsHeaders(res)
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+  res.setHeader('Access-Control-Max-Age', '86400')
+  res.status(204).end()
+})
+
+app.get('/api/football/crest', async (req, res) => {
+  setFootballCrestCorsHeaders(res)
+  // #region agent log
+  appendFootballDebugNdjson('H18', 'server.mjs:/api/football/crest', 'crest_route_hit', {
+    method: 'GET',
+    hasUrl: typeof req.query?.url === 'string' && req.query.url.trim().length > 0,
+    urlLen: typeof req.query?.url === 'string' ? req.query.url.trim().length : 0,
+  })
+  // #endregion
+  const urlRaw = typeof req.query?.url === 'string' ? req.query.url.trim() : ''
+  if (!urlRaw || urlRaw.length > 3000) {
+    res.status(400).end()
+    return
+  }
+  await processFootballCrestProxy(res, urlRaw, makeFootballCrestDbg('GET'))
+})
+
+app.post('/api/football/crest', async (req, res) => {
+  setFootballCrestCorsHeaders(res)
+  // #region agent log
+  appendFootballDebugNdjson('H18', 'server.mjs:/api/football/crest', 'crest_route_hit', {
+    method: 'POST',
+    hasUrl: typeof req.body?.url === 'string' && req.body.url.trim().length > 0,
+    urlLen: typeof req.body?.url === 'string' ? req.body.url.trim().length : 0,
+  })
+  // #endregion
+  const urlRaw = typeof req.body?.url === 'string' ? req.body.url.trim() : ''
+  if (!urlRaw || urlRaw.length > 16384) {
+    res.status(400).end()
+    return
+  }
+  await processFootballCrestProxy(res, urlRaw, makeFootballCrestDbg('POST'))
 })
 
 app.get('/api/assets/image', requireAuth, requirePremiumOrAdmin, async (req, res) => {
@@ -7281,6 +7549,72 @@ app.put('/api/me', requireAuth, async (req, res) => {
     res.json({ user: publicUserFromRow(row) })
   } catch {
     res.status(500).json({ message: 'Não foi possível concluir. Tente novamente.' })
+  }
+})
+
+app.post('/api/me/password', requireAuth, async (req, res) => {
+  const currentPassword = String(req.body?.currentPassword || '')
+  const newPassword = String(req.body?.newPassword || '')
+  const confirmPassword = String(req.body?.confirmPassword || '')
+
+  if (!currentPassword || !newPassword || !confirmPassword) {
+    res.status(400).json({ message: 'Preencha senha atual, nova senha e confirmação.' })
+    return
+  }
+
+  if (newPassword.length < 8) {
+    res.status(400).json({ message: 'A nova senha deve ter pelo menos 8 caracteres.' })
+    return
+  }
+
+  if (newPassword !== confirmPassword) {
+    res.status(400).json({ message: 'A confirmação da senha não confere.' })
+    return
+  }
+
+  if (currentPassword === newPassword) {
+    res.status(400).json({ message: 'A nova senha precisa ser diferente da senha atual.' })
+    return
+  }
+
+  try {
+    const result = await query('select id, password_hash, password_salt, password_iterations from app_users where id = $1 limit 1', [
+      req.auth.userId,
+    ])
+    const row = result.rows[0]
+    if (!row) {
+      res.status(401).json({ message: 'Não autenticado.' })
+      return
+    }
+
+    const ok = await verifyPassword({
+      password: currentPassword,
+      digest: {
+        hash: row.password_hash,
+        salt: row.password_salt,
+        iterations: row.password_iterations,
+      },
+    })
+
+    if (!ok) {
+      res.status(401).json({ message: 'Senha atual inválida.' })
+      return
+    }
+
+    const digest = await createPasswordDigest(newPassword)
+    await query(
+      `update app_users
+          set password_hash = $1,
+              password_salt = $2,
+              password_iterations = $3,
+              updated_at = now()
+        where id = $4`,
+      [digest.hash, digest.salt, digest.iterations, req.auth.userId]
+    )
+
+    res.json({ ok: true })
+  } catch {
+    res.status(500).json({ message: 'Não foi possível atualizar a senha agora. Tente novamente.' })
   }
 })
 
@@ -8256,6 +8590,9 @@ const attachHttpServer = () => {
   server = app.listen(PORT, HOST, () => {
     startFootballScheduler()
     console.log(`API pronta em http://${HOST}:${PORT} (${runtimeBuildTag})`)
+    if (isDev) {
+      console.log(`[debug-3ee3aa] apiBootAt=${__apiBootAt} — comparar com o campo apiBootAt em GET /api/debug/session-ring`)
+    }
   })
   // Geração de vídeo pode levar vários minutos sem enviar o primeiro byte; timeouts padrão do Node podem derrubar o socket.
   try {

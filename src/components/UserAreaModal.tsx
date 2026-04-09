@@ -46,6 +46,10 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
   const [searchScope, setSearchScope] = useState<'user' | 'system' | 'none' | null>(null);
   const [isSearchStatusLoading, setIsSearchStatusLoading] = useState(false);
   const [searchStatusError, setSearchStatusError] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
   const colorsDirtyRef = useRef(false);
   const searchKeyDirtyRef = useRef(false);
   const lastAutoColorLogoSigRef = useRef<string | null>(null);
@@ -469,6 +473,70 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
     }
   };
 
+  const handleChangePassword = async () => {
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      toast({
+        title: 'Campos obrigatórios',
+        description: 'Preencha senha atual, nova senha e confirmação.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast({
+        title: 'Senha fraca',
+        description: 'A nova senha deve ter pelo menos 8 caracteres.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast({
+        title: 'Confirmação inválida',
+        description: 'A confirmação da senha não confere.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (currentPassword === newPassword) {
+      toast({
+        title: 'Senha repetida',
+        description: 'A nova senha precisa ser diferente da senha atual.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    try {
+      setIsChangingPassword(true);
+      await apiRequest<{ ok: true }>({
+        path: '/api/me/password',
+        method: 'POST',
+        auth: true,
+        body: { currentPassword, newPassword, confirmPassword },
+      });
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      toast({
+        title: 'Senha atualizada',
+        description: 'Sua senha foi alterada com sucesso.',
+      });
+    } catch (e) {
+      const message =
+        e && typeof e === 'object' && 'message' in e && typeof (e as { message?: unknown }).message === 'string'
+          ? (e as { message: string }).message
+          : 'Não foi possível atualizar a senha agora.';
+      toast({
+        title: 'Erro',
+        description: message,
+        variant: 'destructive',
+      });
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
   useEffect(() => {
     if (!logoFile) return;
     if (colorsDirtyRef.current) return;
@@ -563,6 +631,47 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
                       placeholder="https://seusite.com"
                       inputMode="url"
                     />
+                  </div>
+                </div>
+
+                <div className="rounded-lg border p-4 space-y-3">
+                  <h4 className="text-sm font-semibold">Alterar senha</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div className="grid gap-2">
+                      <Label htmlFor="currentPassword">Senha atual</Label>
+                      <Input
+                        id="currentPassword"
+                        type="password"
+                        value={currentPassword}
+                        onChange={(e) => setCurrentPassword(e.target.value)}
+                        autoComplete="current-password"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="newPassword">Nova senha</Label>
+                      <Input
+                        id="newPassword"
+                        type="password"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        autoComplete="new-password"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="confirmPassword">Confirmar nova senha</Label>
+                      <Input
+                        id="confirmPassword"
+                        type="password"
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        autoComplete="new-password"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end">
+                    <Button type="button" variant="outline" onClick={() => void handleChangePassword()} disabled={isChangingPassword}>
+                      {isChangingPassword ? 'Atualizando senha...' : 'Atualizar senha'}
+                    </Button>
                   </div>
                 </div>
               </CardContent>

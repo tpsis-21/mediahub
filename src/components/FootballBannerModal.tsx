@@ -6,7 +6,7 @@ import {
   apiRequest,
   apiRequestGetTryCandidates,
   apiRequestRaw,
-  buildApiUrl,
+  buildLongRunningApiUrl,
   collectSameOriginApiGetCandidates,
   getAuthToken,
   type ApiError,
@@ -42,9 +42,6 @@ type FootballScheduleResponse = {
   matches: FootballMatch[];
 };
 
-const footballMatchKey = (match: Pick<FootballMatch, 'time' | 'home' | 'away'>) =>
-  `${match.time}::${match.home}::${match.away}`.trim().toLowerCase();
-
 const FOOTBALL_SCHEDULE_CACHE_KEY_V1 = 'football_schedule_cache_v1';
 const getFootballScheduleCacheKey = (dateIso: string) => `football_schedule_cache_v3_${dateIso}`;
 
@@ -59,6 +56,19 @@ const parseClockTime = (value: string) => {
   if (hours < 0 || hours > 23) return null;
   if (minutes < 0 || minutes > 59) return null;
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+};
+
+/** Chave estável para seleção e remapeamento pós-refresh (horário normalizado + nomes NFC + espaços). */
+const footballMatchKey = (match: Pick<FootballMatch, 'time' | 'home' | 'away'>) => {
+  const rawTime = String(match.time ?? '').trim();
+  const timePart = parseClockTime(rawTime) || rawTime.toLowerCase();
+  const normName = (s: unknown) =>
+    String(s ?? '')
+      .normalize('NFC')
+      .trim()
+      .replace(/\s+/g, ' ')
+      .toLowerCase();
+  return `${timePart}::${normName(match.home)}::${normName(match.away)}`;
 };
 
 const getSaoPauloNowParts = () => {
@@ -106,7 +116,7 @@ const readCachedFootballSchedule = (expectedDate: string): FootballScheduleRespo
       const s = schedule as FootballScheduleResponse;
       if (typeof s.date !== 'string' || !Array.isArray(s.matches)) return null;
       if (s.date !== expectedDate) return null;
-      return s;
+      return normalizeFootballScheduleCrests(s);
     }
 
     const rawV1 = localStorage.getItem(FOOTBALL_SCHEDULE_CACHE_KEY_V1);
@@ -122,7 +132,7 @@ const readCachedFootballSchedule = (expectedDate: string): FootballScheduleRespo
     if (typeof s.date !== 'string' || !Array.isArray(s.matches)) return null;
     if (s.date !== expectedDate) return null;
     writeCachedFootballSchedule(s);
-    return s;
+    return normalizeFootballScheduleCrests(s);
   } catch {
     return null;
   }
@@ -141,8 +151,14 @@ const stripInlineCrestsForStorage = (schedule: FootballScheduleResponse): Footba
       typeof m.awayCrestUrl === 'string' && m.awayCrestUrl.startsWith('data:')
         ? awayRemote || ''
         : m.awayCrestUrl;
-    const { homeCrestUrlRemote, awayCrestUrlRemote, ...rest } = m;
-    return { ...rest, homeCrestUrl: home, awayCrestUrl: away };
+    const { homeCrestUrlRemote: _hr, awayCrestUrlRemote: _ar, ...rest } = m;
+    return {
+      ...rest,
+      homeCrestUrl: home,
+      awayCrestUrl: away,
+      ...(homeRemote ? { homeCrestUrlRemote: homeRemote } : {}),
+      ...(awayRemote ? { awayCrestUrlRemote: awayRemote } : {}),
+    };
   }),
 });
 
@@ -274,6 +290,54 @@ const FOOTBALL_WHATSAPP_ICON_URLS = [
   `${new URL('../../anexos/pngtree-whatsapp-icon-png-image_6315990.png', import.meta.url).href}?v=wa-icon-v1`,
 ];
 
+/** Limite de logs de debug por sessão do browser (evita spam no ingest). */
+let dbgCrestRemoteFailLogs = 0;
+let dbgCrestEmptyNormalizedLogs = 0;
+let dbgDrawImageSafeFailLogs = 0;
+let dbgCrestProxy400Logs = 0;
+let dbgCrestLoadEntryLogs = 0;
+let dbgMimeCoerceLogs = 0;
+let dbgBlobDecodeFailLogs = 0;
+let dbgCrestInputSummaryLogs = 0;
+let dbgScheduleEffectOpenLogs = 0;
+
+const DEBUG_AGENT_INGEST_URL = 'http://127.0.0.1:7360/ingest/2d4625cb-a796-43ae-818f-8ba3f0811ba4';
+
+/** Em dev (ou VITE_DEBUG_AGENT_LOG=true + API com DEBUG_AGENT_LOG=1), grava NDJSON em mediahub/debug-3ee3aa.log. */
+const postFootballBannerDebugLog = (payload: {
+  runId?: string;
+  hypothesisId?: string;
+  location: string;
+  message: string;
+  data?: Record<string, unknown>;
+}) => {
+  const body = JSON.stringify({ sessionId: '3ee3aa', timestamp: Date.now(), ...payload });
+  if (import.meta.env.DEV || import.meta.env.VITE_DEBUG_AGENT_LOG === 'true') {
+    const urls = collectSameOriginApiGetCandidates('/api/debug/agent-log');
+    void fetch(urls[0] ?? '/api/debug/agent-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    }).catch(() => {});
+  }
+  void fetch(DEBUG_AGENT_INGEST_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '3ee3aa' },
+    body,
+  }).catch(() => {});
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      const key = 'mh_football_crest_dbg';
+      const prev = sessionStorage.getItem(key);
+      const arr: unknown[] = prev ? (JSON.parse(prev) as unknown[]) : [];
+      arr.push(JSON.parse(body) as object);
+      sessionStorage.setItem(key, JSON.stringify(arr.slice(-50)));
+    }
+  } catch {
+    void 0;
+  }
+};
+
 const loadImage = (src: string): Promise<HTMLImageElement | null> => {
   return new Promise((resolve) => {
     const url = typeof src === 'string' ? src.trim() : '';
@@ -286,27 +350,86 @@ const loadImage = (src: string): Promise<HTMLImageElement | null> => {
     if (!url.startsWith('data:') && !url.startsWith('blob:')) {
       img.crossOrigin = 'anonymous';
     }
-    img.onload = () => resolve(img);
+    const finish = () => resolve(img);
+    img.onload = () => {
+      if (typeof img.decode === 'function') {
+        img.decode().then(finish).catch(finish);
+      } else {
+        finish();
+      }
+    };
     img.onerror = () => resolve(null);
     img.src = url;
   });
 };
+const candidateLooksLikeSvg = (candidate: string) => {
+  const c = candidate.toLowerCase();
+  return c.includes('.svg') || c.includes('image/svg') || c.startsWith('data:image/svg');
+};
+
+/** Raster: exige dimensões; SVG costuma reportar 0×0 no elemento img mesmo carregado — aceitar se `complete`. */
+const isDrawableCrestCandidate = (img: HTMLImageElement, candidate: string) => {
+  if (!img.complete) return false;
+  const w = img.naturalWidth || img.width;
+  const h = img.naturalHeight || img.height;
+  if (w > 0 && h > 0) return true;
+  if (candidateLooksLikeSvg(candidate)) return true;
+  return false;
+};
+
 const loadImageFirstAvailable = async (candidates: string[]) => {
   for (const candidate of candidates) {
     const img = await loadImage(candidate);
-    if (img) return img;
+    if (img && isDrawableCrestCandidate(img, candidate)) return img;
   }
   return null;
 };
 
-const loadImageFromBlob = (blob: Blob): Promise<HTMLImageElement | null> => {
+const MH_BLOB_MIME_ATTR = 'data-mh-blob-mime';
+
+/** SVG (e alguns data URLs) podem ter naturalWidth/Height 0 no canvas; usar fallback para escala “contain”. */
+const getDrawableImageIntrinsicSize = (img: HTMLImageElement, svgFallback = 512) => {
+  const nw = img.naturalWidth || img.width;
+  const nh = img.naturalHeight || img.height;
+  if (nw > 0 && nh > 0) return { iw: nw, ih: nh };
+  const mime = (img.getAttribute(MH_BLOB_MIME_ATTR) || '').toLowerCase();
+  if (mime.includes('svg')) {
+    return { iw: svgFallback, ih: svgFallback };
+  }
+  const src = (img.currentSrc || img.src || '').toLowerCase();
+  if (src.includes('svg') || src.includes('image/svg')) {
+    return { iw: svgFallback, ih: svgFallback };
+  }
+  return { iw: nw, ih: nh };
+};
+
+/** Após loadImageFromBlob, SVG pode ter 0×0 intrínseco mas ainda ser desenhável no canvas. */
+const isUsableCrestImageElement = (img: HTMLImageElement | null): boolean => {
+  if (!img?.complete) return false;
+  if (img.naturalWidth || img.width || img.naturalHeight || img.height) return true;
+  const mime = (img.getAttribute(MH_BLOB_MIME_ATTR) || '').toLowerCase();
+  if (mime.includes('svg')) return true;
+  const src = (img.currentSrc || img.src || '').toLowerCase();
+  return src.includes('svg') || src.includes('image/svg');
+};
+
+const loadImageFromBlobCore = (blob: Blob): Promise<HTMLImageElement | null> => {
   return new Promise((resolve) => {
     try {
       const url = URL.createObjectURL(blob);
       const img = new Image();
-      img.onload = () => {
+      const mime = (blob.type || '').trim();
+      if (mime) img.setAttribute(MH_BLOB_MIME_ATTR, mime);
+      const done = () => {
         URL.revokeObjectURL(url);
         resolve(img);
+      };
+      img.onload = () => {
+        if (typeof img.decode === 'function') {
+          img.decode().then(done).catch(done);
+        } else {
+          done();
+        }
       };
       img.onerror = () => {
         URL.revokeObjectURL(url);
@@ -317,6 +440,133 @@ const loadImageFromBlob = (blob: Blob): Promise<HTMLImageElement | null> => {
       resolve(null);
     }
   });
+};
+
+/** Fallback quando <img>+blob não expõe naturalWidth (AVIF/WebP/SVG em alguns browsers). */
+const rasterBlobToPngDataUrlImage = async (blob: Blob): Promise<HTMLImageElement | null> => {
+  if (typeof createImageBitmap !== 'function') return null;
+  const t = (blob.type || '').toLowerCase();
+  if (t.includes('svg')) return null;
+  try {
+    const bmp = await createImageBitmap(blob);
+    const w = bmp.width;
+    const h = bmp.height;
+    if (!w || !h) {
+      bmp.close?.();
+      return null;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      bmp.close?.();
+      return null;
+    }
+    ctx.drawImage(bmp, 0, 0);
+    bmp.close?.();
+    return await loadImage(canvas.toDataURL('image/png'));
+  } catch {
+    return null;
+  }
+};
+
+const blobHeaderLooksLikeSvg = async (blob: Blob) => {
+  try {
+    const head = (await blob.slice(0, 512).text()).trimStart().toLowerCase();
+    return head.startsWith('<svg') || (head.startsWith('<?xml') && head.includes('<svg'));
+  } catch {
+    return false;
+  }
+};
+
+const loadImageFromBlob = async (blob: Blob): Promise<HTMLImageElement | null> => {
+  const img = await loadImageFromBlobCore(blob);
+  if (img && (img.naturalWidth || img.width)) return img;
+  const typeSvg = (blob.type || '').toLowerCase().includes('svg');
+  if (img?.complete && typeSvg) return img;
+  const viaBmp = await rasterBlobToPngDataUrlImage(blob);
+  if (viaBmp && (viaBmp.naturalWidth || viaBmp.width)) return viaBmp;
+  if (img?.complete && !blob.type && (await blobHeaderLooksLikeSvg(blob))) {
+    // Sem type no Blob, <img> fica 0×0 e blob: não contém "svg" — isUsableCrestImageElement precisa do MIME.
+    img.setAttribute(MH_BLOB_MIME_ATTR, 'image/svg+xml');
+    // #region agent log
+    postFootballBannerDebugLog({
+      hypothesisId: 'H6',
+      location: 'FootballBannerModal.tsx:loadImageFromBlob',
+      message: 'svg_sniff_mime_set',
+      data: { blobSize: blob.size },
+    });
+    // #endregion
+    return img;
+  }
+  // #region agent log
+  if (dbgBlobDecodeFailLogs < 8) {
+    dbgBlobDecodeFailLogs += 1;
+    postFootballBannerDebugLog({
+      hypothesisId: 'H14',
+      location: 'FootballBannerModal.tsx:loadImageFromBlob',
+      message: 'blob_decode_failed',
+      data: {
+        blobType: (blob.type || '').slice(0, 64),
+        blobSize: blob.size,
+        hadImg: Boolean(img),
+        complete: Boolean(img?.complete),
+      },
+    });
+  }
+  // #endregion
+  return null;
+};
+
+/** Alinha ao `sniffImageMimeFromBuffer` do servidor quando o proxy omite ou envia `octet-stream`. */
+const sniffImageMimeFromArrayBuffer = (buf: ArrayBuffer): string | null => {
+  if (buf.byteLength < 12) return null;
+  const u = new Uint8Array(buf.slice(0, 12));
+  if (u[0] === 0xff && u[1] === 0xd8 && u[2] === 0xff) return 'image/jpeg';
+  if (u[0] === 0x89 && u[1] === 0x50 && u[2] === 0x4e && u[3] === 0x47) return 'image/png';
+  if (u[0] === 0x47 && u[1] === 0x49 && u[2] === 0x46) return 'image/gif';
+  if (u[0] === 0x52 && u[1] === 0x49 && u[2] === 0x46 && u[3] === 0x46 && u[8] === 0x57 && u[9] === 0x45 && u[10] === 0x42 && u[11] === 0x50) {
+    return 'image/webp';
+  }
+  const headLen = Math.min(256, buf.byteLength);
+  const head = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(buf.slice(0, headLen))).trimStart().toLowerCase();
+  if (head.startsWith('<svg') || (head.startsWith('<?xml') && head.includes('<svg'))) return 'image/svg+xml';
+  return null;
+};
+
+/** Resposta com `Blob.type` vazio ou `Content-Type` genérico quebra decode/SVG sniff. */
+const coerceBlobImageMimeFromResponse = async (res: Response, blob: Blob): Promise<Blob> => {
+  if ((blob.type || '').trim()) return blob;
+  let mime = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  try {
+    const ab = await blob.arrayBuffer();
+    const headerUnusable =
+      !mime.startsWith('image/') || mime === 'application/octet-stream' || mime === 'binary/octet-stream';
+    if (headerUnusable) {
+      const sniffed = sniffImageMimeFromArrayBuffer(ab);
+      if (sniffed) mime = sniffed;
+      // #region agent log
+      if (dbgMimeCoerceLogs < 8) {
+        dbgMimeCoerceLogs += 1;
+        postFootballBannerDebugLog({
+          hypothesisId: 'H13',
+          location: 'FootballBannerModal.tsx:coerceBlobImageMimeFromResponse',
+          message: 'mime_coerce_attempt',
+          data: {
+            responseMime: (res.headers.get('content-type') || '').slice(0, 80),
+            sniffedMime: sniffed || '',
+            blobSize: blob.size,
+          },
+        });
+      }
+      // #endregion
+    }
+    if (!mime.startsWith('image/')) return new Blob([ab]);
+    return new Blob([ab], { type: mime });
+  } catch {
+    return blob;
+  }
 };
 
 const loadBrandLogoImage = async (rawUrl: string): Promise<HTMLImageElement | null> => {
@@ -336,8 +586,9 @@ const loadBrandLogoImage = async (rawUrl: string): Promise<HTMLImageElement | nu
         headers: { Authorization: `Bearer ${token}`, Accept: 'image/*' },
       });
       if (!res.ok) continue;
-      const blob = await res.blob();
-      if (!blob || blob.size === 0) continue;
+      const blobRaw = await res.blob();
+      if (!blobRaw || blobRaw.size === 0) continue;
+      const blob = await coerceBlobImageMimeFromResponse(res, blobRaw);
       const img = await loadImageFromBlob(blob);
       if (img) return img;
     } catch {
@@ -352,18 +603,40 @@ const normalizeFootballAssetInput = (rawUrl: string) => {
   if (!value) return '';
   if (value.startsWith('data:')) return value;
   if (value.startsWith('//')) return `https:${value}`;
-  if (value.startsWith('/upload/teams/')) return `https://www.futebolnatv.com.br${value}`;
-  if (value.startsWith('upload/teams/')) return `https://www.futebolnatv.com.br/${value}`;
-  if (/^www\.futebolnatv\.com\.br\//i.test(value)) return `https://${value}`;
+  // Alinhar ao servidor: qualquer caminho absoluto no site da fonte vira URL completa (evita pedido ao host do Vite).
+  if (value.startsWith('/') && !value.startsWith('//')) {
+    return `https://www.futebolnatv.com.br${value}`;
+  }
+  if (value.startsWith('upload/')) return `https://www.futebolnatv.com.br/${value}`;
+  if (/^www\.futebolnatv\.com\.br(\/|$|\?|#)/i.test(value) && !/^https?:\/\//i.test(value)) {
+    return `https://${value}`;
+  }
   return value;
 };
 
-const resolveFootballAssetUrl = (rawUrl: string) => {
-  const normalized = normalizeFootballAssetInput(rawUrl);
-  if (!normalized) return '';
-  if (normalized.startsWith('data:')) return normalized;
-  if (normalized.startsWith('/')) return normalized;
-  return buildApiUrl(`/api/football/crest?url=${encodeURIComponent(normalized)}`);
+/** Chave estável para o Map de escudos (evita duplicar cache entre http/https e query equivalente). */
+const getFootballCrestCacheKey = (rawUrl: string): string => {
+  const n = normalizeFootballAssetInput(rawUrl);
+  if (!n) return '';
+  if (n.startsWith('data:')) return n;
+  if (n.startsWith('/')) return n;
+  try {
+    const u = new URL(n.startsWith('//') ? `https:${n}` : n);
+    u.hash = '';
+    const proto = u.protocol === 'http:' ? 'https:' : u.protocol;
+    return `${proto}//${u.host}${u.pathname}${u.search}`;
+  } catch {
+    return n;
+  }
+};
+
+/** Em dev: mesmo host (proxy Vite) primeiro; URL directa ao Express por último — evita falhar só na primeira tentativa com [::1]:PORT; vídeos longos continuam a usar `buildLongRunningApiUrl` noutros módulos. */
+const collectApiGetCandidatesDevDirectFirst = (apiPath: string): string[] => {
+  const rest = collectSameOriginApiGetCandidates(apiPath);
+  if (import.meta.env.DEV && typeof window !== 'undefined') {
+    return Array.from(new Set([...rest, buildLongRunningApiUrl(apiPath)]));
+  }
+  return rest;
 };
 
 const resolveFootballAssetCandidates = (rawUrl: string) => {
@@ -378,30 +651,67 @@ const resolveFootballAssetCandidates = (rawUrl: string) => {
   const crestPath = `/api/football/crest?url=${encodeURIComponent(absolute)}`;
   return Array.from(
     new Set(
-      [...collectSameOriginApiGetCandidates(crestPath), httpsCandidate, absolute].filter(Boolean)
+      [...collectApiGetCandidatesDevDirectFirst(crestPath), httpsCandidate, absolute].filter(Boolean)
     )
   );
 };
 
 const loadFootballCrestImage = async (rawUrl: string): Promise<HTMLImageElement | null> => {
   const normalized = normalizeFootballAssetInput(rawUrl);
-  if (!normalized) return null;
+  // #region agent log
+  if (dbgCrestLoadEntryLogs < 10) {
+    dbgCrestLoadEntryLogs += 1;
+    postFootballBannerDebugLog({
+      hypothesisId: 'H12',
+      location: 'FootballBannerModal.tsx:loadFootballCrestImage',
+      message: 'crest_load_entry',
+      data: {
+        rawLen: typeof rawUrl === 'string' ? rawUrl.length : 0,
+        normalizedLen: normalized.length,
+        normalizedKind: normalized.startsWith('data:')
+          ? 'data'
+          : normalized.startsWith('/')
+            ? 'path'
+            : normalized
+              ? 'remote'
+              : 'empty',
+      },
+    });
+  }
+  // #endregion
+  if (normalized.includes('/assets/img/loadteam.png')) return null;
+  if (!normalized) {
+    // #region agent log
+    if (dbgCrestEmptyNormalizedLogs < 4) {
+      dbgCrestEmptyNormalizedLogs += 1;
+      postFootballBannerDebugLog({
+        hypothesisId: 'H3',
+        location: 'FootballBannerModal.tsx:loadFootballCrestImage',
+        message: 'crest_empty_normalized',
+        data: { rawLen: typeof rawUrl === 'string' ? rawUrl.length : 0 },
+      });
+    }
+    // #endregion
+    return null;
+  }
   if (normalized.startsWith('data:') || normalized.startsWith('/')) {
     return await loadImageFirstAvailable(resolveFootballAssetCandidates(rawUrl));
   }
 
+  const crestProxyStatuses: number[] = [];
   const token = getAuthToken();
   if (token) {
     const assetPath = `/api/assets/image?url=${encodeURIComponent(normalized)}`;
-    for (const fetchUrl of collectSameOriginApiGetCandidates(assetPath)) {
+    for (const fetchUrl of collectApiGetCandidatesDevDirectFirst(assetPath)) {
       try {
         const res = await fetch(fetchUrl, {
           method: 'GET',
           headers: { Authorization: `Bearer ${token}`, Accept: 'image/*' },
         });
         if (!res.ok) continue;
-        const blob = await res.blob();
-        if (blob && blob.size > 0) {
+        const blobRaw = await res.blob();
+        if (blobRaw && blobRaw.size > 0) {
+          const blob = await coerceBlobImageMimeFromResponse(res, blobRaw);
           const fromBlob = await loadImageFromBlob(blob);
           if (fromBlob) return fromBlob;
         }
@@ -411,7 +721,134 @@ const loadFootballCrestImage = async (rawUrl: string): Promise<HTMLImageElement 
     }
   }
 
-  return await loadImageFirstAvailable(resolveFootballAssetCandidates(rawUrl));
+  const candidates = resolveFootballAssetCandidates(rawUrl);
+  // fetch → blob evita falhas de CORS/canvas com <img crossOrigin> em alguns browsers/proxies.
+  for (const url of candidates) {
+    if (!/\/api\/football\/crest\?/i.test(url)) continue;
+    try {
+      const base = new URL(url, typeof window !== 'undefined' ? window.location.href : 'http://localhost/');
+      const crestPostEndpoint = `${base.origin}${base.pathname}`;
+      // GET limita `url` (3000 chars no Express); o URI completo pode estourar proxies (414). POST JSON até 16k.
+      const crestPostRecoverStatuses = new Set([
+        400, 401, 403, 408, 413, 414, 429, 431, 494, 500, 502, 503, 504,
+      ]);
+      const longCrestTarget = normalized.length > 900;
+      const longCrestRequestUrl = url.length > 2200;
+      let postAttempted = false;
+      const tryCrestProxyPost = async (reason: string, getStatus: number) => {
+        if (postAttempted) return null;
+        postAttempted = true;
+        const postRes = await fetch(crestPostEndpoint, {
+          method: 'POST',
+          credentials: 'omit',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: normalized }),
+        });
+        if (!postRes.ok) return null;
+        // #region agent log
+        postFootballBannerDebugLog({
+          hypothesisId: 'H15',
+          location: 'FootballBannerModal.tsx:loadFootballCrestImage',
+          message:
+            reason === 'bad_ct'
+              ? 'crest_proxy_post_recovered_after_bad_ct'
+              : reason === 'small_body'
+                ? 'crest_proxy_post_recovered_after_small_get_body'
+                : 'crest_proxy_post_recovered',
+          data: {
+            reason,
+            getStatus,
+            postStatus: postRes.status,
+            normalizedLen: normalized.length,
+            requestUrlLen: url.length,
+          },
+        });
+        // #endregion
+        return postRes;
+      };
+
+      let res = await fetch(url, { method: 'GET', credentials: 'omit' });
+      const tryPostOnFail =
+        !res.ok && (longCrestTarget || longCrestRequestUrl || crestPostRecoverStatuses.has(res.status));
+      if (tryPostOnFail) {
+        const pr = await tryCrestProxyPost('get_fail', res.status);
+        if (pr) res = pr;
+      }
+      crestProxyStatuses.push(res.status);
+      if (!res.ok) {
+        if (res.status === 400 && dbgCrestProxy400Logs < 2) {
+          dbgCrestProxy400Logs += 1;
+          // #region agent log
+          postFootballBannerDebugLog({
+            hypothesisId: 'H11',
+            location: 'FootballBannerModal.tsx:loadFootballCrestImage',
+            message: 'crest_proxy_400',
+            data: { requestUrlLen: url.length },
+          });
+          // #endregion
+        }
+        continue;
+      }
+      let ct = (res.headers.get('content-type') || '').toLowerCase();
+      if (ct.includes('text/html') || ct.includes('application/json')) {
+        // #region agent log
+        postFootballBannerDebugLog({
+          hypothesisId: 'H7',
+          location: 'FootballBannerModal.tsx:loadFootballCrestImage',
+          message: 'crest_proxy_non_image_ct',
+          data: { ct: ct.slice(0, 80), status: res.status },
+        });
+        // #endregion
+        const pr = await tryCrestProxyPost('bad_ct', res.status);
+        if (pr) {
+          res = pr;
+          ct = (res.headers.get('content-type') || '').toLowerCase();
+        }
+        if (ct.includes('text/html') || ct.includes('application/json')) continue;
+      }
+      let blobRaw = await res.blob();
+      if (!blobRaw || blobRaw.size < 24) {
+        const pr = await tryCrestProxyPost('small_body', res.status);
+        if (pr) {
+          res = pr;
+          ct = (res.headers.get('content-type') || '').toLowerCase();
+          if (ct.includes('text/html') || ct.includes('application/json')) continue;
+          blobRaw = await res.blob();
+        }
+        if (!blobRaw || blobRaw.size < 24) continue;
+      }
+      const blob = await coerceBlobImageMimeFromResponse(res, blobRaw);
+      const fromBlob = await loadImageFromBlob(blob);
+      if (fromBlob) return fromBlob;
+    } catch {
+      continue;
+    }
+  }
+
+  const finalImg = await loadImageFirstAvailable(candidates);
+  if (!finalImg && dbgCrestRemoteFailLogs < 6) {
+    dbgCrestRemoteFailLogs += 1;
+    // #region agent log
+    postFootballBannerDebugLog({
+      hypothesisId: 'H1,H5',
+      location: 'FootballBannerModal.tsx:loadFootballCrestImage',
+      message: 'crest_remote_failed',
+      data: {
+        host: (() => {
+          try {
+            return new URL(normalized.startsWith('//') ? `https:${normalized}` : normalized).hostname;
+          } catch {
+            return '';
+          }
+        })(),
+        crestProxyStatuses,
+        candidateCount: candidates.length,
+        hasToken: Boolean(token),
+      },
+    });
+    // #endregion
+  }
+  return finalImg;
 };
 
 const stripDiacritics = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -443,6 +880,24 @@ const hasRenderableCrest = (value?: string) => {
   if (!raw) return false;
   return !isPlaceholderCrestUrl(raw);
 };
+
+/** Usa homeCrestUrlRemote/away quando o principal vier vazio ou for placeholder (API + cache). */
+const mergeFootballMatchCrestSources = (m: FootballMatch): FootballMatch => {
+  const home = typeof m.homeCrestUrl === 'string' ? m.homeCrestUrl.trim() : '';
+  const away = typeof m.awayCrestUrl === 'string' ? m.awayCrestUrl.trim() : '';
+  const hr = typeof m.homeCrestUrlRemote === 'string' ? m.homeCrestUrlRemote.trim() : '';
+  const ar = typeof m.awayCrestUrlRemote === 'string' ? m.awayCrestUrlRemote.trim() : '';
+  let homeCrestUrl = home;
+  if (!homeCrestUrl || isPlaceholderCrestUrl(homeCrestUrl)) homeCrestUrl = hr || homeCrestUrl;
+  let awayCrestUrl = away;
+  if (!awayCrestUrl || isPlaceholderCrestUrl(awayCrestUrl)) awayCrestUrl = ar || awayCrestUrl;
+  return { ...m, homeCrestUrl, awayCrestUrl };
+};
+
+const normalizeFootballScheduleCrests = (schedule: FootballScheduleResponse): FootballScheduleResponse => ({
+  ...schedule,
+  matches: Array.isArray(schedule.matches) ? schedule.matches.map(mergeFootballMatchCrestSources) : [],
+});
 
 const computeFootballBannerItemsPerPage = (args: {
   format: BannerFormat;
@@ -568,18 +1023,57 @@ const generateFootballBanner = async (args: {
   const ensureCrestImages = async (rawUrls: string[]) => {
     const uniqueRaw = Array.from(new Set(rawUrls.filter(Boolean)));
     const missingRaw = uniqueRaw.filter((raw) => {
-      const key = resolveFootballAssetUrl(raw);
+      const key = getFootballCrestCacheKey(raw);
       return Boolean(key) && !crestImages.has(key);
     });
     if (missingRaw.length === 0) return;
-    await Promise.all(
-      missingRaw.map(async (raw) => {
-        const key = resolveFootballAssetUrl(raw);
-        if (!key) return;
-        const img = await loadFootballCrestImage(raw);
-        crestImages.set(key, img);
-      })
-    );
+    const crestDbgSamples: { urlKind: string; keyTail: string; imgOk: boolean; nw: number }[] = [];
+    const loadOne = async (raw: string, skipSample?: boolean) => {
+      const key = getFootballCrestCacheKey(raw);
+      if (!key) return;
+      const img = await loadFootballCrestImage(raw);
+      // Não cachear elemento “morto” (0×0 não-SVG): bloqueava o 2.º passe de retry e o canvas ficava sem escudo.
+      if (img && isUsableCrestImageElement(img)) crestImages.set(key, img);
+      if (!skipSample && crestDbgSamples.length < 8) {
+        const urlKind = raw.startsWith('data:') ? `data:${raw.length}` : raw.startsWith('/') ? 'path' : 'remote';
+        const nw = img ? img.naturalWidth || img.width || 0 : 0;
+        crestDbgSamples.push({
+          urlKind,
+          keyTail: key.length > 48 ? `…${key.slice(-44)}` : key,
+          imgOk: isUsableCrestImageElement(img),
+          nw,
+        });
+      }
+    };
+    // Rajada ilimitada para o mesmo host (proxy / API) tende a falhas transitórias (timeouts, fila no Node).
+    const crestLoadConcurrency = 4;
+    for (let i = 0; i < missingRaw.length; i += crestLoadConcurrency) {
+      const chunk = missingRaw.slice(i, i + crestLoadConcurrency);
+      await Promise.all(chunk.map((raw) => loadOne(raw)));
+    }
+    const stillMissing = missingRaw.filter((raw) => {
+      const key = getFootballCrestCacheKey(raw);
+      return Boolean(key) && !crestImages.has(key);
+    });
+    if (stillMissing.length > 0) {
+      for (let i = 0; i < stillMissing.length; i += crestLoadConcurrency) {
+        const chunk = stillMissing.slice(i, i + crestLoadConcurrency);
+        await Promise.all(chunk.map((raw) => loadOne(raw, true)));
+      }
+    }
+    // #region agent log
+    postFootballBannerDebugLog({
+      hypothesisId: 'H1,H2,H3',
+      location: 'FootballBannerModal.tsx:ensureCrestImages',
+      message: 'crest_batch',
+      data: {
+        missing: missingRaw.length,
+        retrySecondPass: stillMissing.length,
+        crestLoadConcurrency,
+        samples: crestDbgSamples,
+      },
+    });
+    // #endregion
   };
 
   const drawCoverImage = (img: HTMLImageElement, x: number, y: number, w: number, h: number, opts?: { alignY?: number }) => {
@@ -596,13 +1090,27 @@ const generateFootballBanner = async (args: {
   };
   const drawImageSafe = (img: HTMLImageElement | null, x: number, y: number, w: number, h: number) => {
     if (!img) return false;
-    const iw = img.naturalWidth || img.width;
-    const ih = img.naturalHeight || img.height;
+    const { iw, ih } = getDrawableImageIntrinsicSize(img);
     if (!iw || !ih) return false;
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return false;
     if (w <= 0 || h <= 0) return false;
-    ctx.drawImage(img, x, y, w, h);
-    return true;
+    try {
+      ctx.drawImage(img, x, y, w, h);
+      return true;
+    } catch (e) {
+      // #region agent log
+      if (dbgDrawImageSafeFailLogs < 8) {
+        dbgDrawImageSafeFailLogs += 1;
+        postFootballBannerDebugLog({
+          hypothesisId: 'H8',
+          location: 'FootballBannerModal.tsx:drawImageSafe',
+          message: 'drawImage_threw',
+          data: { err: String(e), iw, ih },
+        });
+      }
+      // #endregion
+      return false;
+    }
   };
   const drawImageCropSafe = (
     img: HTMLImageElement | null,
@@ -718,7 +1226,25 @@ const generateFootballBanner = async (args: {
     const rowsMax = 6;
     const visibleCount = Math.min(args.matches.length, rowsMax);
     const items = args.matches.slice(0, visibleCount);
-    const crestUrlList = items.flatMap((m) => [m.homeCrestUrl || '', m.awayCrestUrl || '']).filter(Boolean);
+    const crestUrlList = items
+      .flatMap((m) => [m.homeCrestUrl || '', m.awayCrestUrl || ''])
+      .filter((u) => Boolean(u) && !isPlaceholderCrestUrl(u));
+    // #region agent log
+    if (dbgCrestInputSummaryLogs < 6) {
+      dbgCrestInputSummaryLogs += 1;
+      postFootballBannerDebugLog({
+        hypothesisId: 'H16',
+        location: 'FootballBannerModal.tsx:drawPromoTemplate',
+        message: 'crest_input_summary',
+        data: {
+          templateId: 'promo',
+          items: items.length,
+          crestCandidates: crestUrlList.length,
+          missingAny: items.filter((m) => !hasRenderableCrest(m.homeCrestUrl) || !hasRenderableCrest(m.awayCrestUrl)).length,
+        },
+      });
+    }
+    // #endregion
     await ensureCrestImages(crestUrlList);
 
     const rowRatio = promoFlagsImg ? ((promoFlagsImg.naturalHeight || promoFlagsImg.height) / Math.max(1, (promoFlagsImg.naturalWidth || promoFlagsImg.width))) : (124 / 727);
@@ -736,8 +1262,7 @@ const generateFootballBanner = async (args: {
     const sy = rowH / 124;
 
     const drawContain = (img: HTMLImageElement, x: number, y: number, w: number, h: number) => {
-      const iw = img.naturalWidth || img.width;
-      const ih = img.naturalHeight || img.height;
+      const { iw, ih } = getDrawableImageIntrinsicSize(img);
       if (!iw || !ih) return;
       const s = Math.min(w / iw, h / ih);
       const dw = iw * s;
@@ -759,10 +1284,27 @@ const generateFootballBanner = async (args: {
         drawImageSafe(promoFlagsImg, rowX, y, rowW, rowH);
       }
 
-      const homeUrl = resolveFootballAssetUrl(item.homeCrestUrl || '');
-      const awayUrl = resolveFootballAssetUrl(item.awayCrestUrl || '');
-      const homeImg = homeUrl && !isPlaceholderCrestUrl(item.homeCrestUrl || '') ? crestImages.get(homeUrl) || null : null;
-      const awayImg = awayUrl && !isPlaceholderCrestUrl(item.awayCrestUrl || '') ? crestImages.get(awayUrl) || null : null;
+      const homeKey = getFootballCrestCacheKey(item.homeCrestUrl || '');
+      const awayKey = getFootballCrestCacheKey(item.awayCrestUrl || '');
+      const homeImg = homeKey && !isPlaceholderCrestUrl(item.homeCrestUrl || '') ? crestImages.get(homeKey) || null : null;
+      const awayImg = awayKey && !isPlaceholderCrestUrl(item.awayCrestUrl || '') ? crestImages.get(awayKey) || null : null;
+
+      if (i === 0) {
+        // #region agent log
+        postFootballBannerDebugLog({
+          hypothesisId: 'H2,H4',
+          location: 'FootballBannerModal.tsx:drawPromoRow0',
+          message: 'crest_lookup_canvas',
+          data: {
+            templateId: 'promo',
+            mapHasHome: homeKey ? crestImages.has(homeKey) : false,
+            mapHasAway: awayKey ? crestImages.has(awayKey) : false,
+            homeNw: homeImg ? homeImg.naturalWidth || homeImg.width || 0 : 0,
+            awayNw: awayImg ? awayImg.naturalWidth || awayImg.width || 0 : 0,
+          },
+        });
+        // #endregion
+      }
 
       const homeBox = { x: rowX + 87 * sx, y: y + 18 * sy, w: 242 * sx, h: 35 * sy };
       const awayBox = { x: rowX + 398 * sx, y: y + 18 * sy, w: 238 * sx, h: 35 * sy };
@@ -909,7 +1451,25 @@ const generateFootballBanner = async (args: {
     const rowsMax = 5;
     const visibleCount = Math.min(args.matches.length, rowsMax);
     const items = args.matches.slice(0, visibleCount);
-    const crestUrlList = items.flatMap((m) => [m.homeCrestUrl || '', m.awayCrestUrl || '']).filter(Boolean);
+    const crestUrlList = items
+      .flatMap((m) => [m.homeCrestUrl || '', m.awayCrestUrl || ''])
+      .filter((u) => Boolean(u) && !isPlaceholderCrestUrl(u));
+    // #region agent log
+    if (dbgCrestInputSummaryLogs < 6) {
+      dbgCrestInputSummaryLogs += 1;
+      postFootballBannerDebugLog({
+        hypothesisId: 'H16',
+        location: 'FootballBannerModal.tsx:drawModel3Template',
+        message: 'crest_input_summary',
+        data: {
+          templateId: 'clean',
+          items: items.length,
+          crestCandidates: crestUrlList.length,
+          missingAny: items.filter((m) => !hasRenderableCrest(m.homeCrestUrl) || !hasRenderableCrest(m.awayCrestUrl)).length,
+        },
+      });
+    }
+    // #endregion
     await ensureCrestImages(crestUrlList);
 
     // Usa o próprio arquivo do modelo 3; se vier com canvas grande, recorta a faixa útil automaticamente.
@@ -952,8 +1512,7 @@ const generateFootballBanner = async (args: {
     const sy = rowH / flagH;
 
     const drawContain = (img: HTMLImageElement, x: number, yPos: number, w: number, h: number) => {
-      const iw = img.naturalWidth || img.width;
-      const ih = img.naturalHeight || img.height;
+      const { iw, ih } = getDrawableImageIntrinsicSize(img);
       if (!iw || !ih) return;
       const s = Math.min(w / iw, h / ih);
       const dw = iw * s;
@@ -990,10 +1549,27 @@ const generateFootballBanner = async (args: {
       const rightBox = { x: rightCrestCenterX - crestSize / 2, y: crestY, w: crestSize, h: crestSize };
       const crestInset = Math.max(2, Math.round(crestSize * 0.05));
 
-      const homeUrl = resolveFootballAssetUrl(item.homeCrestUrl || '');
-      const awayUrl = resolveFootballAssetUrl(item.awayCrestUrl || '');
-      const homeImg = homeUrl && !isPlaceholderCrestUrl(item.homeCrestUrl || '') ? crestImages.get(homeUrl) || null : null;
-      const awayImg = awayUrl && !isPlaceholderCrestUrl(item.awayCrestUrl || '') ? crestImages.get(awayUrl) || null : null;
+      const homeKey = getFootballCrestCacheKey(item.homeCrestUrl || '');
+      const awayKey = getFootballCrestCacheKey(item.awayCrestUrl || '');
+      const homeImg = homeKey && !isPlaceholderCrestUrl(item.homeCrestUrl || '') ? crestImages.get(homeKey) || null : null;
+      const awayImg = awayKey && !isPlaceholderCrestUrl(item.awayCrestUrl || '') ? crestImages.get(awayKey) || null : null;
+
+      if (i === 0) {
+        // #region agent log
+        postFootballBannerDebugLog({
+          hypothesisId: 'H2,H4',
+          location: 'FootballBannerModal.tsx:drawModel3Row0',
+          message: 'crest_lookup_canvas',
+          data: {
+            templateId: 'clean',
+            mapHasHome: homeKey ? crestImages.has(homeKey) : false,
+            mapHasAway: awayKey ? crestImages.has(awayKey) : false,
+            homeNw: homeImg ? homeImg.naturalWidth || homeImg.width || 0 : 0,
+            awayNw: awayImg ? awayImg.naturalWidth || awayImg.width || 0 : 0,
+          },
+        });
+        // #endregion
+      }
 
       const drawCrestFallback = (box: { x: number; y: number; w: number; h: number }, team: string) => {
         drawRoundedRect(ctx, box.x + crestInset, box.y + crestInset, box.w - crestInset * 2, box.h - crestInset * 2, 10);
@@ -1262,7 +1838,23 @@ const generateFootballBanner = async (args: {
   const baseY = listY + contentPad;
   const crestUrlList = rows
     .flatMap((m) => [m.homeCrestUrl || '', m.awayCrestUrl || ''])
-    .filter(Boolean);
+    .filter((u) => Boolean(u) && !isPlaceholderCrestUrl(u));
+  // #region agent log
+  if (dbgCrestInputSummaryLogs < 6) {
+    dbgCrestInputSummaryLogs += 1;
+    postFootballBannerDebugLog({
+      hypothesisId: 'H16',
+      location: 'FootballBannerModal.tsx:drawInformativeTemplate',
+      message: 'crest_input_summary',
+      data: {
+        templateId: args.templateId,
+        items: rows.length,
+        crestCandidates: crestUrlList.length,
+        missingAny: rows.filter((m) => !hasRenderableCrest(m.homeCrestUrl) || !hasRenderableCrest(m.awayCrestUrl)).length,
+      },
+    });
+  }
+  // #endregion
   await ensureCrestImages(crestUrlList);
 
   ctx.textBaseline = 'middle';
@@ -1294,21 +1886,54 @@ const generateFootballBanner = async (args: {
     const crestHomeX = teamsX;
     const crestAwayX = teamsX + teamsW - crestSize;
 
-    const crestHomeUrl = resolveFootballAssetUrl(item.homeCrestUrl || '');
-    const crestAwayUrl = resolveFootballAssetUrl(item.awayCrestUrl || '');
-    const crestHome = crestHomeUrl && !isPlaceholderCrestUrl(item.homeCrestUrl || '') ? crestImages.get(crestHomeUrl) || null : null;
-    const crestAway = crestAwayUrl && !isPlaceholderCrestUrl(item.awayCrestUrl || '') ? crestImages.get(crestAwayUrl) || null : null;
+    const crestHomeKey = getFootballCrestCacheKey(item.homeCrestUrl || '');
+    const crestAwayKey = getFootballCrestCacheKey(item.awayCrestUrl || '');
+    const crestHome = crestHomeKey && !isPlaceholderCrestUrl(item.homeCrestUrl || '') ? crestImages.get(crestHomeKey) || null : null;
+    const crestAway = crestAwayKey && !isPlaceholderCrestUrl(item.awayCrestUrl || '') ? crestImages.get(crestAwayKey) || null : null;
+
+    if (i === 0) {
+      // #region agent log
+      postFootballBannerDebugLog({
+        hypothesisId: 'H2,H4',
+        location: 'FootballBannerModal.tsx:drawRow0',
+        message: 'crest_lookup_canvas',
+        data: {
+          templateId: args.templateId,
+          homeKeyTail: crestHomeKey ? crestHomeKey.slice(-40) : '',
+          awayKeyTail: crestAwayKey ? crestAwayKey.slice(-40) : '',
+          mapHasHome: crestHomeKey ? crestImages.has(crestHomeKey) : false,
+          mapHasAway: crestAwayKey ? crestImages.has(crestAwayKey) : false,
+          homeNw: crestHome ? crestHome.naturalWidth || crestHome.width || 0 : 0,
+          awayNw: crestAway ? crestAway.naturalWidth || crestAway.width || 0 : 0,
+          placeholderHome: isPlaceholderCrestUrl(item.homeCrestUrl || ''),
+        },
+      });
+      // #endregion
+    }
 
     const drawImageContain = (img: HTMLImageElement, x: number, y: number, w: number, h: number) => {
-      const iw = img.naturalWidth || img.width;
-      const ih = img.naturalHeight || img.height;
+      const { iw, ih } = getDrawableImageIntrinsicSize(img);
       if (!iw || !ih) return;
       const s = Math.min(w / iw, h / ih);
       const dw = iw * s;
       const dh = ih * s;
       const dx = x + (w - dw) / 2;
       const dy = y + (h - dh) / 2;
-      ctx.drawImage(img, dx, dy, dw, dh);
+      try {
+        ctx.drawImage(img, dx, dy, dw, dh);
+      } catch (e) {
+        // #region agent log
+        if (dbgDrawImageSafeFailLogs < 8) {
+          dbgDrawImageSafeFailLogs += 1;
+          postFootballBannerDebugLog({
+            hypothesisId: 'H8',
+            location: 'FootballBannerModal.tsx:drawImageContain',
+            message: 'drawImage_threw',
+            data: { err: String(e), iw, ih },
+          });
+        }
+        // #endregion
+      }
     };
 
     const drawCrest = (img: HTMLImageElement | null, x: number, teamName: string) => {
@@ -1446,8 +2071,9 @@ const generateFootballBanners = async (args: {
   format: BannerFormat;
   templateId: FootballBannerTemplateId;
 }) => {
+  const matchesNormalized = Array.isArray(args.matches) ? args.matches.map(mergeFootballMatchCrestSources) : [];
   const perPage = computeFootballBannerItemsPerPage({ format: args.format, templateId: args.templateId, footerText: args.footerText });
-  const total = Array.isArray(args.matches) ? args.matches.length : 0;
+  const total = matchesNormalized.length;
   const pageCount = Math.max(1, Math.ceil(total / Math.max(1, perPage)));
   const logoImg = await loadBrandLogoImage(args.brandLogo || '');
   const backgroundImg = await loadImage(FOOTBALL_BACKGROUND_URL);
@@ -1455,7 +2081,7 @@ const generateFootballBanners = async (args: {
   const blobs: Blob[] = [];
   for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
     const start = pageIndex * perPage;
-    const slice = args.matches.slice(start, start + perPage);
+    const slice = matchesNormalized.slice(start, start + perPage);
     const blob = await generateFootballBanner({
       ...args,
       matches: slice,
@@ -1632,17 +2258,18 @@ const FootballBannerModal: React.FC<FootballBannerModalProps> = ({ isOpen, onClo
   }, [isOpen, isPremiumActive, isPremiumExpired, onClose, toast, user]);
 
   const applySchedule = useCallback((data: FootballScheduleResponse) => {
-    setSchedule(data);
+    const normalized = normalizeFootballScheduleCrests(data);
+    setSchedule(normalized);
     setMatchSelection(() => {
       const next: Record<string, boolean> = {};
-      for (const match of data?.matches || []) {
+      for (const match of normalized?.matches || []) {
         next[footballMatchKey(match)] = true;
       }
       return next;
     });
   }, []);
 
-  const fetchSchedule = useCallback(async (targetDate?: string, opts?: { silent?: boolean }) => {
+  const fetchSchedule = useCallback(async (targetDate?: string, opts?: { silent?: boolean; loadingFromCache?: boolean }) => {
     if (!opts?.silent) setIsLoading(true);
     try {
       const query = targetDate ? `?date=${encodeURIComponent(targetDate)}` : '';
@@ -1660,6 +2287,21 @@ const FootballBannerModal: React.FC<FootballBannerModalProps> = ({ isOpen, onClo
         clearEmptyScheduleRetryTimer();
       }
     } catch (e: unknown) {
+      const err = e as Partial<ApiError> | null;
+      const status = typeof err?.status === 'number' ? err.status : 0;
+      // Com cache já aplicado, `silent: true` saltava o toast — sessão expirada deixava escudos/dados velhos sem aviso.
+      if (opts?.silent && opts?.loadingFromCache && (status === 401 || status === 403)) {
+        toast({
+          title: 'Sessão expirada',
+          description: 'Os jogos vêm do cache local. Faça login novamente para atualizar dados e escudos.',
+          variant: 'destructive',
+          action: (
+            <ToastAction altText="Fazer login" onClick={() => window.dispatchEvent(new Event('mediahub:openAuthModal'))}>
+              Fazer login
+            </ToastAction>
+          ),
+        });
+      }
       if (!schedule?.matches?.length) {
         const expectedDate = typeof targetDate === 'string' && targetDate.trim() ? targetDate.trim() : getDefaultFootballScheduleDate();
         const cached = readCachedFootballSchedule(expectedDate);
@@ -1667,12 +2309,15 @@ const FootballBannerModal: React.FC<FootballBannerModalProps> = ({ isOpen, onClo
           applySchedule(cached);
           return;
         }
-        const err = e as Partial<ApiError> | null;
-        const status = typeof err?.status === 'number' ? err.status : 0;
         const serverMsg = typeof err?.message === 'string' && err.message.trim() ? err.message.trim() : '';
         let description = serverMsg || 'Não foi possível carregar os jogos agora. Tente novamente.';
         if (status === 401) {
           description = 'Sessão expirada ou não autenticado. Faça login novamente.';
+          try {
+            window.dispatchEvent(new Event('mediahub:openAuthModal'));
+          } catch {
+            void 0;
+          }
         } else if (status === 403) {
           description = serverMsg || 'Acesso negado. Verifique se sua conta tem permissão (Premium).';
         } else if (status === 0 && !serverMsg) {
@@ -1696,19 +2341,48 @@ const FootballBannerModal: React.FC<FootballBannerModalProps> = ({ isOpen, onClo
   }, [applySchedule, clearEmptyScheduleRetryTimer, schedule?.matches?.length, toast]);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      // Reabrir o modal deve voltar a pedir o calendário; com estado em memória o skip de 15min
+      // bloqueava fetch e o servidor não via /api/football/schedule (ring só com clear).
+      lastScheduleFetchAtRef.current = 0;
+      return;
+    }
+    // O efeito de auth/premium corre no mesmo ciclo e chama onClose() sem fechar o Dialog de forma síncrona.
+    // Aqui exigimos apenas contexto de usuário/plano; o token pode vir por cookie/sessão no próprio request.
+    if (!user || !isPremiumActive()) return;
     const now = Date.now();
-    if (schedule?.matches?.length && now - lastScheduleFetchAtRef.current < 15 * 60 * 1000) return;
+    const skip15mRecent =
+      Boolean(schedule?.matches?.length) &&
+      lastScheduleFetchAtRef.current > 0 &&
+      now - lastScheduleFetchAtRef.current < 15 * 60 * 1000;
+    // #region agent log
+    if (dbgScheduleEffectOpenLogs < 12) {
+      dbgScheduleEffectOpenLogs += 1;
+      postFootballBannerDebugLog({
+        hypothesisId: 'H32',
+        location: 'FootballBannerModal.tsx:schedule_load_effect',
+        message: 'schedule_effect_open',
+        data: {
+          skip15mRecent,
+          matchCount: schedule?.matches?.length ?? 0,
+          lastAgeMs:
+            lastScheduleFetchAtRef.current > 0 ? now - lastScheduleFetchAtRef.current : -1,
+          runId: 'post-fix',
+        },
+      });
+    }
+    // #endregion
+    if (skip15mRecent) return;
     const expectedDate = getDefaultFootballScheduleDate();
     const cached = readCachedFootballSchedule(expectedDate);
     if (cached?.matches?.length) {
       lastScheduleFetchAtRef.current = now;
       applySchedule(cached);
-      void fetchSchedule(expectedDate, { silent: true });
+      void fetchSchedule(expectedDate, { silent: true, loadingFromCache: true });
       return;
     }
     void fetchSchedule(expectedDate);
-  }, [applySchedule, fetchSchedule, isOpen, schedule?.matches?.length]);
+  }, [applySchedule, fetchSchedule, isOpen, schedule?.matches?.length, user]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -1921,9 +2595,13 @@ const FootballBannerModal: React.FC<FootballBannerModalProps> = ({ isOpen, onClo
     setIsGenerating(true);
     try {
       let matchesForGeneration = selectedMatches;
+      // Antes: `every(!home && !away)` só atualizava se TODOS os jogos estivessem sem os dois escudos.
+      // Com um único URL (mesmo inválido) num jogo, o refresh nunca corria → canvas sem escudos.
       const shouldAttemptRefreshForCrests =
         matchesForGeneration.length > 0 &&
-        matchesForGeneration.every((m) => !hasRenderableCrest(m.homeCrestUrl) && !hasRenderableCrest(m.awayCrestUrl));
+        matchesForGeneration.some(
+          (m) => !hasRenderableCrest(m.homeCrestUrl) || !hasRenderableCrest(m.awayCrestUrl),
+        );
 
       if (shouldAttemptRefreshForCrests) {
         try {

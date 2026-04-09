@@ -1,12 +1,17 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
+import { readEnvPort } from "./scripts/read-env-port.mjs";
 
 // https://vitejs.dev/config/
 export default defineConfig(async ({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  // Porta do Express: use VITE_DEV_API_PORT no .env local se PORT for usado por outro processo (deploy, etc.)
-  const apiPortRaw = env.VITE_DEV_API_PORT || env.PORT || process.env.PORT || "8081";
+  // Mesma regra que `server/server.mjs` e `scripts/dev-all.mjs` (inclui porta em VITE_API_BASE_URL localhost).
+  const apiPortRaw =
+    env.VITE_DEV_API_PORT ||
+    env.PORT ||
+    process.env.PORT ||
+    String(readEnvPort());
   const apiPort = Number(apiPortRaw) || 8081;
   const apiTarget = env.VITE_API_PROXY_TARGET || `http://127.0.0.1:${apiPort}`;
   const taggerPlugin =

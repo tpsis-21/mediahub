@@ -809,20 +809,28 @@ const requireAuth = async (req, res, next) => {
     return
   }
 
+  let decoded
   try {
-    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] })
-    if (!decoded || typeof decoded !== 'object') {
-      console.log('requireAuth: Token decodificado inválido', decoded)
-      res.status(401).json({ message: 'Não autenticado.' })
-      return
-    }
-    const sub = (decoded && typeof decoded === 'object') ? decoded.sub : null
-    const userId = validateUserId(sub)
-    if (!userId) {
-      console.log('requireAuth: UserId inválido no token', sub)
-      res.status(401).json({ message: 'Não autenticado.' })
-      return
-    }
+    decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] })
+  } catch (err) {
+    console.log('requireAuth: JWT inválido ou expirado', err?.message || err)
+    res.status(401).json({ message: 'Não autenticado.' })
+    return
+  }
+  if (!decoded || typeof decoded !== 'object') {
+    console.log('requireAuth: Token decodificado inválido', decoded)
+    res.status(401).json({ message: 'Não autenticado.' })
+    return
+  }
+  const sub = (decoded && typeof decoded === 'object') ? decoded.sub : null
+  const userId = validateUserId(sub)
+  if (!userId) {
+    console.log('requireAuth: UserId inválido no token', sub)
+    res.status(401).json({ message: 'Não autenticado.' })
+    return
+  }
+
+  try {
     await deactivateExpiredPremiumByUserId(userId)
     const result = await query('select is_active from app_users where id = $1 limit 1', [userId])
     const row = result.rows[0]
@@ -834,8 +842,8 @@ const requireAuth = async (req, res, next) => {
     req.auth = { userId }
     next()
   } catch (err) {
-    console.log('requireAuth: Erro na verificação do token', err.message)
-    res.status(401).json({ message: 'Não autenticado.' })
+    console.error('requireAuth: falha ao consultar o banco (não é erro de JWT)', err?.message || err)
+    res.status(503).json({ message: 'Serviço temporariamente indisponível. Tente novamente em alguns minutos.' })
   }
 }
 

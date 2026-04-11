@@ -9,7 +9,7 @@ import { RadioGroup, RadioGroupItem } from './ui/radio-group';
 import { Label } from './ui/label';
 import { Progress } from './ui/progress';
 import JSZip from 'jszip';
-import { apiRequest, apiRequestRaw, buildApiUrl } from '../services/apiClient';
+import { apiRequest, apiRequestGetTryCandidates, apiRequestRaw, buildApiUrl } from '../services/apiClient';
 import { useToast } from '../hooks/use-toast';
 import { formatPhoneForDisplay, formatWebsiteForDisplay, getSearchConfigToastCopy, isSearchConfigErrorMessage } from '../lib/utils';
 import { ToastAction } from './ui/toast';
@@ -265,7 +265,7 @@ const BulkBannerModal: React.FC<BulkBannerModalProps> = ({
     if (isRankingLoading || isGenerating) return;
     setIsRankingLoading(true);
     try {
-      const payload = await apiRequest<{ results?: MovieData[] }>({
+      const payload = await apiRequestGetTryCandidates<{ results?: MovieData[] }>({
         path: `/api/search/trending?mediaType=${rankingCategory}&language=pt-BR`,
         auth: Boolean(user),
       });
@@ -1227,7 +1227,7 @@ const BulkBannerModal: React.FC<BulkBannerModalProps> = ({
     const shouldFetchDetails = Boolean(main && typeof main.id === 'number' && main.id > 0 && main.id < 10_000_000);
     if (shouldFetchDetails) {
       try {
-        const details = await apiRequest<SearchDetailsResponse>({
+        const details = await apiRequestGetTryCandidates<SearchDetailsResponse>({
           path: `/api/search/details?mediaType=${encodeURIComponent(main!.media_type)}&id=${encodeURIComponent(String(main!.id))}&language=pt-BR`,
           auth: Boolean(user),
         });

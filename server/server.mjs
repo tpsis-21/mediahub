@@ -889,7 +889,7 @@ registerTelegramRoutes(app, {
   hasBinary,
 })
 
-registerTelegramBot(app, {
+const telegramBotRuntime = registerTelegramBot(app, {
   requireAuth,
   rateLimitTelegram,
   query,
@@ -957,6 +957,7 @@ registerTicketRoutes(app, {
   query,
   pool,
   getTicketsEnabled,
+  ticketTelegram: telegramBotRuntime?.ticketTelegram,
 })
 
 registerSearchRoutes(app, {

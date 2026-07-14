@@ -9,6 +9,8 @@ import { createDispatch } from './lib/dispatch.mjs'
 import { createPairingService } from './lib/pairing.mjs'
 import { createSessionStore } from './lib/session.mjs'
 import { createBotServices } from './lib/services.mjs'
+import { createTicketTelegramBridge } from './lib/ticket-notify.mjs'
+import { BOT_COMMANDS } from './lib/format.mjs'
 import { createHandlers } from './handlers/index.mjs'
 
 /**
@@ -56,6 +58,7 @@ export const registerTelegramBot = (app, deps) => {
   const sessions = createSessionStore({ query, deactivateExpiredPremiumByUserId })
   const pairing = createPairingService({ query })
   const api = createBotApi({ getTelegramBotToken })
+  const ticketTelegram = createTicketTelegramBridge({ query, getTelegramBotToken })
   const banners =
     typeof createCanvas === 'function'
       ? createBannerRenderer({ createCanvas, loadImage, GlobalFonts })
@@ -90,8 +93,25 @@ export const registerTelegramBot = (app, deps) => {
     getAllowRegistrations,
     resolveTrailerUrlFromProvider,
   })
-  const handlers = createHandlers({ api, sessions, pairing, services, banners })
+  const handlers = createHandlers({
+    api,
+    sessions,
+    pairing,
+    services,
+    banners,
+    ticketNotify: ticketTelegram,
+  })
   const { handleUpdate } = createDispatch(handlers)
+
+  const syncBotCommands = async () => {
+    try {
+      if (!(await getTelegramBotToken())) return
+      await api.setMyCommands(BOT_COMMANDS)
+    } catch (e) {
+      console.warn('[telegram-bot] setMyCommands', e?.message || e)
+    }
+  }
+  void syncBotCommands()
 
   const processUpdateSafe = async (update) => {
     try {
@@ -182,7 +202,7 @@ export const registerTelegramBot = (app, deps) => {
     }
   })
 
-  return { handleUpdate, processUpdateSafe, sessions, pairing, api }
+  return { handleUpdate, processUpdateSafe, sessions, pairing, api, ticketTelegram }
 }
 
 export { isTelegramBotEnabled, getWebhookSecret, getAppUrl }

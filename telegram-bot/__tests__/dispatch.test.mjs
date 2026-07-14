@@ -31,6 +31,9 @@ describe('telegram-bot format', () => {
     expect(welcomeText()).toContain('Free')
     expect(plansText('free')).toContain('Premium')
     expect(plansText('free')).toContain('administrador')
+    expect(plansText('admin')).toContain('Painel')
+    expect(helpText(null)).toContain('/recuperar')
+    expect(helpText('admin')).toContain('/admin')
   })
 
   it('menu tem seções e botão de suporte hub', () => {
@@ -121,6 +124,8 @@ describe('telegram-bot dispatch parse', () => {
       handleLoginCommand: async () => {},
       handleRegisterCommand: async () => {},
       handlePasswordCommand: async () => {},
+      handleRecoverCommand: async () => {},
+      handleBrandCommand: async () => {},
       handleSearchCommand: async (p) => calls.push(['search', p]),
       handleHistory: async () => {},
       handleFootball: async () => {},
@@ -129,10 +134,12 @@ describe('telegram-bot dispatch parse', () => {
       handleSupportHub: async () => {},
       handleTickets: async () => {},
       handleAdminTickets: async () => {},
+      handleAdminCommand: async (p) => calls.push(['admin', p]),
       handleCancel: async () => {},
       handleTextWhileAwaiting: async () => false,
       handleNavAction: async () => false,
       handleCallback: async () => {},
+      handlePhoto: async () => false,
     }
     const { handleUpdate, parseCommand } = createDispatch(handlers)
     expect(parseCommand('/buscar Matrix Reloaded')).toEqual({
@@ -140,10 +147,18 @@ describe('telegram-bot dispatch parse', () => {
       args: 'Matrix Reloaded',
     })
     expect(parseCommand('/entrar')).toEqual({ cmd: '/entrar', args: '' })
+    expect(parseCommand('/admin user a@b.com')).toEqual({
+      cmd: '/admin',
+      args: 'user a@b.com',
+    })
     await handleUpdate({
       message: { chat: { id: 1 }, text: '/buscar Matrix' },
     })
     expect(calls[0][0]).toBe('search')
     expect(calls[0][1].args).toBe('Matrix')
+    await handleUpdate({
+      message: { chat: { id: 1 }, text: '/admin' },
+    })
+    expect(calls.some((c) => c[0] === 'admin')).toBe(true)
   })
 })

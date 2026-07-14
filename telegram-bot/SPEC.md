@@ -8,18 +8,14 @@
 
 ## 1. Situação atual
 
-Hoje o Telegram é **apenas canal de entrega (outbound)**:
+O MediaHub tem **dois canais Telegram**:
 
-| Peça | Onde |
+| Peça | Papel |
 |------|------|
-| Token do bot | `TELEGRAM_BOT_TOKEN` ou `app_settings.telegram_bot_token` |
-| Destino | `app_users.telegram_chat_id` (usuário cola o ID na Minha Área) |
-| Rotas | `POST /api/telegram/send*`, `send-upload`, `send-video-upload`, `send-media-group-upload`, `send-document-upload`, `send-trailer-video` |
-| Código | `server/routes/telegram-routes.mjs`, `server/lib/telegram-config.mjs` |
+| Bot conversacional (`telegram-bot/`) | Webhook `POST /api/telegram/webhook`, conta, busca, banners, suporte, admin |
+| Outbound legado (`telegram-routes`) | Envios da web (`/api/telegram/send*`) |
 
-**Não existe:** webhook, long polling, comandos `/start`, login pelo bot, geração de banner dentro do chat.
-
-Este documento define o produto e a engenharia para virar bot completo.
+**Produto:** bot-first completo — login, marca, OTP, lote, tickets web↔bot e painel admin no chat.
 
 ---
 

@@ -77,6 +77,7 @@ export const welcomeKeyboard = () => ({
       { text: 'Entrar', callback_data: 'auth:login' },
       { text: 'Criar conta', callback_data: 'auth:register' },
     ],
+    [{ text: 'Recuperar senha', callback_data: 'auth:recover' }],
     [{ text: 'Ver planos', callback_data: 'auth:plans' }],
     [{ text: 'Código da web', callback_data: 'auth:link_help' }],
     [{ text: 'Ajuda', callback_data: 'auth:help' }],
@@ -131,6 +132,7 @@ export const mainMenuKeyboard = (userType) => {
 
 export const accountKeyboard = (userType) => {
   const rows = [
+    [{ text: 'Editar marca', callback_data: 'menu:brand' }],
     [
       { text: 'Planos', callback_data: 'menu:plans' },
       { text: 'Trocar senha', callback_data: 'menu:password' },
@@ -139,10 +141,79 @@ export const accountKeyboard = (userType) => {
   if (userType === 'free') {
     rows.push([{ text: 'Solicitar Premium', callback_data: 'menu:support' }])
   }
+  if (userType === 'admin') {
+    rows.push([{ text: 'Painel admin', callback_data: 'admin:hub' }])
+  }
   rows.push([{ text: 'Sair deste chat', callback_data: 'menu:logout' }])
   rows.push(rowMenu())
   return { inline_keyboard: rows }
 }
+
+export const brandHubText = (brand = {}) =>
+  [
+    '<b>Marca</b>',
+    '',
+    `Nome: <b>${escapeHtml(brand.brandName || '—')}</b>`,
+    `Primária: <code>${escapeHtml(brand.primary || '#0F172A')}</code>`,
+    `Secundária: <code>${escapeHtml(brand.secondary || '#1D4ED8')}</code>`,
+    `Logo: ${brand.brandLogo ? 'cadastrada' : 'não enviada'}`,
+    '',
+    'Esses dados entram nos banners Premium.',
+  ].join('\n')
+
+export const brandHubKeyboard = () =>
+  withMenu([
+    [{ text: 'Nome', callback_data: 'brand:name' }],
+    [
+      { text: 'Cor primária', callback_data: 'brand:primary' },
+      { text: 'Cor secundária', callback_data: 'brand:secondary' },
+    ],
+    [{ text: 'Enviar logo (foto)', callback_data: 'brand:logo' }],
+  ])
+
+export const adminHubText = (dash = {}) =>
+  [
+    '<b>Painel admin</b>',
+    '',
+    `Contas ativas: <b>${Number(dash.usersActive) || 0}</b>`,
+    `Premium: <b>${Number(dash.premium) || 0}</b>`,
+    `Chamados abertos: <b>${Number(dash.ticketsOpen) || 0}</b>`,
+    `Buscas (24h): <b>${Number(dash.searches24h) || 0}</b>`,
+    '',
+    'Tudo pelo bot — sem depender do painel web.',
+  ].join('\n')
+
+export const adminHubKeyboard = () =>
+  withMenu([
+    [
+      { text: 'Fila de chamados', callback_data: 'admin:tickets' },
+      { text: 'Liberar Premium', callback_data: 'admin:premium' },
+    ],
+    [
+      { text: 'Atualizar jogos', callback_data: 'admin:futebol' },
+      { text: 'Status do bot', callback_data: 'admin:status' },
+    ],
+    [{ text: 'Atualizar painel', callback_data: 'admin:hub' }],
+  ])
+
+export const formatBulkSearchResults = (picks) => {
+  const lines = ['<b>Busca em lote</b>', '', 'Melhor resultado por linha:', '']
+  let n = 0
+  ;(picks || []).forEach((p) => {
+    const q = escapeHtml(String(p.query || '').slice(0, 60))
+    if (p.item) {
+      n += 1
+      const y = p.item.year ? ` (${escapeHtml(p.item.year)})` : ''
+      lines.push(`${n}. <b>${escapeHtml(p.item.title)}</b>${y}`)
+      lines.push(`   ← ${q}`)
+    } else {
+      lines.push(`— <i>sem resultado</i> ← ${q}`)
+    }
+  })
+  lines.push('', 'Toque no número para abrir o título encontrado.')
+  return lines.join('\n')
+}
+
 
 export const supportHubText = (userType) => {
   if (userType === 'admin') {
@@ -166,6 +237,7 @@ export const supportHubKeyboard = (userType) => {
     [{ text: 'Meus chamados', callback_data: 'menu:tickets' }],
   ]
   if (userType === 'admin') {
+    rows.push([{ text: 'Painel admin', callback_data: 'admin:hub' }])
     rows.push([{ text: 'Fila de atendimento', callback_data: 'admin:tickets' }])
     rows.push([{ text: 'Liberar Premium', callback_data: 'admin:premium' }])
   }
@@ -299,17 +371,22 @@ export const helpText = (userType) => {
     'Navegue pelos botões. Comandos opcionais:',
     '',
     '<b>Conta</b>',
-    '/entrar · /cadastrar · /conta · /planos',
-    '/senha · /sair',
+    '/entrar · /cadastrar · /recuperar · /conta · /planos',
+    '/senha · /marca · /sair',
     '',
     '<b>Operação</b>',
     '/menu · /buscar · /historico',
     '/suporte · /tickets · /ajuda',
+    '',
+    'Busca em lote: envie vários títulos (um por linha) no /buscar.',
   ]
   if (userType === 'premium' || userType === 'admin') {
     lines.push('', '<b>Premium</b>', '/futebol · /futebol gerar · /top10')
   } else {
     lines.push('', 'Recursos Premium aparecem no menu com 🔒.')
+  }
+  if (userType === 'admin') {
+    lines.push('', '<b>Admin</b>', '/admin · /admin user email · /admin futebol')
   }
   return lines.join('\n')
 }
@@ -339,8 +416,8 @@ export const plansText = (userType) => {
     '• Top 10 e banner de título',
     '',
     '<b>Admin</b>',
-    '• Gestão de planos no painel web',
-    '• O bot não altera planos sozinho',
+    '• Painel, fila de chamados e liberação de Premium no bot',
+    '• Atualização da agenda de jogos',
     '',
     'Upgrade: suporte (Solicitar Premium) ou administrador.',
   ]
@@ -360,7 +437,7 @@ export const accountText = (user) => {
       ? '\n\nPara Premium, use <b>Solicitar Premium</b> ou fale com o administrador.'
       : user.type === 'premium'
         ? '\n\nPremium ativo. Dúvidas de renovação: Suporte.'
-        : '\n\nAcesso administrativo. Planos são gerenciados no painel web.'
+        : '\n\nAcesso administrativo. Use /admin no bot para operar o painel.'
 
   return [
     '<b>Minha conta</b>',
@@ -380,6 +457,8 @@ export const searchPromptText = () =>
     '<b>Buscar</b>',
     '',
     'Digite o nome do filme ou série.',
+    '',
+    'Lote: envie até 10 títulos, <b>um por linha</b>.',
   ].join('\n')
 
 export const formatSearchResults = (items) => {
@@ -714,12 +793,19 @@ export const historyKeyboard = (count = 0) => {
 export const BOT_COMMANDS = [
   { command: 'start', description: 'Início / boas-vindas' },
   { command: 'menu', description: 'Menu principal' },
-  { command: 'buscar', description: 'Buscar filme ou série' },
+  { command: 'buscar', description: 'Buscar filme ou série (lote: um por linha)' },
   { command: 'historico', description: 'Últimas buscas' },
   { command: 'conta', description: 'Minha conta e plano' },
+  { command: 'marca', description: 'Editar nome, cores e logo' },
   { command: 'planos', description: 'Comparar planos' },
   { command: 'suporte', description: 'Suporte e chamados' },
+  { command: 'futebol', description: 'Jogos do dia (Premium)' },
+  { command: 'top10', description: 'Top 10 (Premium)' },
+  { command: 'admin', description: 'Painel da equipe (Admin)' },
   { command: 'ajuda', description: 'Central de ajuda' },
   { command: 'entrar', description: 'Entrar na conta' },
+  { command: 'cadastrar', description: 'Criar conta' },
+  { command: 'recuperar', description: 'Recuperar senha' },
+  { command: 'senha', description: 'Trocar senha (logado)' },
   { command: 'sair', description: 'Sair deste chat' },
 ]

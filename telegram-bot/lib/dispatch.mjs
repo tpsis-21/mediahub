@@ -33,6 +33,15 @@ export const createDispatch = (handlers) => {
     const text = typeof message.text === 'string' ? message.text : ''
     const messageId = message.message_id
 
+    if (Array.isArray(message.photo) && message.photo.length && typeof handlers.handlePhoto === 'function') {
+      const best = message.photo[message.photo.length - 1]
+      const consumed = await handlers.handlePhoto({
+        chatId,
+        fileId: best?.file_id,
+      })
+      if (consumed) return
+    }
+
     if (!text) {
       return
     }
@@ -54,6 +63,10 @@ export const createDispatch = (handlers) => {
         case '/account':
           await handlers.handleAccount({ chatId })
           return
+        case '/marca':
+        case '/brand':
+          await handlers.handleBrandCommand({ chatId })
+          return
         case '/planos':
         case '/plans':
           await handlers.handlePlans({ chatId })
@@ -65,6 +78,11 @@ export const createDispatch = (handlers) => {
         case '/cadastrar':
         case '/register':
           await handlers.handleRegisterCommand({ chatId })
+          return
+        case '/recuperar':
+        case '/recover':
+        case '/esquecisenha':
+          await handlers.handleRecoverCommand({ chatId })
           return
         case '/senha':
         case '/password':
@@ -98,7 +116,7 @@ export const createDispatch = (handlers) => {
           await handlers.handleTickets({ chatId })
           return
         case '/admin':
-          await handlers.handleAdminTickets({ chatId })
+          await handlers.handleAdminCommand({ chatId, args: command.args })
           return
         case '/cancelar':
         case '/cancel':
@@ -112,7 +130,6 @@ export const createDispatch = (handlers) => {
 
     const nav = resolveNavAction(text)
     if (nav && typeof handlers.handleNavAction === 'function') {
-      // Teclado inferior tem prioridade sobre fluxos em andamento (exceto senha digitada)
       const consumedNav = await handlers.handleNavAction({ chatId, action: nav })
       if (consumedNav) return
     }

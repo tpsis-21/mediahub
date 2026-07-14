@@ -142,6 +142,38 @@ export const createBannerRenderer = (canvasApi) => {
     }
   }
 
+  const loadBrandLogo = async (brandLogo) => {
+    if (!brandLogo || typeof loadImage !== 'function') return null
+    try {
+      const raw = String(brandLogo)
+      if (raw.startsWith('data:')) {
+        const b64 = raw.split(',')[1] || ''
+        if (!b64) return null
+        return await loadImage(Buffer.from(b64, 'base64'))
+      }
+      if (raw.startsWith('http') || raw.startsWith('/') || /^[A-Za-z]:\\/.test(raw)) {
+        return await loadImage(raw)
+      }
+      return null
+    } catch {
+      return null
+    }
+  }
+
+  /** Logo no canto; se falhar, não desenha (nome da marca já está no layout). */
+  const drawBrandLogo = async (ctx, brandLogo, x, y, maxH = 72) => {
+    const logo = await loadBrandLogo(brandLogo)
+    if (!logo) return false
+    const scale = Math.min(maxH / (logo.height || maxH), 160 / (logo.width || 160))
+    const w = Math.max(24, (logo.width || 80) * scale)
+    const h = Math.max(24, (logo.height || 80) * scale)
+    ctx.save()
+    ctx.globalAlpha = 0.95
+    ctx.drawImage(logo, x, y, w, h)
+    ctx.restore()
+    return true
+  }
+
   const fillBrandBackground = (ctx, width, height, primary, secondary) => {
     const g = ctx.createLinearGradient(0, 0, width, height)
     g.addColorStop(0, rgba(primary, 1))
@@ -290,6 +322,7 @@ export const createBannerRenderer = (canvasApi) => {
     brandName = 'MediaHub',
     primary = '#0F172A',
     secondary = '#1D4ED8',
+    brandLogo = '',
     model = 'informativo',
   }) => {
     ensureFonts(GlobalFonts)
@@ -309,6 +342,8 @@ export const createBannerRenderer = (canvasApi) => {
       renderFootballInformativo(ctx, { dateIso, matches: list, brandName, p, s })
     }
 
+    await drawBrandLogo(ctx, brandLogo, W - 200, 48, 64)
+
     if (!list.length) {
       ctx.textAlign = 'center'
       ctx.font = font(700, 36)
@@ -327,6 +362,7 @@ export const createBannerRenderer = (canvasApi) => {
     brandName = 'MediaHub',
     primary = '#0F172A',
     secondary = '#7C3AED',
+    brandLogo = '',
   }) => {
     ensureFonts(GlobalFonts)
     const canvas = createCanvas(W, H_FEED)
@@ -373,6 +409,7 @@ export const createBannerRenderer = (canvasApi) => {
     ctx.font = font(700, 26)
     ctx.fillStyle = 'rgba(255,255,255,0.9)'
     ctx.fillText(truncate(ctx, brandName, 900), W / 2, 1180)
+    await drawBrandLogo(ctx, brandLogo, 48, 48, 72)
 
     return canvas.toBuffer('image/png')
   }
@@ -503,6 +540,7 @@ export const createBannerRenderer = (canvasApi) => {
     brandName = 'MediaHub',
     primary = '#0B1220',
     secondary = '#DC2626',
+    brandLogo = '',
     model = 'lista',
   }) => {
     ensureFonts(GlobalFonts)
@@ -517,6 +555,8 @@ export const createBannerRenderer = (canvasApi) => {
     } else {
       await renderTop10Lista(ctx, { items: list, categoryLabel, brandName, p, s })
     }
+
+    await drawBrandLogo(ctx, brandLogo, W - 200, 40, 64)
 
     return canvas.toBuffer('image/png')
   }

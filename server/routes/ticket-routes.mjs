@@ -3,7 +3,30 @@
  * @param {Record<string, any>} deps
  */
 export const registerTicketRoutes = (app, deps) => {
-  const { requireAuth, requireAdmin, query, pool, getTicketsEnabled } = deps
+  const {
+    requireAuth,
+    requireAdmin,
+    query,
+    pool,
+    getTicketsEnabled,
+    ticketTelegram,
+  } = deps
+
+  const notifyAdmins = async (payload) => {
+    try {
+      await ticketTelegram?.notifyAdminsNewTicket?.(payload)
+    } catch (e) {
+      console.error('[tickets] telegram notify admins', e?.message || e)
+    }
+  }
+
+  const notifyUser = async (payload) => {
+    try {
+      await ticketTelegram?.notifyUserTicketUpdate?.(payload)
+    } catch (e) {
+      console.error('[tickets] telegram notify user', e?.message || e)
+    }
+  }
 
   app.get('/api/tickets/settings', async (_req, res) => {
     try {
@@ -72,6 +95,17 @@ export const registerTicketRoutes = (app, deps) => {
           [ticketId, req.auth.userId, message, false]
         )
         await client.query('COMMIT')
+        const userRow = await query(
+          'select name, email from app_users where id = $1 limit 1',
+          [req.auth.userId],
+        )
+        void notifyAdmins({
+          ticketId,
+          subject,
+          message,
+          userName: userRow.rows[0]?.name,
+          userEmail: userRow.rows[0]?.email,
+        })
         res.json({ id: ticketId })
       } catch (e) {
         await client.query('ROLLBACK')
@@ -149,6 +183,26 @@ export const registerTicketRoutes = (app, deps) => {
 
       await query('UPDATE tickets SET updated_at = NOW() WHERE id = $1', [id])
 
+      if (isAdmin) {
+        void notifyUser({
+          userId: ticket.user_id,
+          ticketId: Number(id),
+          message,
+        })
+      } else {
+        const userRow = await query(
+          'select name, email from app_users where id = $1 limit 1',
+          [req.auth.userId],
+        )
+        void notifyAdmins({
+          ticketId: Number(id),
+          subject: ticket.subject || `Resposta #${id}`,
+          message,
+          userName: userRow.rows[0]?.name,
+          userEmail: userRow.rows[0]?.email,
+        })
+      }
+
       res.json({ success: true })
     } catch (e) {
       console.error(e)
@@ -180,7 +234,16 @@ export const registerTicketRoutes = (app, deps) => {
     try {
       const { id } = req.params
       const { status } = req.body
+      const before = await query('select user_id, status from tickets where id = $1 limit 1', [id])
       await query('UPDATE tickets SET status = $1, updated_at = NOW() WHERE id = $2', [status, id])
+      const row = before.rows[0]
+      if (row?.user_id) {
+        void notifyUser({
+          userId: row.user_id,
+          ticketId: Number(id),
+          statusLabel: String(status || ''),
+        })
+      }
       res.json({ success: true })
     } catch (e) {
       console.error(e)

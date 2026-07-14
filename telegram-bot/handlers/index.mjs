@@ -47,12 +47,13 @@ import {
   recordAuthFailure,
   setPending,
 } from '../lib/pending.mjs'
+import { createProfessionalFlows } from './professional.mjs'
 
 /**
  * @param {object} ctx
  */
 export const createHandlers = (ctx) => {
-  const { api, sessions, pairing, services, banners } = ctx
+  const { api, sessions, pairing, services, banners, ticketNotify } = ctx
 
   const requireSession = async (chatId) => {
     const session = await sessions.getByChatId(chatId)
@@ -65,6 +66,8 @@ export const createHandlers = (ctx) => {
     }
     return session
   }
+
+  const pro = createProfessionalFlows({ api, sessions, services, requireSession })
 
   const showMainMenu = async (chatId, session) => {
     await api.sendMessage(chatId, mainMenuText(session.user), {
@@ -95,19 +98,23 @@ export const createHandlers = (ctx) => {
     })
   }
 
-  const notifyAdminsNewTicket = async ({ ticketId, subject, message, userName, userEmail }) => {
+  const notifyAdminsNewTicket = async (payload) => {
+    if (ticketNotify?.notifyAdminsNewTicket) {
+      await ticketNotify.notifyAdminsNewTicket(payload)
+      return
+    }
     const targets = await services.listAdminTelegramTargets()
     const text = [
       '<b>Novo chamado</b>',
-      `#${ticketId} · ${escapeHtml(subject)}`,
-      `De: ${escapeHtml(userName || '—')} · ${escapeHtml(userEmail || '')}`,
+      `#${payload.ticketId} · ${escapeHtml(payload.subject)}`,
+      `De: ${escapeHtml(payload.userName || '—')} · ${escapeHtml(payload.userEmail || '')}`,
       '',
-      escapeHtml(String(message || '').slice(0, 500)),
+      escapeHtml(String(payload.message || '').slice(0, 500)),
     ].join('\n')
     for (const target of targets) {
       try {
         await api.sendMessage(target, text, {
-          reply_markup: ticketDetailKeyboard({ ticketId, isAdminView: true }),
+          reply_markup: ticketDetailKeyboard({ ticketId: payload.ticketId, isAdminView: true }),
         })
       } catch (e) {
         console.error('[telegram-bot] notify admin ticket', target, e?.message || e)
@@ -115,21 +122,25 @@ export const createHandlers = (ctx) => {
     }
   }
 
-  const notifyUserTicketUpdate = async ({ userId, ticketId, message, statusLabel }) => {
-    const chatId = await services.getUserTelegramChatId(userId)
+  const notifyUserTicketUpdate = async (payload) => {
+    if (ticketNotify?.notifyUserTicketUpdate) {
+      await ticketNotify.notifyUserTicketUpdate(payload)
+      return
+    }
+    const chatId = await services.getUserTelegramChatId(payload.userId)
     if (!chatId) return
     const text = [
-      `<b>Atualização do chamado #${ticketId}</b>`,
-      statusLabel ? `Status: ${escapeHtml(statusLabel)}` : '',
-      message ? `\n${escapeHtml(String(message).slice(0, 800))}` : '',
+      `<b>Atualização do chamado #${payload.ticketId}</b>`,
+      payload.statusLabel ? `Status: ${escapeHtml(payload.statusLabel)}` : '',
+      payload.message ? `\n${escapeHtml(String(payload.message).slice(0, 800))}` : '',
       '',
-      'Responda por aqui no bot se precisar.',
+      'Responda pelo bot em Suporte → Meus chamados.',
     ]
       .filter(Boolean)
       .join('\n')
     try {
       await api.sendMessage(chatId, text, {
-        reply_markup: ticketDetailKeyboard({ ticketId, isAdminView: false }),
+        reply_markup: ticketDetailKeyboard({ ticketId: payload.ticketId, isAdminView: false }),
       })
     } catch (e) {
       console.error('[telegram-bot] notify user ticket', e?.message || e)
@@ -363,7 +374,7 @@ export const createHandlers = (ctx) => {
     })
   }
 
-  const runSearch = async ({ chatId, session, queryText }) => {
+  const runSearchSingle = async ({ chatId, session, queryText }) => {
     const q = String(queryText || '').trim().slice(0, 120)
     if (!q) {
       await sessions.patch(chatId, { state: 'awaiting_search' })
@@ -385,6 +396,15 @@ export const createHandlers = (ctx) => {
     })
     await api.sendMessage(chatId, formatSearchResults(result.items), {
       reply_markup: searchPickKeyboard(result.items.length),
+    })
+  }
+
+  const runSearch = async ({ chatId, session, queryText }) => {
+    await pro.runBulkOrSingleSearch({
+      chatId,
+      session,
+      queryText,
+      runSingle: runSearchSingle,
     })
   }
 
@@ -504,6 +524,7 @@ export const createHandlers = (ctx) => {
         brandName: brand.brandName,
         primary: brand.primary,
         secondary: brand.secondary,
+        brandLogo: brand.brandLogo,
         model: modelId,
       })
       await api.sendPhotoBuffer(chatId, png, {
@@ -536,6 +557,7 @@ export const createHandlers = (ctx) => {
         brandName: brand.brandName,
         primary: brand.primary,
         secondary: brand.secondary,
+        brandLogo: brand.brandLogo,
       })
       await api.sendPhotoBuffer(chatId, png, {
         filename: 'banner-titulo.png',
@@ -629,6 +651,7 @@ export const createHandlers = (ctx) => {
         brandName: brand.brandName,
         primary: brand.primary,
         secondary: brand.secondary || '#DC2626',
+        brandLogo: brand.brandLogo,
         model,
       })
       await api.sendPhotoBuffer(chatId, png, {
@@ -688,6 +711,9 @@ export const createHandlers = (ctx) => {
   }
 
   const handlePendingAuthText = async ({ chatId, text, messageId }) => {
+    if (await pro.handleRecoverPending({ chatId, text, messageId })) {
+      return true
+    }
     const pending = getPending(chatId)
     if (!pending) return false
 
@@ -850,6 +876,10 @@ export const createHandlers = (ctx) => {
     const session = await sessions.getByChatId(chatId)
     if (!session) {
       await api.sendMessage(chatId, unlinkNeedText(), { reply_markup: replyGuestKeyboard() })
+      return true
+    }
+
+    if (await pro.handleBrandText({ chatId, session, text })) {
       return true
     }
 
@@ -1064,6 +1094,10 @@ export const createHandlers = (ctx) => {
         await startRegisterFlow(chatId)
         return
       }
+      if (data === 'auth:recover') {
+        await pro.startRecoverFlow(chatId)
+        return
+      }
       if (data === 'auth:link_help') {
         await api.sendMessage(chatId, linkHelpText(), { reply_markup: welcomeKeyboard() })
         return
@@ -1096,6 +1130,10 @@ export const createHandlers = (ctx) => {
         await handleMenu({ chatId })
       } else if (data === 'menu:account') {
         await handleAccount({ chatId })
+      } else if (data === 'menu:brand') {
+        await pro.handleBrandHub({ chatId })
+      } else if (data.startsWith('brand:')) {
+        await pro.startBrandEdit({ chatId, field: data.slice(6) })
       } else if (data === 'menu:password') {
         await handlePasswordCommand({ chatId })
       } else if (data === 'menu:logout') {
@@ -1124,6 +1162,13 @@ export const createHandlers = (ctx) => {
         await handleSupportStart({ chatId })
       } else if (data === 'menu:tickets') {
         await handleTickets({ chatId })
+      } else if (data === 'admin:hub' || data === 'admin:status') {
+        await pro.handleAdminCommand({
+          chatId,
+          args: data === 'admin:status' ? 'status' : '',
+        })
+      } else if (data === 'admin:futebol') {
+        await pro.handleAdminCommand({ chatId, args: 'futebol' })
       } else if (data === 'admin:tickets') {
         await handleAdminTickets({ chatId })
       } else if (data === 'admin:premium') {
@@ -1299,6 +1344,8 @@ export const createHandlers = (ctx) => {
     handleLoginCommand,
     handleRegisterCommand,
     handlePasswordCommand,
+    handleRecoverCommand: async ({ chatId }) => pro.startRecoverFlow(chatId),
+    handleBrandCommand: async ({ chatId }) => pro.handleBrandHub({ chatId }),
     handleSearchCommand,
     handleHistory,
     handleFootball,
@@ -1307,9 +1354,15 @@ export const createHandlers = (ctx) => {
     handleSupportHub,
     handleTickets,
     handleAdminTickets,
+    handleAdminCommand: pro.handleAdminCommand,
     handleCancel,
     handleTextWhileAwaiting,
     handleNavAction,
     handleCallback,
+    handlePhoto: async ({ chatId, fileId }) => {
+      if (!api.downloadFileAsDataUrl || !fileId) return false
+      const dataUrl = await api.downloadFileAsDataUrl(fileId)
+      return pro.handleBrandPhoto({ chatId, dataUrl })
+    },
   }
 }

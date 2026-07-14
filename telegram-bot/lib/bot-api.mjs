@@ -109,6 +109,23 @@ export const createBotApi = (deps) => {
 
   const getMe = () => call('getMe', {})
 
+  const setMyCommands = (commands) => call('setMyCommands', { commands: commands || [] })
+
+  /** Baixa arquivo do Telegram e devolve data URL (para logo da marca). */
+  const downloadFileAsDataUrl = async (fileId, { maxBytes = 1_500_000 } = {}) => {
+    const token = await getTelegramBotToken()
+    if (!token || !fileId) return null
+    const meta = await call('getFile', { file_id: fileId })
+    const filePath = meta?.result?.file_path
+    if (!filePath) return null
+    const res = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`)
+    if (!res.ok) return null
+    const buf = Buffer.from(await res.arrayBuffer())
+    if (buf.length > maxBytes) return null
+    const mime = String(filePath).toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg'
+    return `data:${mime};base64,${buf.toString('base64')}`
+  }
+
   return {
     call,
     sendMessage,
@@ -118,5 +135,7 @@ export const createBotApi = (deps) => {
     answerCallbackQuery,
     deleteMessage,
     getMe,
+    setMyCommands,
+    downloadFileAsDataUrl,
   }
 }

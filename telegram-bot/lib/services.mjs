@@ -53,7 +53,13 @@ export const createBotServices = (deps) => {
     }
   }
 
-  const searchTitles = async ({ userId, queryText, type = 'multi' }) => {
+  const searchTitles = async ({
+    userId,
+    queryText,
+    type = 'multi',
+    skipHistory = false,
+    historyType,
+  } = {}) => {
     const quota = await assertAndIncrementDailySearchQuota(userId)
     if (!quota.ok) {
       return { ok: false, message: quota.message }
@@ -94,26 +100,51 @@ export const createBotServices = (deps) => {
         }
       })
 
-      try {
-        await ensureSearchHistorySchema()
-        await query(
-          `
-          insert into app_search_history (user_id, query, results, timestamp, type)
-          values ($1, $2, $3::jsonb, $4, 'individual')
-          `,
-          [userId, queryText, JSON.stringify(items.slice(0, 5)), Date.now()],
-        )
-      } catch {
-        /* histórico opcional */
+      if (!skipHistory) {
+        try {
+          await ensureSearchHistorySchema()
+          const histType =
+            historyType === 'bulk' || String(queryText || '').includes('\n') ? 'bulk' : 'individual'
+          await query(
+            `
+            insert into app_search_history (user_id, query, results, timestamp, type)
+            values ($1, $2, $3::jsonb, $4, $5)
+            `,
+            [userId, queryText, JSON.stringify(items.slice(0, 5)), Date.now(), histType],
+          )
+        } catch {
+          /* histórico opcional */
+        }
       }
 
       return { ok: true, items }
     } catch (e) {
-      const status = typeof e?.status === 'number' ? e.status : e?.code === 'SEARCH_PROVIDER_NOT_CONFIGURED' ? 503 : 502
+      const status =
+        typeof e?.status === 'number'
+          ? e.status
+          : e?.code === 'SEARCH_PROVIDER_NOT_CONFIGURED'
+            ? 503
+            : 502
       return {
         ok: false,
         message: getSearchProviderErrorMessage({ userType: profile.type, status, code: e?.code }),
+        items: [],
       }
+    }
+  }
+
+  const saveBulkSearchHistory = async ({ userId, queryText, items }) => {
+    try {
+      await ensureSearchHistorySchema()
+      await query(
+        `
+        insert into app_search_history (user_id, query, results, timestamp, type)
+        values ($1, $2, $3::jsonb, $4, 'bulk')
+        `,
+        [userId, queryText, JSON.stringify((items || []).slice(0, 20)), Date.now()],
+      )
+    } catch {
+      /* opcional */
     }
   }
 
@@ -453,6 +484,89 @@ export const createBotServices = (deps) => {
     }
   }
 
+  const updateBrand = async ({ userId, brandName, primary, secondary, brandLogo }) => {
+    const patches = []
+    const vals = []
+    let i = 1
+    if (typeof brandName === 'string' && brandName.trim().length >= 2) {
+      patches.push(`brand_name = $${i++}`)
+      vals.push(brandName.trim().slice(0, 80))
+    }
+    if (primary || secondary) {
+      const current = await getUserBrand(userId)
+      const colors = {
+        primary: primary || current?.primary || '#0F172A',
+        secondary: secondary || current?.secondary || '#1D4ED8',
+      }
+      if (primary && !/^#[0-9a-fA-F]{6}$/.test(primary)) {
+        return { ok: false, message: 'Cor primária inválida. Use formato #RRGGBB.' }
+      }
+      if (secondary && !/^#[0-9a-fA-F]{6}$/.test(secondary)) {
+        return { ok: false, message: 'Cor secundária inválida. Use formato #RRGGBB.' }
+      }
+      patches.push(`brand_colors = $${i++}::jsonb`)
+      vals.push(JSON.stringify(colors))
+    }
+    if (typeof brandLogo === 'string') {
+      patches.push(`brand_logo = $${i++}`)
+      vals.push(brandLogo.slice(0, 2_000_000))
+    }
+    if (!patches.length) return { ok: false, message: 'Nada para atualizar.' }
+    vals.push(userId)
+    await query(
+      `update app_users set ${patches.join(', ')}, updated_at = now() where id = $${i}`,
+      vals,
+    )
+    return { ok: true, brand: await getUserBrand(userId) }
+  }
+
+  const findUserByEmail = async (emailRaw) => {
+    const email =
+      typeof normalizeEmail === 'function'
+        ? normalizeEmail(emailRaw)
+        : String(emailRaw || '').trim().toLowerCase()
+    if (!email) return null
+    const result = await query(
+      `select id, email, name, type, is_active from app_users where email = $1 limit 1`,
+      [email],
+    )
+    return result.rows[0] || null
+  }
+
+  const setPasswordByUserId = async ({ userId, newPassword }) => {
+    if (String(newPassword || '').length < 6) {
+      return { ok: false, message: 'A senha precisa ter pelo menos 6 caracteres.' }
+    }
+    const digest = await createPasswordDigest(newPassword)
+    await query(
+      `
+      update app_users
+      set password_hash = $1, password_salt = $2, password_iterations = $3, updated_at = now()
+      where id = $4
+      `,
+      [digest.hash, digest.salt, digest.iterations, userId],
+    )
+    return { ok: true }
+  }
+
+  const getAdminDashboard = async () => {
+    const [users, premium, openTickets, searches24h] = await Promise.all([
+      query(`select count(*)::int as n from app_users where is_active = true`),
+      query(`select count(*)::int as n from app_users where type = 'premium' and is_active = true`),
+      query(`select count(*)::int as n from tickets where status in ('open','in_progress')`),
+      query(
+        `select count(*)::int as n from app_search_history where timestamp >= $1`,
+        [Date.now() - 24 * 60 * 60 * 1000],
+      ).catch(() => ({ rows: [{ n: 0 }] })),
+    ])
+    return {
+      usersActive: users.rows[0]?.n || 0,
+      premium: premium.rows[0]?.n || 0,
+      ticketsOpen: openTickets.rows[0]?.n || 0,
+      searches24h: searches24h.rows[0]?.n || 0,
+    }
+  }
+
   const getTrending = async ({ userId, mediaType = 'all' }) => {
     const profile = await loadUserKey(userId)
     if (!profile) return { ok: false, message: 'Conta indisponível.', items: [] }
@@ -651,6 +765,7 @@ export const createBotServices = (deps) => {
 
   return {
     searchTitles,
+    saveBulkSearchHistory,
     buildPosterUrl,
     getHistory,
     getFootballSchedule,
@@ -665,6 +780,10 @@ export const createBotServices = (deps) => {
     createTicket,
     setUserPremium,
     getUserBrand,
+    updateBrand,
+    findUserByEmail,
+    setPasswordByUserId,
+    getAdminDashboard,
     getTrending,
     loginWithPassword,
     registerWithPassword,

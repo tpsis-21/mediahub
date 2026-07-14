@@ -1,44 +1,52 @@
 # MediaHub — Bot Telegram
 
-Pasta dedicada ao bot conversacional. A API Express apenas registra o webhook; a lógica mora aqui.
-
-## Conteúdo
-
-| Arquivo / pasta | Função |
-|-----------------|--------|
-| `SPEC.md` | Especificação completa (fases, comandos, gaps) |
-| `index.mjs` | `registerTelegramBot(app, deps)` — webhook + link-code |
-| `lib/` | Bot API, sessão, pairing, format, dispatch |
-| `handlers/` | Comandos (`/start`, busca, futebol, suporte…) |
-| `scripts/` | `set-webhook.mjs`, `poll.mjs` (dev sem HTTPS) |
+Bot **completo / bot-first**: a maioria dos usuários opera só pelo Telegram; a web é complementar.
 
 ## Ativar
 
 1. `TELEGRAM_BOT_TOKEN` (ou token no admin web)
 2. `TELEGRAM_BOT_ENABLED=true`
 3. `TELEGRAM_WEBHOOK_SECRET` (obrigatório em produção)
-4. `APP_URL=https://seu-dominio` (URL pública da API)
+4. `APP_URL=https://seu-dominio`
 
 ```bash
-# produção / staging com HTTPS
-npm run telegram:set-webhook
-
-# desenvolvimento local (long polling; não use junto com webhook)
-npm run telegram:poll
+npm run telegram:set-webhook   # webhook + menu de comandos
+npm run telegram:poll          # dev local (sem webhook)
 ```
 
-## Conta (sem precisar da web)
+No boot da API, o bot também tenta `setMyCommands` automaticamente.
 
-No `/start`, o usuário pode **Entrar** ou **Criar conta** direto no Telegram (`/entrar`, `/cadastrar`).  
-O código da Minha Área continua opcional. Após login, `telegram_chat_id` e a sessão do bot são gravados automaticamente.
+## Conta (sem web)
 
-## Funcionalidades
+| Fluxo | Como |
+|-------|------|
+| Entrar / criar | `/entrar` · `/cadastrar` |
+| Recuperar senha | `/recuperar` (OTP neste chat) |
+| Trocar senha | `/senha` (logado) |
+| Marca | `/marca` — nome, cores hex, foto da logo |
+| Sair | `/sair` |
 
-- `/menu`, `/ajuda`, `/conta`, `/senha`, `/sair`
-- `/buscar` → capa · trailer · banner (Premium)
-- `/historico`
-- `/futebol` (lista completa paginada) · atualizar · gerar banner
-- `/top10`
-- `/suporte` + `/tickets`
+Código da Minha Área continua opcional.
 
-Layouts de banner são versões Node simplificadas (não clonam 100% os kits web).
+## Operação
+
+- `/buscar` — um termo **ou lote** (até 10 linhas, um título por linha)
+- `/historico` — rebusca por botão
+- `/futebol` · atualizar · gerar banner (modelos)
+- `/top10` (modelos lista/cartaz)
+- Capa, trailer e banner de título (Premium)
+
+## Suporte e admin
+
+- Cliente abre chamado no bot → **admins com `/entrar`** recebem aviso
+- Chamados criados/respondidos **pela web** também notificam no Telegram
+- Admin: `/admin` (painel), fila, liberar Premium, buscar usuário, atualizar jogos
+
+## Estrutura
+
+| Pasta | Função |
+|-------|--------|
+| `index.mjs` | Webhook + link-code + bridge de tickets |
+| `handlers/` | Comandos e callbacks |
+| `lib/` | API Telegram, sessão, banners, notify |
+| `SPEC.md` | Especificação detalhada |

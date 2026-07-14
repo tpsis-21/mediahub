@@ -142,12 +142,23 @@ const upload = multer({
 const isProductionEnv = process.env.NODE_ENV === 'production'
 const rawPort = String(process.env.PORT || '').trim()
 const resolvedListenPort = rawPort ? Number(rawPort) : readEnvPort()
+const stripEnvQuotes = (value) => {
+  const s = String(value || '').trim()
+  if (
+    (s.startsWith('"') && s.endsWith('"') && s.length >= 2) ||
+    (s.startsWith("'") && s.endsWith("'") && s.length >= 2)
+  ) {
+    return s.slice(1, -1).trim()
+  }
+  return s
+}
+
 const PORT =
   Number.isFinite(resolvedListenPort) && resolvedListenPort > 0 ? resolvedListenPort : 8081
 const HOST = process.env.HOST || '0.0.0.0'
 /** URL direta do Postgres (obrigatória). Com Supabase em rede só IPv4, use também pooler — ver `getPgConnectionForPool`. */
-const DATABASE_URL_DIRECT = String(process.env.DATABASE_URL || '').trim()
-const JWT_SECRET = process.env.JWT_SECRET || ''
+const DATABASE_URL_DIRECT = stripEnvQuotes(process.env.DATABASE_URL || '')
+const JWT_SECRET = stripEnvQuotes(process.env.JWT_SECRET || '')
 const ALLOWED_ORIGINS_RAW = process.env.ALLOWED_ORIGIN || ''
 const ALLOWED_ORIGINS = String(ALLOWED_ORIGINS_RAW)
   .split(',')
@@ -177,7 +188,7 @@ const SMTP_PORT = Number(process.env.SMTP_PORT || 0)
 const SMTP_USER = process.env.SMTP_USER || ''
 const SMTP_PASS = process.env.SMTP_PASS || ''
 const SMTP_FROM = process.env.SMTP_FROM || ''
-const APP_URL = process.env.APP_URL || ''
+const APP_URL = stripEnvQuotes(process.env.APP_URL || '')
 
 if (!DATABASE_URL_DIRECT) {
   throw new Error('DATABASE_URL não configurado')

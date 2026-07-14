@@ -23,7 +23,7 @@ interface UserAreaModalProps {
 }
 
 const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
-  const { user, updateUserDetailed, updateUser, isPremiumExpired } = useAuth();
+  const { user, updateUserDetailed, updateUser, refreshMe, isPremiumExpired } = useAuth();
   const { toast } = useToast();
   
   const [name, setName] = useState(user?.name || '');
@@ -53,6 +53,8 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
     expiresAt: string;
     botUsername: string;
   } | null>(null);
+  /** waiting | linked | expired | null */
+  const [linkPollStatus, setLinkPollStatus] = useState<'waiting' | 'linked' | 'expired' | null>(null);
   const [searchIntegrationKey, setSearchIntegrationKey] = useState('');
   const [clearSearchIntegrationKey, setClearSearchIntegrationKey] = useState(false);
   const [searchConfigured, setSearchConfigured] = useState<boolean | null>(null);
@@ -112,9 +114,65 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
     setTelegramChatId(user?.telegramChatId || '');
   }, [user?.telegramChatId]);
 
+  useEffect(() => {
+    if (!botLink?.code) return;
+
+    let cancelled = false;
+    let done = false;
+
+    const tick = async () => {
+      if (cancelled || done) return;
+      try {
+        const status = await apiRequest<{
+          status: 'waiting' | 'linked' | 'expired';
+          linked: boolean;
+          chatId: string | null;
+        }>({
+          path: `/api/telegram/bot/link-status?code=${encodeURIComponent(botLink.code)}`,
+          method: 'GET',
+          auth: true,
+        });
+        if (cancelled || done) return;
+        if (status.status === 'linked' && status.chatId) {
+          done = true;
+          setLinkPollStatus('linked');
+          setTelegramChatId(status.chatId);
+          await refreshMe();
+          toast({
+            title: 'Telegram vinculado',
+            description: 'Destino confirmado. Já pode enviar conteúdos pelo MediaHub.',
+          });
+          return;
+        }
+        if (status.status === 'expired') {
+          done = true;
+          setLinkPollStatus('expired');
+          toast({
+            title: 'Código expirado',
+            description: 'Gere um novo código e tente novamente.',
+            variant: 'destructive',
+          });
+        }
+      } catch {
+        /* próxima tentativa */
+      }
+    };
+
+    void tick();
+    const id = window.setInterval(() => {
+      void tick();
+    }, 2500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [botLink?.code, refreshMe, toast]);
+
   const handleGenerateBotLink = async () => {
     if (isLinkCodeLoading) return;
     setIsLinkCodeLoading(true);
+    setLinkPollStatus(null);
     try {
       const payload = await apiRequest<{
         code: string;
@@ -134,9 +192,10 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
         expiresAt: payload.expiresAt,
         botUsername: payload.botUsername || '',
       });
+      setLinkPollStatus('waiting');
       toast({
         title: 'Código gerado',
-        description: 'Agora clique em “Abrir bot e vincular” (válido por alguns minutos).',
+        description: 'Abra o bot e confirme — esta tela detecta o vínculo sozinha.',
       });
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Não foi possível gerar o código.';
@@ -1028,6 +1087,23 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
                         </Button>
                         {botLink && (
                           <div className="rounded-md border bg-background px-3 py-3 space-y-3 text-sm">
+                            {linkPollStatus === 'waiting' && (
+                              <div className="rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-sky-800 dark:text-sky-200">
+                                Aguardando confirmação no Telegram… Abra o bot e toque em Iniciar. Esta
+                                tela atualiza sozinha.
+                              </div>
+                            )}
+                            {linkPollStatus === 'linked' && (
+                              <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-emerald-700 dark:text-emerald-300">
+                                Vínculo confirmado. Destino ativo — pode enviar capas e banners pelo
+                                MediaHub.
+                              </div>
+                            )}
+                            {linkPollStatus === 'expired' && (
+                              <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-destructive">
+                                Este código expirou. Gere outro e abra o bot novamente.
+                              </div>
+                            )}
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="text-muted-foreground">Seu código:</span>
                               <code className="rounded bg-muted px-1.5 py-0.5 font-medium">{botLink.code}</code>

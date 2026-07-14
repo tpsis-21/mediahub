@@ -201,6 +201,61 @@ export const registerTelegramBot = (app, deps) => {
     }
   })
 
+  /** Status do código de vínculo (polling da Minha Área). */
+  app.get('/api/telegram/bot/link-status', requireAuth, rateLimitTelegram, async (req, res) => {
+    try {
+      const raw = typeof req.query?.code === 'string' ? req.query.code : ''
+      const code = pairing.normalizeCode(raw)
+      if (!code) {
+        res.status(400).json({ message: 'Código inválido.' })
+        return
+      }
+
+      const pending = await query(
+        `
+        select code, expires_at
+        from telegram_link_codes
+        where user_id = $1
+          and (code = $2 or code = $3)
+        order by expires_at desc
+        limit 1
+        `,
+        [req.auth.userId, code, `USED_${code}`],
+      )
+      const row = pending.rows[0]
+      if (row) {
+        if (String(row.code).startsWith('USED_')) {
+          const userRes = await query(
+            `select telegram_chat_id from app_users where id = $1 limit 1`,
+            [req.auth.userId],
+          )
+          const chatId =
+            typeof userRes.rows[0]?.telegram_chat_id === 'string'
+              ? userRes.rows[0].telegram_chat_id.trim()
+              : ''
+          res.json({
+            status: chatId ? 'linked' : 'expired',
+            linked: Boolean(chatId),
+            chatId: chatId || null,
+          })
+          return
+        }
+        if (new Date(row.expires_at).getTime() < Date.now()) {
+          await query(`delete from telegram_link_codes where code = $1`, [code])
+          res.json({ status: 'expired', linked: false, chatId: null })
+          return
+        }
+        res.json({ status: 'waiting', linked: false, chatId: null })
+        return
+      }
+
+      res.json({ status: 'expired', linked: false, chatId: null })
+    } catch (e) {
+      console.error('[telegram-bot] link-status', e)
+      res.status(500).json({ message: 'Falha ao consultar vínculo.' })
+    }
+  })
+
   app.get('/api/telegram/bot/status', requireAuth, async (_req, res) => {
     try {
       const token = await getTelegramBotToken()

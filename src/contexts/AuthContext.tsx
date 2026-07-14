@@ -46,6 +46,8 @@ interface AuthContextType {
     updates: Partial<User> & { searchIntegrationKey?: string | null }
   ) => Promise<{ ok: boolean; message?: string }>;
   updateUser: (updates: Partial<User> & { searchIntegrationKey?: string | null }) => Promise<boolean>;
+  /** Atualiza o usuário a partir de GET /api/me (sem loading global). */
+  refreshMe: () => Promise<User | null>;
   isLoading: boolean;
   canSearch: () => boolean;
   incrementSearch: () => void;
@@ -217,6 +219,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return result.ok;
   };
 
+  const refreshMe = async (): Promise<User | null> => {
+    try {
+      const payload = await apiRequest<{ user: User }>({ path: '/api/me', auth: true });
+      const safeUser = sanitizeUser(payload.user);
+      setUser(safeUser);
+      setCachedAuthUserRaw(JSON.stringify(safeUser));
+      return safeUser;
+    } catch {
+      return null;
+    }
+  };
+
   const logout = () => {
     setUser(null);
     setAuthError(null);
@@ -312,6 +326,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       logout,
       updateUserDetailed,
       updateUser,
+      refreshMe,
       isLoading,
       canSearch,
       incrementSearch,

@@ -49,6 +49,13 @@ export const createPairingService = (deps) => {
     }
 
     await query(`delete from telegram_link_codes where code = $1 or user_id = $2`, [code, row.user_id])
+    await query(
+      `
+      insert into telegram_link_codes (code, user_id, expires_at)
+      values ($1, $2, now() - interval '1 second')
+      `,
+      [`USED_${code}`, row.user_id],
+    )
     return {
       ok: true,
       userId: row.user_id,

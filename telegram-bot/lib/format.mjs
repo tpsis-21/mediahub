@@ -499,27 +499,94 @@ export const premiumUpsell = (featureLabel) =>
     'Para liberar: Ver planos ou Solicitar Premium.',
   ].join('\n')
 
-export const historyText = (rows) => {
-  if (!rows.length) {
-    return [
-      '<b>Histórico</b>',
-      '',
-      'Ainda não há buscas registradas.',
-    ].join('\n')
+export const formatHistoryWhen = (timestamp) => {
+  try {
+    const d = new Date(Number(timestamp))
+    if (Number.isNaN(d.getTime())) return ''
+    return d.toLocaleString('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  } catch {
+    return ''
   }
-  const lines = rows.map(
-    (r, i) =>
-      `${i + 1}. ${escapeHtml(r.query)} <i>(${new Date(Number(r.timestamp)).toLocaleString('pt-BR')})</i>`,
-  )
-  return ['<b>Histórico</b>', '', ...lines].join('\n')
 }
 
-export const historyKeyboard = () => ({
-  inline_keyboard: [
-    [{ text: 'Buscar título', callback_data: 'menu:search' }],
-    rowMenu(),
-  ],
-})
+/** Resumo limpo de uma busca (evita dump de lote com emojis). */
+export const summarizeHistoryQuery = (query, type) => {
+  const raw = String(query || '').trim()
+  if (!raw) return '—'
+
+  const lines = raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+
+  const isBulk =
+    type === 'bulk' ||
+    lines.length > 1 ||
+    raw.length > 70 ||
+    /[🥇🥈🥉]|[4️⃣5️⃣6️⃣7️⃣8️⃣9️⃣🔟]|^\d+\.\s/m.test(raw)
+
+  if (isBulk) {
+    const items = lines.length > 1 ? lines.length : Math.max(2, (raw.match(/\n/g) || []).length + 1)
+    let preview = (lines[0] || raw)
+      .replace(/^[🥇🥈🥉\d️⃣🔟.\s-]+/u, '')
+      .replace(/\(\d{4}\)/g, '')
+      .trim()
+      .slice(0, 36)
+    if (preview.length >= 36) preview = `${preview}…`
+    const nLabel = lines.length > 1 ? lines.length : 'vários'
+    return {
+      title: `Lista em lote · ${nLabel} itens`,
+      preview: preview || '',
+      kind: 'bulk',
+    }
+  }
+
+  const title = raw.length > 42 ? `${raw.slice(0, 40)}…` : raw
+  return { title, preview: '', kind: 'individual' }
+}
+
+export const historyText = (rows) => {
+  if (!rows.length) {
+    return ['<b>Histórico</b>', '', 'Ainda não há buscas registradas.'].join('\n')
+  }
+  const lines = rows.map((r, i) => {
+    const when = formatHistoryWhen(r.timestamp)
+    const sum = summarizeHistoryQuery(r.query, r.type)
+    const head = `${i + 1}. <b>${escapeHtml(sum.title)}</b>`
+    const meta = when ? ` · <i>${escapeHtml(when)}</i>` : ''
+    const sub = sum.preview ? `\n    <i>${escapeHtml(sum.preview)}</i>` : ''
+    return `${head}${meta}${sub}`
+  })
+  return [
+    '<b>Histórico</b>',
+    `<i>${rows.length} busca(s) recente(s)</i>`,
+    '',
+    ...lines,
+    '',
+    'Toque no número para buscar de novo.',
+  ].join('\n')
+}
+
+export const historyKeyboard = (count = 0) => {
+  const n = Math.min(Math.max(0, Number(count) || 0), 10)
+  const buttons = []
+  for (let i = 0; i < n; i += 1) {
+    buttons.push({ text: String(i + 1), callback_data: `hist:${i}` })
+  }
+  const rows = []
+  for (let i = 0; i < buttons.length; i += 5) {
+    rows.push(buttons.slice(i, i + 5))
+  }
+  rows.push([{ text: 'Nova busca', callback_data: 'menu:search' }])
+  rows.push(rowMenu())
+  return { inline_keyboard: rows }
+}
 
 export const ticketsText = (rows) => {
   if (!rows.length) {

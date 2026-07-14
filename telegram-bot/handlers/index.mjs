@@ -289,8 +289,30 @@ export const createHandlers = (ctx) => {
     const session = await requireSession(chatId)
     if (!session) return
     const rows = await services.getHistory(session.userId)
+    const queries = rows.map((r) => {
+      const raw = String(r.query || '').trim()
+      // Para lote: usa a 1ª linha limpa como termo de rebusca; se vazio, ignora
+      if (r.type === 'bulk' || raw.includes('\n') || raw.length > 70) {
+        const first = raw
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .filter(Boolean)[0]
+        if (!first) return raw.slice(0, 80)
+        return first
+          .replace(/^[🥇🥈🥉\d️⃣🔟.\s-]+/u, '')
+          .replace(/\s*\(\d{4}\)\s*$/, '')
+          .trim()
+          .slice(0, 80)
+      }
+      return raw.slice(0, 120)
+    })
+    await sessions.patch(chatId, {
+      state: 'linked',
+      context: { historyQueries: queries },
+      mergeContext: true,
+    })
     await api.sendMessage(chatId, historyText(rows), {
-      reply_markup: historyKeyboard(),
+      reply_markup: historyKeyboard(rows.length),
     })
   }
 
@@ -846,6 +868,16 @@ export const createHandlers = (ctx) => {
         await runSearch({ chatId, session, queryText: '' })
       } else if (data === 'menu:history') {
         await handleHistory({ chatId })
+      } else if (data.startsWith('hist:')) {
+        const idx = Number(data.slice(5))
+        const q = session.context?.historyQueries?.[idx]
+        if (!q) {
+          await api.sendMessage(chatId, 'Este item do histórico expirou. Abra o histórico de novo.', {
+            reply_markup: historyKeyboard(0),
+          })
+        } else {
+          await runSearch({ chatId, session, queryText: q })
+        }
       } else if (data === 'menu:football') {
         await handleFootball({ chatId, args: '' })
       } else if (data === 'menu:top10') {

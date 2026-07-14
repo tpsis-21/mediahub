@@ -41,10 +41,22 @@ describe('telegram-bot format', () => {
     expect(resolveNavAction(NAV.SEARCH)).toBe('search')
   })
 
-  it('formata resultados', () => {
-    const text = formatSearchResults([{ title: 'Matrix', year: '1999', mediaType: 'movie' }])
-    expect(text).toContain('Matrix')
-    expect(text).toContain('1999')
+  it('histórico resume lote e formata datas', () => {
+    const bulk = [
+      '🥇 Superman (2025)',
+      '🥈 F1 (2025)',
+      '🥉 How to Train Your Dragon (2025)',
+    ].join('\n')
+    const text = historyText([
+      { query: 'michael', timestamp: Date.parse('2026-07-14T02:20:19Z'), type: 'individual' },
+      { query: bulk, timestamp: Date.parse('2026-03-21T16:19:04Z'), type: 'bulk' },
+    ])
+    expect(text).toContain('michael')
+    expect(text).toContain('Lista em lote')
+    expect(text).not.toContain('🥇')
+    expect(text).toContain('Toque no número')
+    const kb = historyKeyboard(2)
+    expect(kb.inline_keyboard[0].map((b) => b.callback_data)).toEqual(['hist:0', 'hist:1'])
   })
 
   it('lista todos os jogos em chunks', () => {

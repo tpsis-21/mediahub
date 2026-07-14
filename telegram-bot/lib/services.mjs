@@ -129,7 +129,13 @@ export const createBotServices = (deps) => {
   const getHistory = async (userId) => {
     await ensureSearchHistorySchema()
     const result = await query(
-      `select query, timestamp from app_search_history where user_id = $1 order by timestamp desc limit 10`,
+      `
+      select query, timestamp, type
+      from app_search_history
+      where user_id = $1
+      order by timestamp desc
+      limit 10
+      `,
       [userId],
     )
     return result.rows

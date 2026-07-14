@@ -3,7 +3,7 @@ import {
   accountText,
   escapeHtml,
   footballKeyboard,
-  formatFootballList,
+  formatFootballListChunks,
   formatSearchResults,
   helpText,
   mainMenuKeyboard,
@@ -143,6 +143,16 @@ export const createHandlers = (ctx) => {
     await api.sendMessage(chatId, ['<b>Últimas buscas</b>', '', ...lines].join('\n'))
   }
 
+  const sendFootballScheduleMessages = async (chatId, date, matches) => {
+    const chunks = formatFootballListChunks(date, matches)
+    for (let i = 0; i < chunks.length; i += 1) {
+      const isLast = i === chunks.length - 1
+      await api.sendMessage(chatId, chunks[i], {
+        reply_markup: isLast ? footballKeyboard(date) : undefined,
+      })
+    }
+  }
+
   const handleFootball = async ({ chatId, args }) => {
     const session = await requireSession(chatId)
     if (!session) return
@@ -165,9 +175,7 @@ export const createHandlers = (ctx) => {
       await api.sendMessage(chatId, 'Atualizando agenda…')
       try {
         const { date, matches } = await services.refreshFootball(dateArg)
-        await api.sendMessage(chatId, formatFootballList(date, matches), {
-          reply_markup: footballKeyboard(date),
-        })
+        await sendFootballScheduleMessages(chatId, date, matches)
       } catch (e) {
         console.error('[telegram-bot] football refresh', e)
         await api.sendMessage(chatId, 'Não foi possível atualizar a agenda agora.')
@@ -177,9 +185,7 @@ export const createHandlers = (ctx) => {
 
     try {
       const { date, matches } = await services.getFootballSchedule(dateArg)
-      await api.sendMessage(chatId, formatFootballList(date, matches), {
-        reply_markup: footballKeyboard(date),
-      })
+      await sendFootballScheduleMessages(chatId, date, matches)
     } catch (e) {
       console.error('[telegram-bot] football', e)
       await api.sendMessage(chatId, 'Não foi possível carregar os jogos.')

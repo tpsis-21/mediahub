@@ -87,26 +87,104 @@ export const searchPickKeyboard = (count) => {
   return { inline_keyboard: rows }
 }
 
-export const formatFootballList = (dateIso, matches, { limit = 40 } = {}) => {
-  const list = Array.isArray(matches) ? matches.slice(0, limit) : []
+/**
+ * Formata agenda completa em 1+ mensagens (limite Telegram ~4096).
+ * Agrupa por horário.
+ * @returns {string[]}
+ */
+const formatDateBr = (dateIso) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateIso || ''))) return String(dateIso || '')
+  const [y, m, d] = String(dateIso).split('-')
+  return `${d}/${m}/${y}`
+}
+
+export const formatFootballListChunks = (dateIso, matches, { maxLen = 3500 } = {}) => {
+  const list = Array.isArray(matches) ? matches.slice() : []
   if (!list.length) {
-    return `Nenhum jogo para <b>${escapeHtml(dateIso)}</b>.\nUse /futebol atualizar se for Premium.`
+    return [
+      `Nenhum jogo para <b>${escapeHtml(formatDateBr(dateIso))}</b>.\nUse /futebol atualizar se for Premium.`,
+    ]
   }
-  const lines = list.map((m) => {
-    const ch = Array.isArray(m.channels) && m.channels.length ? ` · ${m.channels.slice(0, 2).join(', ')}` : ''
-    return `${escapeHtml(m.time)}  ${escapeHtml(m.home)} x ${escapeHtml(m.away)}${escapeHtml(ch)}`
-  })
-  const more = matches.length > limit ? `\n… +${matches.length - limit} jogos` : ''
-  return [
-    `<b>Jogos · ${escapeHtml(dateIso)}</b> (${matches.length})`,
+
+  list.sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')))
+
+  const byTime = new Map()
+  for (const m of list) {
+    const t = String(m.time || '--:--').trim() || '--:--'
+    if (!byTime.has(t)) byTime.set(t, [])
+    byTime.get(t).push(m)
+  }
+
+  const header = [
+    `⚽ <b>Jogos do dia</b>`,
+    `📅 ${escapeHtml(formatDateBr(dateIso))} · <b>${list.length}</b> confronto(s)`,
     '',
-    ...lines,
-    more,
-    '',
-    'Gerar banner PNG: toque em 🖼️ Gerar banner.',
-  ]
-    .filter((l) => l !== undefined)
-    .join('\n')
+  ].join('\n')
+
+  const blocks = []
+  for (const [time, items] of byTime) {
+    const lines = [`⏱ <b>${escapeHtml(time)}</b>`]
+    for (const m of items) {
+      const home = escapeHtml(String(m.home || '').trim())
+      const away = escapeHtml(String(m.away || '').trim())
+      const comp =
+        typeof m.competition === 'string' && m.competition.trim()
+          ? `\n   <i>${escapeHtml(m.competition.trim())}</i>`
+          : ''
+      const ch =
+        Array.isArray(m.channels) && m.channels.length
+          ? `\n   📺 ${escapeHtml(m.channels.slice(0, 3).join(', '))}`
+          : ''
+      lines.push(`• ${home} <b>x</b> ${away}${comp}${ch}`)
+    }
+    lines.push('')
+    blocks.push(lines.join('\n'))
+  }
+
+  const chunks = []
+  let current = header
+
+  const startContinuation = () =>
+    `⚽ <b>Jogos</b> (cont.)\n📅 ${escapeHtml(formatDateBr(dateIso))}\n\n`
+
+  for (const block of blocks) {
+    if (current.length + block.length > maxLen && current.length > header.length) {
+      chunks.push(current.trimEnd())
+      current = startContinuation()
+    }
+    if (block.length > maxLen) {
+      const lines = block.split('\n')
+      for (const line of lines) {
+        if (current.length + line.length + 1 > maxLen) {
+          chunks.push(current.trimEnd())
+          current = startContinuation()
+        }
+        current += `${line}\n`
+      }
+      continue
+    }
+    current += block
+  }
+
+  if (current.trim()) {
+    chunks.push(current.trimEnd())
+  }
+
+  const total = chunks.length
+  if (total > 1) {
+    for (let i = 0; i < total; i += 1) {
+      chunks[i] = `${chunks[i].trimEnd()}\n\n📄 Parte ${i + 1}/${total}`
+    }
+  }
+  chunks[chunks.length - 1] = `${chunks[chunks.length - 1].trimEnd()}\n\n🖼 Banner PNG: use o botão abaixo.`
+
+  return chunks
+}
+
+/** Compat: junta todos os chunks (testes / debug). */
+export const formatFootballList = (dateIso, matches, opts = {}) => {
+  const chunks = formatFootballListChunks(dateIso, matches, opts)
+  return chunks.join('\n\n———\n\n')
 }
 
 export const footballKeyboard = (dateIso) => ({

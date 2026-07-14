@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createDispatch } from '../lib/dispatch.mjs'
-import { escapeHtml, helpText, formatSearchResults } from '../lib/format.mjs'
+import { escapeHtml, helpText, formatSearchResults, formatFootballListChunks } from '../lib/format.mjs'
 
 describe('telegram-bot format', () => {
   it('escapa HTML', () => {
@@ -16,6 +16,24 @@ describe('telegram-bot format', () => {
     const text = formatSearchResults([{ title: 'Matrix', year: '1999', mediaType: 'movie' }])
     expect(text).toContain('Matrix')
     expect(text).toContain('1999')
+  })
+
+  it('lista todos os jogos em chunks', () => {
+    const matches = Array.from({ length: 80 }, (_, i) => ({
+      time: `${String(10 + (i % 10)).padStart(2, '0')}:00`,
+      home: `Casa ${i}`,
+      away: `Fora ${i}`,
+      competition: i % 3 === 0 ? 'Copa Teste' : '',
+    }))
+    const chunks = formatFootballListChunks('2026-07-14', matches, { maxLen: 1200 })
+    expect(chunks.length).toBeGreaterThan(1)
+    const joined = chunks.join('\n')
+    expect(joined).toContain('80')
+    expect(joined).toContain('Casa 79')
+    expect(joined).not.toMatch(/\+\d+ jogos/)
+    for (const c of chunks) {
+      expect(c.length).toBeLessThanOrEqual(4096)
+    }
   })
 })
 

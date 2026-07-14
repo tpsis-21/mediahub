@@ -1,5 +1,6 @@
 import { isPremiumOrAdmin } from '../lib/config.mjs'
 import {
+  accountKeyboard,
   accountText,
   escapeHtml,
   footballKeyboard,
@@ -7,7 +8,9 @@ import {
   formatSearchResults,
   helpText,
   linkHelpText,
+  linkedWelcomeText,
   mainMenuKeyboard,
+  plansText,
   premiumUpsell,
   searchPickKeyboard,
   titleActionsKeyboard,
@@ -40,15 +43,18 @@ export const createHandlers = (ctx) => {
   }
 
   const greetLinked = async (chatId, session, { justLinked = false } = {}) => {
-    const name = escapeHtml(session.user.name || session.user.email || 'você')
-    const intro = justLinked
-      ? `Pronto, <b>${name}</b>! Conta conectada com sucesso.`
-      : `Olá de novo, <b>${name}</b>!`
-    await api.sendMessage(
-      chatId,
-      `${intro}\n\nO que você quer fazer agora?`,
-      { reply_markup: mainMenuKeyboard(session.user.type) },
-    )
+    await api.sendMessage(chatId, linkedWelcomeText(session.user, { justLinked }), {
+      reply_markup: mainMenuKeyboard(session.user.type),
+    })
+  }
+
+  const handlePlans = async ({ chatId }) => {
+    const session = await sessions.getByChatId(chatId)
+    await api.sendMessage(chatId, plansText(session?.user?.type), {
+      reply_markup: session
+        ? accountKeyboard(session.user.type)
+        : welcomeKeyboard(),
+    })
   }
 
   const startLoginFlow = async (chatId) => {
@@ -60,7 +66,12 @@ export const createHandlers = (ctx) => {
     setPending(chatId, { state: 'awaiting_login_email', data: {} })
     await api.sendMessage(
       chatId,
-      'Vamos entrar na sua conta.\n\nEnvie seu <b>e-mail</b> (ou /cancelar):',
+      [
+        '<b>Entrar na conta</b>',
+        '',
+        'Envie o <b>e-mail</b> cadastrado.',
+        'Para cancelar: /cancelar',
+      ].join('\n'),
     )
   }
 
@@ -74,11 +85,13 @@ export const createHandlers = (ctx) => {
     await api.sendMessage(
       chatId,
       [
-        'Vamos criar sua conta — leva menos de 1 minuto.',
+        '<b>Criar conta</b>',
         '',
-        'Envie seu <b>nome</b> (como prefere ser chamado):',
+        'Novas contas iniciam no plano <b>Free</b>.',
+        'Upgrade para Premium é feito pelo administrador (ou via /suporte).',
         '',
-        '<i>Dica: use /cancelar a qualquer momento.</i>',
+        'Envie seu <b>nome</b> (como prefere ser chamado).',
+        'Para cancelar: /cancelar',
       ].join('\n'),
     )
   }
@@ -90,9 +103,9 @@ export const createHandlers = (ctx) => {
       const consumed = await pairing.consumeLinkCode(code)
       if (!consumed.ok) {
         const map = {
-          expired: 'Esse código expirou. Gere outro na Minha Área ou use /entrar.',
-          not_found: 'Código não encontrado. Confira e tente de novo, ou use /entrar.',
-          inactive: 'Essa conta está inativa. Fale com o suporte.',
+          expired: 'Código expirado. Gere outro na Minha Área ou use Entrar.',
+          not_found: 'Código não encontrado. Confira e tente de novo, ou use Entrar.',
+          inactive: 'Conta inativa. Fale com o suporte.',
           invalid: 'Código inválido.',
         }
         await api.sendMessage(chatId, map[consumed.reason] || 'Não foi possível vincular.', {
@@ -131,16 +144,23 @@ export const createHandlers = (ctx) => {
   const handleMenu = async ({ chatId }) => {
     const session = await requireSession(chatId)
     if (!session) return
-    await api.sendMessage(chatId, 'Escolha uma opção abaixo 👇', {
-      reply_markup: mainMenuKeyboard(session.user.type),
-    })
+    await api.sendMessage(
+      chatId,
+      [
+        '<b>Menu principal</b>',
+        `Plano: <b>${escapeHtml(session.user.type === 'admin' ? 'Admin' : session.user.type === 'premium' ? 'Premium' : 'Free')}</b>`,
+        '',
+        'Escolha uma opção:',
+      ].join('\n'),
+      { reply_markup: mainMenuKeyboard(session.user.type) },
+    )
   }
 
   const handleAccount = async ({ chatId }) => {
     const session = await requireSession(chatId)
     if (!session) return
     await api.sendMessage(chatId, accountText(session.user), {
-      reply_markup: mainMenuKeyboard(session.user.type),
+      reply_markup: accountKeyboard(session.user.type),
     })
   }
 
@@ -680,6 +700,28 @@ export const createHandlers = (ctx) => {
         await handleHelp({ chatId })
         return
       }
+      if (data === 'auth:plans' || data === 'menu:plans') {
+        await handlePlans({ chatId })
+        return
+      }
+      if (data.startsWith('menu:locked:')) {
+        const feature =
+          data === 'menu:locked:football'
+            ? 'Jogos do dia'
+            : data === 'menu:locked:top10'
+              ? 'Top 10'
+              : 'Banner de título'
+        await api.sendMessage(chatId, premiumUpsell(feature), {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: 'Ver planos', callback_data: 'menu:plans' }],
+              [{ text: 'Solicitar Premium', callback_data: 'menu:support' }],
+              [{ text: 'Menu', callback_data: 'menu:home' }],
+            ],
+          },
+        })
+        return
+      }
 
       const session = await requireSession(chatId)
       if (!session) return
@@ -768,6 +810,7 @@ export const createHandlers = (ctx) => {
     handleHelp,
     handleMenu,
     handleAccount,
+    handlePlans,
     handleLogout,
     handleLoginCommand,
     handleRegisterCommand,

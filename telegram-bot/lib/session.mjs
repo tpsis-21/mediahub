@@ -1,9 +1,12 @@
 /**
  * Sessões conversacionais (chat_id → user + FSM).
- * @param {{ query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }> }} deps
+ * @param {{
+ *   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>,
+ *   deactivateExpiredPremiumByUserId?: (userId: string) => Promise<void>,
+ * }} deps
  */
 export const createSessionStore = (deps) => {
-  const { query } = deps
+  const { query, deactivateExpiredPremiumByUserId } = deps
 
   const mapRow = (row) => {
     if (!row || !row.is_active) return null
@@ -76,7 +79,23 @@ export const createSessionStore = (deps) => {
       `,
       [id],
     )
-    const mapped = mapRow(result.rows[0])
+    let row = result.rows[0]
+    if (row?.user_id && typeof deactivateExpiredPremiumByUserId === 'function') {
+      await deactivateExpiredPremiumByUserId(row.user_id)
+      const refreshed = await query(
+        `
+        select s.chat_id, s.user_id, s.state, s.context, s.updated_at,
+               u.email, u.name, u.type, u.is_active, u.subscription_end, u.telegram_chat_id
+        from telegram_bot_sessions s
+        join app_users u on u.id = s.user_id
+        where s.chat_id = $1
+        limit 1
+        `,
+        [id],
+      )
+      row = refreshed.rows[0] || row
+    }
+    const mapped = mapRow(row)
     if (mapped) return mapped
     return ensureFromUserChatId(id)
   }

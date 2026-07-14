@@ -52,7 +52,7 @@ export const registerTelegramBot = (app, deps) => {
     resolveTrailerUrlFromProvider,
   } = deps
 
-  const sessions = createSessionStore({ query })
+  const sessions = createSessionStore({ query, deactivateExpiredPremiumByUserId })
   const pairing = createPairingService({ query })
   const api = createBotApi({ getTelegramBotToken })
   const banners =

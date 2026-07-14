@@ -52,6 +52,10 @@ export const createDispatch = (handlers) => {
         case '/account':
           await handlers.handleAccount({ chatId })
           return
+        case '/planos':
+        case '/plans':
+          await handlers.handlePlans({ chatId })
+          return
         case '/entrar':
         case '/login':
           await handlers.handleLoginCommand({ chatId })

@@ -6,6 +6,7 @@ import {
   formatSearchResults,
   formatFootballListChunks,
   welcomeText,
+  plansText,
 } from '../lib/format.mjs'
 
 describe('telegram-bot format', () => {
@@ -20,8 +21,11 @@ describe('telegram-bot format', () => {
     expect(helpText('premium')).toContain('/futebol')
   })
 
-  it('boas-vindas explicam autonomia do bot', () => {
-    expect(welcomeText()).toContain('sem precisar abrir o site')
+  it('boas-vindas profissional e planos', () => {
+    expect(welcomeText()).toContain('MediaHub')
+    expect(welcomeText()).toContain('Free')
+    expect(plansText('free')).toContain('Premium')
+    expect(plansText('free')).toContain('administrador')
   })
 
   it('formata resultados', () => {
@@ -57,6 +61,7 @@ describe('telegram-bot dispatch parse', () => {
       handleHelp: async () => {},
       handleMenu: async () => {},
       handleAccount: async () => {},
+      handlePlans: async () => {},
       handleLogout: async () => {},
       handleLoginCommand: async () => {},
       handleRegisterCommand: async () => {},

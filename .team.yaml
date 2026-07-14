@@ -1,0 +1,36 @@
+# Copie para a raiz do projeto como .team.yaml
+# Genilson usa isso para saber quais personas incluir no pipeline
+
+project: mediahub
+slug: mediahub
+
+# time mínimo | completo | marketing-overclock
+profile: minimo
+
+dev:
+  always:
+    - carlito
+    - genilson
+    - jurandir
+    - francisgleydisson
+    - marivone
+  on_demand:
+    - leonardo      # surface visual
+    - severino      # credenciais, RLS, auth
+    - tiao          # deploy, CI/CD
+    - adelmo        # git workflow
+    - tereza        # brand
+    - olegario      # docs, ADR
+  strategic:
+    - adelaide      # portfolio multi-projeto
+
+marketing_overclock:
+  always:
+    - valdisney
+    - maria
+    - damiao
+    - eunice
+  on_demand:
+    - carmem
+    - dina
+    - rosa

@@ -1,95 +1,89 @@
-# Welcome to your Lovable project
+# MediaHub
 
-## Project info
+SPA + API para busca de títulos (filmes/séries), geração de capas/banners (incluindo futebol e Top 10), branding do usuário e envio via Telegram.
 
-**URL**: https://lovable.dev/projects/d7b7b7e9-ead0-4125-bcad-c3422afdf0e0
+Documentação interna: [contexto-app.md](./contexto-app.md) · Análise: [RELATORIO-ANALISE-APLICACAO.md](./RELATORIO-ANALISE-APLICACAO.md) · API: [openapi.yaml](./openapi.yaml)
 
-## How can I edit this code?
+## Stack
 
-There are several ways of editing your application.
+- **Frontend:** React 18, TypeScript, Vite (dev `:5173`), Tailwind, shadcn/Radix
+- **Backend:** Node 20+, Express (`server/server.mjs` + `server/routes/`)
+- **DB:** Postgres (`pg`) — schema em `server/db/schema.sql`
+- **Auth:** JWT (Bearer + cookie `auth_token`), senha PBKDF2
+- **Banner FE:** helpers em `src/lib/banner/`
 
-**Use Lovable**
+## Requisitos
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/d7b7b7e9-ead0-4125-bcad-c3422afdf0e0) and start prompting.
+- Node.js **≥ 20** (`.nvmrc`)
+- Postgres acessível via `DATABASE_URL` (ex.: pooler Supabase)
+- Variáveis em `.env` (não versionar) — modelo: [`.env.example`](./.env.example)
 
-Changes made via Lovable will be committed automatically to this repo.
+### Variáveis principais (nomes)
 
-**Use your preferred IDE**
+`DATABASE_URL`, `JWT_SECRET`, `ALLOWED_ORIGIN`, `SMTP_*`, `APP_URL`, `TELEGRAM_BOT_TOKEN`, `FREE_DAILY_SEARCH_LIMIT` (opcional, padrão `50`), `VITE_API_BASE_URL` (dev/prod), `HTTP_SLOW_MS` (opcional)
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+## Idioma
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+Produto **PT-BR primeiro**. Há toggle parcial `pt-BR`/`en-US` no Header (menus/auth); a maior parte da UI permanece em português.
 
-Follow these steps:
+## Scripts
 
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
 npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
+npm run dev:all    # Vite + API
+npm run dev        # só frontend
+npm run dev:api    # só API
+npm run build
+npm test           # vitest
+npm run check:local  # test + tsc + tsc-lib-strict + lint + build + e2e SPA (sem .env/API)
+npm run db:migrate   # aplica server/db/migrations (também no boot da API)
+npm run typecheck:lib  # TypeScript strict em src/lib/
+npm run build && npm run test:e2e
+# E2E autenticado / UI smoke (opcional):
+#   E2E_EMAIL=… E2E_PASSWORD=… npm run test:e2e:auth
+# Smoke HTTP staging/local:
+#   SMOKE_API_BASE_URL=https://api… SMOKE_EMAIL=… SMOKE_PASSWORD=… npm run smoke:staging
+npm start          # serve API + dist/
+npm run lint
 ```
 
-**Edit a file directly in GitHub**
+### Secrets do GitHub Actions (opcional)
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+Jobs extras em `.github/workflows/ci.yml` só rodam se os secrets existirem:
 
-**Use GitHub Codespaces**
+| Job | Secrets |
+|-----|---------|
+| `e2e-auth` | `DATABASE_URL`, `JWT_SECRET`, `E2E_EMAIL`, `E2E_PASSWORD` |
+| `smoke-staging` | `SMOKE_API_BASE_URL` (+ opcional `SMOKE_APP_BASE_URL`, `SMOKE_EMAIL`, `SMOKE_PASSWORD`) |
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+Sem esses secrets, o CI continua só com lint/test/build + Playwright smoke anônimo.
 
-## What technologies are used for this project?
+## Rotas da SPA
 
-This project is built with:
+| Rota | Descrição |
+|------|-----------|
+| `/` | Landing |
+| `/app` | App autenticado (busca, banners, etc.) |
+| `/admin` | Painel admin |
+| `/reset` | Redefinição de senha |
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+## Planos
 
-## How can I deploy this project?
+| Tipo | Acesso |
+|------|--------|
+| free | Busca individual (quota diária no servidor) |
+| premium | Bulk, ZIP, banners, futebol, vídeo |
+| admin | Tudo + `/admin` |
 
-Simply open [Lovable](https://lovable.dev/projects/d7b7b7e9-ead0-4125-bcad-c3422afdf0e0) and click on Share -> Publish.
+Premium expirado é **rebaixado para free** (conta permanece ativa).
 
-## Can I connect a custom domain to my Lovable project?
+## Deploy
 
-Yes, you can!
+- Docker / Nixpacks / EasyPanel — ver `Dockerfile`, `nixpacks.toml`, `Procfile`
+- CI: `.github/workflows/ci.yml` (lint, `tsc`, tests, guardrails, build, Playwright smoke; jobs opcionais `e2e-auth` / `smoke-staging` via secrets)
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+## Segurança (resumo)
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
-
-## UI modal pattern (DialogContent)
-
-For consistent responsiveness, every `DialogContent` must declare a `variant`.
-
-- Use `variant="compact"` for short/simple modals (login, confirmation, small forms).
-- Use `variant="complex"` for long flows (lists, previews, multi-section forms).
-- Do not render `DialogContent` without `variant` (TypeScript now enforces this).
-
-Examples:
-
-```tsx
-<DialogContent variant="compact" className="sm:max-w-md">
-  ...
-</DialogContent>
-```
-
-```tsx
-<DialogContent variant="complex" className="sm:max-w-4xl h-[88vh] sm:h-[80vh] p-0">
-  ...
-</DialogContent>
-```
+- Busca e proxy de imagem do provedor exigem autenticação
+- Crest e refresh de futebol: auth + premium/admin + rate limit
+- Rate limit in-memory em auth, search, football, telegram e vídeo

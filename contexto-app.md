@@ -1,28 +1,32 @@
 # Contexto da Aplicação — MediaHub
 
-Última leitura do código: 2026-03-04
+Última leitura do código: 2026-07-13  
+Relatório de análise: [RELATORIO-ANALISE-APLICACAO.md](./RELATORIO-ANALISE-APLICACAO.md)
 
 ## Visão geral
 
 O **MediaHub** é uma SPA (Single Page Application) em React com uma API própria que permite:
 
-- Buscar títulos (filmes/séries), exibir resultados e detalhes.
+- Buscar títulos (filmes/séries), exibir resultados e detalhes (**requer login**).
 - Baixar imagens individualmente ou em lote (ZIP).
 - Manter histórico de buscas (com cache local e sincronização quando autenticado).
 - Personalizar “marca” do usuário (nome, cores e logo) aplicada na UI.
-- Recursos para geração de artes/banners e fluxo de vídeo (para planos elegíveis).
+- Geração de artes/banners (profissional, lote/Top 10, futebol) e vídeo/trailer com branding (planos elegíveis).
+- Envio via Telegram e suporte por tickets.
+- Painel admin (users, providers, football, tickets).
 
-Regra de segurança: segredos e credenciais ficam no servidor e nunca são retornados ao client.
+Regra de segurança: segredos e credenciais ficam no servidor e nunca são retornados ao client.  
+Endpoints de busca, proxy de imagem do provedor, crest e refresh de futebol **exigem autenticação** (crest/refresh também premium/admin).
 
 ## Stack / Dependências principais
 
 Frontend:
 
-- Build: **Vite** (porta 8080 em dev) — [vite.config.ts](./vite.config.ts)
+- Build: **Vite** (porta **5173** em dev) — [vite.config.ts](./vite.config.ts)
 - Linguagem: **TypeScript** — [tsconfig.json](./tsconfig.json)
 - UI: **React 18**, **Tailwind CSS**, **shadcn/ui + Radix UI**, **lucide-react**
 - Roteamento: **react-router-dom**
-- Data fetching/cache: **@tanstack/react-query** (provider ativo)
+- Data fetching: fetch via `apiClient` / `searchService` (sem React Query)
 - Forms: **react-hook-form**, **zod**
 - Export/ZIP: **jszip**
 
@@ -30,17 +34,11 @@ Backend:
 
 - **Node.js + Express** — [server/server.mjs](./server/server.mjs)
 - Segurança HTTP: **helmet**
-- Auth: **JWT** (Bearer token)
-- Persistência: **Postgres** (driver `pg`)
+- Auth: **JWT** (Bearer + cookie `auth_token`)
+- Persistência: **Postgres** (driver `pg`); schema em [server/db/schema.sql](./server/db/schema.sql) (inclui `tickets` / `ticket_messages`); `initDb()` no boot garante tabelas
 
-Scripts:
-
-- `npm run dev`
-- `npm run dev:api`
-- `npm run build`
-- `npm run lint`
-- `npm run preview`
-- `npm run start`
+- Scripts: `npm run dev` / `npm run dev:all` / `npm run dev:api`
+- `npm run build` / `npm run lint` / `npm test` / `npm run test:e2e` / `npm run smoke:staging` / `npm run preview` / `npm run start`
 
 Fonte: [package.json](./package.json)
 
@@ -51,61 +49,40 @@ Fonte: [package.json](./package.json)
   - [src/main.tsx](./src/main.tsx)
   - [src/App.tsx](./src/App.tsx)
 - Páginas:
-  - [src/pages/Index.tsx](./src/pages/Index.tsx) (home + busca + resultados + histórico)
+  - [src/pages/Index.tsx](./src/pages/Index.tsx) — **landing** (CTA auth; logado redireciona para `/app`)
+  - [src/pages/AppPage.tsx](./src/pages/AppPage.tsx) — app autenticado (busca, resultados, modais)
+  - [src/pages/ResetPasswordPage.tsx](./src/pages/ResetPasswordPage.tsx) — `/reset`
   - [src/pages/NotFound.tsx](./src/pages/NotFound.tsx)
-- Contexts (estado global no client):
-  - [src/contexts/AuthContext.tsx](./src/contexts/AuthContext.tsx)
-  - [src/contexts/ThemeContext.tsx](./src/contexts/ThemeContext.tsx)
-  - [src/contexts/I18nContext.tsx](./src/contexts/I18nContext.tsx)
-- Services (infra no client):
-  - [src/services/apiClient.ts](./src/services/apiClient.ts)
-  - [src/services/exportService.ts](./src/services/exportService.ts)
-  - [src/services/historyService.ts](./src/services/historyService.ts)
-- Componentes de domínio (features):
-  - [src/components/Header.tsx](./src/components/Header.tsx)
-  - [src/components/SearchForm.tsx](./src/components/SearchForm.tsx)
-  - [src/components/MovieCard.tsx](./src/components/MovieCard.tsx)
-  - [src/components/SearchHistory.tsx](./src/components/SearchHistory.tsx)
-  - [src/components/SearchInstructions.tsx](./src/components/SearchInstructions.tsx)
-  - [src/components/ExpiryNotice.tsx](./src/components/ExpiryNotice.tsx)
-  - [src/components/TermsModal.tsx](./src/components/TermsModal.tsx)
-  - Modais (auth/admin/área do usuário/banners/vídeo): ver seção “Fluxos”
-- UI kit (shadcn):
-  - [src/components/ui](./src/components/ui)
-- API (backend):
-  - [server/server.mjs](./server/server.mjs)
-- CI:
-  - [.github/workflows/ci.yml](./.github/workflows/ci.yml)
+- Contexts: Auth, Theme, I18n
+- Services: `apiClient`, `searchService`, `exportService`, `historyService`, `ticketService`
+- Modais principais: Auth, UserArea, Admin, ProfessionalBanner, BulkBanner, FootballBanner, MovieActions, Support
+- Scripts: `npm test`, `npm run test:e2e`, `npm run smoke:staging`
+- API: [server/server.mjs](./server/server.mjs) · libs: [server/lib/](./server/lib/) (`auth-middleware`, `search-provider`, `football-schedule`, `football-crest`, `app-settings`, `cors`, `telegram-config`, `canvas-runtime`, `debug-session`, `media-tools`, `football-parse`, …) · rotas: [server/routes/](./server/routes/) (inclui `debug-routes`) · bot Telegram: [telegram-bot/](./telegram-bot/) · contrato [openapi.yaml](./openapi.yaml)
+- Banner utils FE: [src/lib/banner/](./src/lib/banner/) — canvas/cores/poster/crest + layouts (`football-layout`, `bulk-ranking-layout`, `bulk-individual-layout`, `professional-layout`); modais só orquestram UI/loaders
+- CI: [.github/workflows/ci.yml](./.github/workflows/ci.yml) (lint, tsc, vitest, guardrails, build, Playwright smoke)
 
 ## Rotas
 
 Definidas em [src/App.tsx](./src/App.tsx):
 
-- `/` → [Index](./src/pages/Index.tsx)
+- `/` → landing ([Index](./src/pages/Index.tsx)); autenticado → redirect `/app`
+- `/app` → workspace ([AppPage](./src/pages/AppPage.tsx)); sem user → `/`
+- `/admin` → painel admin (`AdminModal` mode=page); só `type === "admin"`
+- `/reset` → redefinição de senha
 - `*` → [NotFound](./src/pages/NotFound.tsx)
-
-Observação: a navegação do Header é via âncoras na própria página (`#home`, `#search`, `#terms`, `#privacy`).
 
 ## Fluxo principal (Busca e resultados)
 
-1. Usuário acessa `/` → [Index.tsx](./src/pages/Index.tsx)
-2. Renderiza Header + instruções + formulário de busca:
-   - [Header](./src/components/Header.tsx)
-   - [SearchInstructions](./src/components/SearchInstructions.tsx)
-   - [SearchForm](./src/components/SearchForm.tsx)
-3. [SearchForm](./src/components/SearchForm.tsx) chama `onSearch(queries, type, mediaType)`:
-   - `type`: `individual` ou `bulk`
-   - `mediaType`: `multi`, `movie`, `tv`
-4. [Index.tsx](./src/pages/Index.tsx) executa `handleSearch`:
-   - Bloqueia se excedeu limite (visitante: 3/dia) via [AuthContext](./src/contexts/AuthContext.tsx)
-   - Faz requisições para a API (que integra com provedores externos)
-   - Deduplica resultados por `id`
-   - Persiste no histórico via [historyService](./src/services/historyService.ts)
-5. Renderiza `MovieCard` para cada item:
-   - Seleção (checkbox)
-   - Baixar capa individual
-   - Copiar sinopse
-   - Premium/Admin: abrir modais de banner/vídeo
+1. Visitante em `/` → landing + modal de auth.
+2. Após login → `/app` ([AppPage](./src/pages/AppPage.tsx)).
+3. [SearchForm](./src/components/SearchForm.tsx) dispara busca (`individual` / `bulk` + `mediaType`).
+4. [searchService](./src/services/searchService.ts) chama `/api/search/query` **com JWT**.
+5. Resultados em `MovieCard`; premium abre banners/vídeo/Telegram via `MovieActionsModal` e demais modais.
+6. Histórico via [historyService](./src/services/historyService.ts) (local + `/api/history`).
+
+**Nota:** busca anônima na API foi desativada (P0 segurança). Capas via `/api/search/image` usam cookie `auth_token` (same-origin) ou Bearer.
+
+Premium expirado é **rebaixado para free** (conta permanece ativa). Free tem quota diária de buscas no servidor (`FREE_DAILY_SEARCH_LIMIT`, padrão 50).
 
 ## Camadas / responsabilidades
 
@@ -145,9 +122,9 @@ Observação: a navegação do Header é via âncoras na própria página (`#hom
   - Quando autenticado, também sincroniza com a API (`/api/history`)
   - Fonte: [historyService.ts](./src/services/historyService.ts)
 
-## Perfis de usuário (simulado)
+## Perfis de usuário
 
-Definidos/derivados no [AuthContext](./src/contexts/AuthContext.tsx) e reforçados pela API:
+Definidos no servidor (`app_users.type`) e refletidos no [AuthContext](./src/contexts/AuthContext.tsx):
 
 - Visitante (sem user):
   - Limite: **3 buscas/dia** (localStorage `guestSearches` + `lastGuestSearchDate`)
@@ -202,18 +179,20 @@ Definidos/derivados no [AuthContext](./src/contexts/AuthContext.tsx) e reforçad
 - ProfessionalBannerModal (BETA):
   - Gera arte via canvas (formatos 1:1 e 9:16)
   - Usa cores da marca + imagens recebidas via API/proxy
+  - Layout em `src/lib/banner/professional-layout.ts`
   - Fonte: [ProfessionalBannerModal.tsx](./src/components/ProfessionalBannerModal.tsx)
 
-- VideoGenerationModal (BETA):
-  - Fluxo de vídeo para planos elegíveis (integração via API)
-  - Fonte: [VideoGenerationModal.tsx](./src/components/VideoGenerationModal.tsx)
+- MovieActionsModal:
+  - Baixar capa, Telegram, banner profissional (inline), trailer e vídeo branding
+  - Fonte: [MovieActionsModal.tsx](./src/components/MovieActionsModal.tsx)
 
-- BannerModal / BulkBannerModal / ApiKeyModal:
-  - Existem no repo, mas não há import/uso encontrado no fluxo atual da UI.
-  - Fontes:
-    - [BannerModal.tsx](./src/components/BannerModal.tsx)
-    - [BulkBannerModal.tsx](./src/components/BulkBannerModal.tsx)
-    - [ApiKeyModal.tsx](./src/components/ApiKeyModal.tsx)
+- BulkBannerModal / FootballBannerModal:
+  - Em uso em `/app` (lote, Top 10 e jogos do dia) — premium/admin
+  - Fontes: [BulkBannerModal.tsx](./src/components/BulkBannerModal.tsx), [FootballBannerModal.tsx](./src/components/FootballBannerModal.tsx)
+
+- BannerModal / ApiKeyModal:
+  - Legado no repo; fluxo atual não depende deles.
+  - Fontes: [BannerModal.tsx](./src/components/BannerModal.tsx), [ApiKeyModal.tsx](./src/components/ApiKeyModal.tsx)
 
 ## Persistência (localStorage)
 
@@ -443,6 +422,14 @@ npm run dev:api
 npm run dev
 ```
 
-Frontend (Vite): `http://localhost:8080/` (ver [vite.config.ts](./vite.config.ts))
+Frontend (Vite): `http://localhost:5173/` (ver [vite.config.ts](./vite.config.ts))
+
+DB: `server/db/schema.sql` (referência completa) + migrations em `server/db/migrations/` (`npm run db:migrate`, também no boot da API).
 
 Observação: a API usa variáveis de ambiente em `.env` (não versionadas). Em dev, configure `VITE_API_BASE_URL` para apontar para a API, caso ela rode em outra porta/host.
+
+## Idioma (i18n)
+
+- UI do produto é **PT-BR primeiro** (maioria dos textos hardcoded em português).
+- `I18nContext` oferece `pt-BR` / `en-US` parcial (Header/menus/auth).
+- i18n completo da aplicação fica fora do escopo P2.

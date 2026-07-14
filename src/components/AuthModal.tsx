@@ -80,7 +80,7 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent variant="compact" className="sm:max-w-md">
+      <DialogContent variant="compact" className="sm:max-w-md" data-testid="auth-modal">
         <DialogHeader>
           <DialogTitle>{mode === 'login' ? t('auth.login') : t('auth.register')}</DialogTitle>
         </DialogHeader>

@@ -8,6 +8,7 @@ import {
   getAuthToken,
   setAuthToken,
   setCachedAuthUserRaw,
+  type ApiError,
 } from '../services/apiClient';
 import { historyService } from '../services/historyService';
 
@@ -234,7 +235,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const canSearch = (): boolean => {
     if (!user) {
-      // Guest user - check daily limit
+      // Guest: busca na API exige login; limite local só como defesa residual.
       const guestSearches = parseInt(localStorage.getItem('guestSearches') || '0');
       const lastSearchDate = localStorage.getItem('lastGuestSearchDate');
       const today = new Date().toDateString();
@@ -248,25 +249,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return guestSearches < 3;
     }
 
-    // Logged in users
-    if (user.type === 'admin' || (user.type === 'premium' && user.isActive)) {
+    if (user.type === 'admin' || user.type === 'premium') {
       return true;
     }
 
-    // Free users have no daily limit, but no bulk features
-    return true;
+    // Free: alinhado ao FREE_DAILY_SEARCH_LIMIT do servidor (50/dia, data YYYY-MM-DD UTC).
+    const todayUtc = new Date().toISOString().slice(0, 10);
+    const last = typeof user.lastSearchDate === 'string' ? user.lastSearchDate.slice(0, 10) : '';
+    const count = last === todayUtc ? (user.dailySearches || 0) : 0;
+    return count < 50;
   };
 
   const incrementSearch = () => {
     if (!user) {
-      // Guest user
       const guestSearches = parseInt(localStorage.getItem('guestSearches') || '0');
       localStorage.setItem('guestSearches', (guestSearches + 1).toString());
-    } else {
-      // Logged in user (cache local)
-      const today = new Date().toDateString();
-      if (user.lastSearchDate !== today) {
-        updateCachedUser({ dailySearches: 1, lastSearchDate: today });
+    } else if (user.type === 'free') {
+      const todayUtc = new Date().toISOString().slice(0, 10);
+      if (user.lastSearchDate !== todayUtc) {
+        updateCachedUser({ dailySearches: 1, lastSearchDate: todayUtc });
       } else {
         updateCachedUser({ dailySearches: (user.dailySearches || 0) + 1 });
       }

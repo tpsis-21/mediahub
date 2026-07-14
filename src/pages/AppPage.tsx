@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useState, useMemo, Component, type ReactNode } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { Download, Loader2, Moon, Sun, Settings, LogOut, UserCog, ShieldCheck, Sparkles } from "lucide-react";
+import { MEDIAHUB_EVENTS, mediaHubUi, onMediaHubEvent } from "../lib/mediahub-events";
 
 import SearchForm from "../components/SearchForm";
 import MovieCard from "../components/MovieCard";
@@ -142,68 +143,56 @@ const AppPage = () => {
     if (!user) return;
 
     setSearchHistory(historyService.getHistory());
-    const handleHistoryUpdated = () => setSearchHistory(historyService.getHistory());
-    window.addEventListener("mediahub:historyUpdated", handleHistoryUpdated);
-    return () => window.removeEventListener("mediahub:historyUpdated", handleHistoryUpdated);
+    return onMediaHubEvent(MEDIAHUB_EVENTS.historyUpdated, () => setSearchHistory(historyService.getHistory()));
   }, [user, authLoading, navigate]);
 
   // Listeners for global modals
   useEffect(() => {
-    const openAuthModal = () => setShowAuthModal(true);
-    const openAdminModal = () => navigate("/admin");
-    const openUserAreaModal = () => setShowUserAreaModal(true);
-
-    window.addEventListener("mediahub:openAuthModal", openAuthModal);
-    window.addEventListener("mediahub:openAdminModal", openAdminModal);
-    window.addEventListener("mediahub:openUserAreaModal", openUserAreaModal);
-    const openTop10BannerModal = () => {
-      if (!isPremiumUser) {
-        toast({
-          title: isPremiumExpired() ? "Assinatura expirada" : "Recurso Premium",
-          description: isPremiumExpired()
-            ? "Gerar Top 10 está indisponível porque sua assinatura Premium expirou."
-            : "Gerar Top 10 está disponível apenas para contas Premium.",
-          variant: "destructive",
-          action: (
-            <ToastAction altText="Ver plano" onClick={() => window.dispatchEvent(new Event("mediahub:openUserAreaModal"))}>
-              Ver plano
-            </ToastAction>
-          ),
-        });
-        return;
-      }
-      setShowTop10BannerModal(true);
-    };
-    window.addEventListener("mediahub:openTop10BannerModal", openTop10BannerModal);
-    const openFootballBannerModal = () => {
-      if (!isPremiumUser) {
-        toast({
-          title: isPremiumExpired() ? "Assinatura expirada" : "Recurso Premium",
-          description: isPremiumExpired()
-            ? "Gerar Banner de Futebol está indisponível porque sua assinatura Premium expirou."
-            : "Gerar Banner de Futebol está disponível apenas para contas Premium.",
-          variant: "destructive",
-          action: (
-            <ToastAction altText="Ver plano" onClick={() => window.dispatchEvent(new Event("mediahub:openUserAreaModal"))}>
-              Ver plano
-            </ToastAction>
-          ),
-        });
-        return;
-      }
-      setShowFootballBannerModal(true);
-    };
-    window.addEventListener("mediahub:openFootballBannerModal", openFootballBannerModal);
-    const openSupportModal = () => setShowSupportModal(true);
-    window.addEventListener("mediahub:openSupportModal", openSupportModal);
+    const offs = [
+      onMediaHubEvent(MEDIAHUB_EVENTS.openAuthModal, () => setShowAuthModal(true)),
+      onMediaHubEvent(MEDIAHUB_EVENTS.openAdminModal, () => navigate("/admin")),
+      onMediaHubEvent(MEDIAHUB_EVENTS.openUserAreaModal, () => setShowUserAreaModal(true)),
+      onMediaHubEvent(MEDIAHUB_EVENTS.openTop10BannerModal, () => {
+        if (!isPremiumUser) {
+          toast({
+            title: isPremiumExpired() ? "Assinatura expirada" : "Recurso Premium",
+            description: isPremiumExpired()
+              ? "Gerar Top 10 está indisponível porque sua assinatura Premium expirou."
+              : "Gerar Top 10 está disponível apenas para contas Premium.",
+            variant: "destructive",
+            action: (
+              <ToastAction altText="Ver plano" onClick={() => mediaHubUi.openUserArea()}>
+                Ver plano
+              </ToastAction>
+            ),
+          });
+          return;
+        }
+        setShowTop10BannerModal(true);
+      }),
+      onMediaHubEvent(MEDIAHUB_EVENTS.openFootballBannerModal, () => {
+        if (!isPremiumUser) {
+          toast({
+            title: isPremiumExpired() ? "Assinatura expirada" : "Recurso Premium",
+            description: isPremiumExpired()
+              ? "Gerar Banner de Futebol está indisponível porque sua assinatura Premium expirou."
+              : "Gerar Banner de Futebol está disponível apenas para contas Premium.",
+            variant: "destructive",
+            action: (
+              <ToastAction altText="Ver plano" onClick={() => mediaHubUi.openUserArea()}>
+                Ver plano
+              </ToastAction>
+            ),
+          });
+          return;
+        }
+        setShowFootballBannerModal(true);
+      }),
+      onMediaHubEvent(MEDIAHUB_EVENTS.openSupportModal, () => setShowSupportModal(true)),
+    ];
 
     return () => {
-      window.removeEventListener("mediahub:openAuthModal", openAuthModal);
-      window.removeEventListener("mediahub:openAdminModal", openAdminModal);
-      window.removeEventListener("mediahub:openUserAreaModal", openUserAreaModal);
-      window.removeEventListener("mediahub:openTop10BannerModal", openTop10BannerModal);
-      window.removeEventListener("mediahub:openFootballBannerModal", openFootballBannerModal);
-      window.removeEventListener("mediahub:openSupportModal", openSupportModal);
+      for (const off of offs) off();
     };
   }, [isPremiumExpired, isPremiumUser, navigate, toast]);
 
@@ -217,7 +206,7 @@ const AppPage = () => {
 
   const openSearchConfig = () => {
     if (!user) {
-      window.dispatchEvent(new Event("mediahub:openAuthModal"));
+      mediaHubUi.openAuth();
       return;
     }
 
@@ -226,11 +215,11 @@ const AppPage = () => {
       return;
     }
 
-    window.dispatchEvent(new Event("mediahub:openUserAreaModal"));
+    mediaHubUi.openUserArea();
   };
 
   const openAuth = () => {
-    window.dispatchEvent(new Event("mediahub:openAuthModal"));
+    mediaHubUi.openAuth();
   };
 
   const openUserArea = () => {
@@ -242,7 +231,7 @@ const AppPage = () => {
       navigate("/admin");
       return;
     }
-    window.dispatchEvent(new Event("mediahub:openUserAreaModal"));
+    mediaHubUi.openUserArea();
   };
 
   const brandGradient = useMemo(() => {
@@ -276,7 +265,7 @@ const AppPage = () => {
         description: `${featureLabel} é um recurso Premium. Faça login para continuar.`,
         variant: "destructive",
         action: (
-          <ToastAction altText="Fazer login" onClick={() => window.dispatchEvent(new Event("mediahub:openAuthModal"))}>
+          <ToastAction altText="Fazer login" onClick={() => mediaHubUi.openAuth()}>
             Fazer login
           </ToastAction>
         ),
@@ -316,7 +305,7 @@ const AppPage = () => {
       description: `Para ${activityLabel}, crie uma conta ou faça login.`,
       variant: "destructive",
       action: (
-        <ToastAction altText="Fazer login" onClick={() => window.dispatchEvent(new Event("mediahub:openAuthModal"))}>
+        <ToastAction altText="Fazer login" onClick={() => mediaHubUi.openAuth()}>
           Fazer login
         </ToastAction>
       ),
@@ -583,7 +572,7 @@ const AppPage = () => {
                   </div>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => window.dispatchEvent(new Event("mediahub:openUserAreaModal"))}>
+                <DropdownMenuItem onClick={() => mediaHubUi.openUserArea()}>
                   <UserCog className="mr-2 h-4 w-4" />
                   <span>{t("user.area")}</span>
                 </DropdownMenuItem>

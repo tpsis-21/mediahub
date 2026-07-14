@@ -130,6 +130,7 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading, bulkPreset
             </p>
             <div className="flex space-x-2">
               <Input
+                data-testid="search-query-input"
                 placeholder={t('search.placeholder')}
                 value={individualQuery}
                 onChange={(e) => setIndividualQuery(e.target.value)}

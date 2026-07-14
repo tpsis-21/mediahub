@@ -29,3 +29,9 @@ dist-ssr
 # Large local assets (keep only the images needed by the app)
 anexos/*.mp4
 anexos/*.webm
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/

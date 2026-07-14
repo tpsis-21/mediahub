@@ -18,6 +18,7 @@ import {
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from './ui/sheet';
+import { MEDIAHUB_EVENTS, onMediaHubEvent } from '../lib/mediahub-events';
 
 const AuthModal = lazy(() => import('./AuthModal'));
 const UserAreaModal = lazy(() => import('./UserAreaModal'));
@@ -32,18 +33,13 @@ const Header: React.FC = () => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   useEffect(() => {
-    const openAuthModal = () => setShowAuthModal(true);
-    const openAdminModal = () => navigate('/admin');
-    const openUserAreaModal = () => setShowUserAreaModal(true);
-
-    window.addEventListener('mediahub:openAuthModal', openAuthModal);
-    window.addEventListener('mediahub:openAdminModal', openAdminModal);
-    window.addEventListener('mediahub:openUserAreaModal', openUserAreaModal);
-
+    const offAuth = onMediaHubEvent(MEDIAHUB_EVENTS.openAuthModal, () => setShowAuthModal(true));
+    const offAdmin = onMediaHubEvent(MEDIAHUB_EVENTS.openAdminModal, () => navigate('/admin'));
+    const offUserArea = onMediaHubEvent(MEDIAHUB_EVENTS.openUserAreaModal, () => setShowUserAreaModal(true));
     return () => {
-      window.removeEventListener('mediahub:openAuthModal', openAuthModal);
-      window.removeEventListener('mediahub:openAdminModal', openAdminModal);
-      window.removeEventListener('mediahub:openUserAreaModal', openUserAreaModal);
+      offAuth();
+      offAdmin();
+      offUserArea();
     };
   }, [navigate]);
 
@@ -220,7 +216,13 @@ const Header: React.FC = () => {
             </Sheet>
 
             {/* Language Toggle */}
-            <Button variant="ghost" size="icon" onClick={() => setLanguage(language === 'pt-BR' ? 'en-US' : 'pt-BR')} className="hidden sm:inline-flex">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setLanguage(language === 'pt-BR' ? 'en-US' : 'pt-BR')}
+              className="hidden sm:inline-flex"
+              aria-label={language === 'pt-BR' ? 'Mudar idioma para inglês' : 'Switch language to Portuguese'}
+            >
               <Globe className="h-4 w-4" />
             </Button>
 

@@ -1,3 +1,6 @@
+-- Referência completa do schema (bootstrap de ambiente novo).
+-- Evoluções incrementais: server/db/migrations/ (npm run db:migrate / boot da API).
+
 create extension if not exists "pgcrypto";
 
 create table if not exists app_users (
@@ -86,3 +89,30 @@ create table if not exists football_schedules (
 );
 
 create index if not exists idx_football_schedules_date on football_schedules (schedule_date desc);
+
+create table if not exists tickets (
+  id serial primary key,
+  user_id uuid not null references app_users(id) on delete cascade,
+  subject text not null,
+  status text not null default 'open',
+  priority text not null default 'medium',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_tickets_user_updated on tickets (user_id, updated_at desc);
+
+create table if not exists ticket_messages (
+  id serial primary key,
+  ticket_id integer not null references tickets(id) on delete cascade,
+  user_id uuid not null references app_users(id) on delete cascade,
+  message text not null,
+  is_admin boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_ticket_messages_ticket on ticket_messages (ticket_id, created_at);
+
+insert into app_settings (key, value)
+values ('tickets_enabled', 'true')
+on conflict (key) do nothing;

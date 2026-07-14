@@ -3,6 +3,11 @@ import React, { createContext, useContext, useState, ReactNode } from 'react';
 
 type Language = 'pt-BR' | 'en-US';
 
+/**
+ * i18n parcial: produto é PT-BR primeiro.
+ * en-US cobre sobretudo Header/menus/auth; demais telas seguem em português.
+ */
+
 interface I18nContextType {
   language: Language;
   setLanguage: (lang: Language) => void;

@@ -29,6 +29,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { ticketService } from "@/services/ticketService";
 import { Button } from "@/components/ui/button";
+import { MEDIAHUB_EVENTS, mediaHubUi, onMediaHubEvent } from "@/lib/mediahub-events";
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { theme } = useTheme();
@@ -38,7 +39,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
   const appGradient = "linear-gradient(135deg, hsl(var(--primary)), hsl(var(--accent)))";
 
-  const openUserArea = () => window.dispatchEvent(new Event("mediahub:openUserAreaModal"));
+  const openUserArea = () => mediaHubUi.openUserArea();
   const isPremiumUser = isPremiumActive();
 
   const planName = useMemo(() => {
@@ -78,14 +79,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         if (active) setTicketsEnabled(Boolean(enabled));
       })
       .catch(() => {});
-    const onChanged = (e: Event) => {
-      const val = (e as CustomEvent<{ enabled: boolean }>).detail?.enabled;
-      if (typeof val === "boolean") setTicketsEnabled(val);
-    };
-    window.addEventListener("mediahub:ticketsSettingsChanged", onChanged as EventListener);
+    const offTickets = onMediaHubEvent(MEDIAHUB_EVENTS.ticketsSettingsChanged, (detail) => {
+      if (typeof detail?.enabled === "boolean") setTicketsEnabled(detail.enabled);
+    });
     return () => {
       active = false;
-      window.removeEventListener("mediahub:ticketsSettingsChanged", onChanged as EventListener);
+      offTickets();
     };
   }, []);
 
@@ -142,9 +141,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                       openUserArea();
                       return;
                     }
-                    window.dispatchEvent(new Event("mediahub:openFootballBannerModal"));
+                    mediaHubUi.openFootball();
                   }}
                   tooltip="Gerar Banner Futebol"
+                  data-testid="sidebar-football-banner"
                 >
                   <CalendarDays />
                   <span>Gerar Banner Futebol</span>
@@ -157,9 +157,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                       openUserArea();
                       return;
                     }
-                    window.dispatchEvent(new Event("mediahub:openTop10BannerModal"));
+                    mediaHubUi.openTop10();
                   }}
                   tooltip="Gerar Banner Top 10"
+                  data-testid="sidebar-top10-banner"
                 >
                   <Trophy />
                   <span>Gerar Banner Top 10</span>
@@ -176,7 +177,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               {(user?.type === 'admin' || ticketsEnabled) && (
                 <SidebarMenuItem>
                   <SidebarMenuButton 
-                    onClick={() => window.dispatchEvent(new Event("mediahub:openSupportModal"))}
+                    onClick={() => mediaHubUi.openSupport()}
                     tooltip="Suporte & Tickets"
                   >
                     <LifeBuoy />

@@ -16,9 +16,22 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:auth": "playwright test e2e/auth-app.spec.ts e2e/ui-smoke.spec.ts",
+    "test:e2e:ui": "playwright test --ui",
+    "check:local": "node scripts/check-local.mjs",
+    "smoke:staging": "node scripts/smoke-staging.mjs",
+    "wait:api": "node scripts/wait-api.mjs",
     "preview": "vite preview",
     "start": "node server/server.mjs",
-    "reset:admin-password": "node scripts/reset-admin-password.mjs"
+    "reset:admin-password": "node scripts/reset-admin-password.mjs",
+    "list:users": "node --env-file=.env scripts/list-users.mjs",
+    "db:migrate": "node --env-file=.env scripts/db-migrate.mjs",
+    "typecheck:lib": "tsc -p tsconfig.lib.json --noEmit",
+    "telegram:set-webhook": "node --env-file=.env telegram-bot/scripts/set-webhook.mjs",
+    "telegram:poll": "node --env-file=.env telegram-bot/scripts/poll.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",
@@ -50,7 +63,6 @@
     "@radix-ui/react-toggle": "^1.1.0",
     "@radix-ui/react-toggle-group": "^1.1.0",
     "@radix-ui/react-tooltip": "^1.1.4",
-    "@tanstack/react-query": "^5.56.2",
     "cheerio": "^1.2.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -86,6 +98,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.9.0",
+    "@playwright/test": "^1.52.0",
     "@tailwindcss/typography": "^0.5.15",
     "@types/node": "^22.5.5",
     "@types/react": "^18.3.3",
@@ -102,6 +115,7 @@
     "tailwindcss": "^3.4.11",
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.0.1",
-    "vite": "^5.4.1"
+    "vite": "^5.4.1",
+    "vitest": "^3.2.7"
   }
 }

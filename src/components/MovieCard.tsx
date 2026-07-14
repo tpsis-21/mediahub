@@ -73,13 +73,15 @@ const MovieCard: React.FC<MovieCardProps> = ({ movie, isSelected, onToggleSelect
 
   return (
     <>
-      <Card className="group glass-effect card-hover shadow-lg">
+      <Card className="group glass-effect card-hover shadow-lg" data-testid="movie-card">
         <CardContent className="p-4">
           <div className="flex items-start justify-between mb-3">
             <Button
               variant="ghost"
               size="sm"
               onClick={onToggleSelect}
+              aria-pressed={isSelected}
+              aria-label={isSelected ? `Desmarcar ${title}` : `Selecionar ${title}`}
               className="p-1 h-auto hover:bg-blue-50 dark:hover:bg-blue-900"
             >
               {isSelected ? <CheckSquare className="h-5 w-5 text-blue-600" /> : <Square className="h-5 w-5 text-gray-400 hover:text-blue-600" />}
@@ -132,6 +134,7 @@ const MovieCard: React.FC<MovieCardProps> = ({ movie, isSelected, onToggleSelect
               onClick={() => setShowActionsModal(true)}
               className="w-full sm:w-auto flex items-center justify-center gap-2 text-xs"
               aria-label={`Abrir ações de ${title}`}
+              data-testid="movie-card-actions"
             >
               <Send className="h-3 w-3" />
               <span>Ações</span>

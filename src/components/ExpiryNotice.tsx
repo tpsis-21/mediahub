@@ -1,5 +1,5 @@
-
 import React from 'react';
+import { mediaHubUi } from '../lib/mediahub-events';
 import { useAuth } from '../contexts/AuthContext';
 import { AlertTriangle, Crown } from 'lucide-react';
 import { Alert, AlertDescription } from './ui/alert';
@@ -52,7 +52,7 @@ const ExpiryNotice: React.FC = () => {
             <Button 
               size="sm" 
               className="mt-2 bg-gradient-to-r from-yellow-500 to-yellow-600 hover:from-yellow-600 hover:to-yellow-700 text-white"
-              onClick={() => window.dispatchEvent(new Event("mediahub:openUserAreaModal"))}
+              onClick={() => mediaHubUi.openUserArea()}
             >
               {isExpired ? 'Renovar Agora' : 'Renovar Premium'}
             </Button>

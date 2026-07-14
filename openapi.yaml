@@ -46,11 +46,13 @@ paths:
   /api/health:
     get:
       tags: [health]
-      summary: Health check
+      summary: Health check (DB SELECT 1)
       security: []
       responses:
         "200":
-          description: OK
+          description: API e banco OK
+        "503":
+          description: Banco indisponível
 
   /api/search/status:
     get:
@@ -65,8 +67,7 @@ paths:
     get:
       tags: [search]
       summary: Busca multi, filme ou série
-      description: Token opcional (melhora uso de chaves por usuário).
-      security: []
+      description: Requer autenticação. Usa chaves do usuário e/ou do sistema.
       parameters:
         - in: query
           name: type
@@ -95,6 +96,8 @@ paths:
           description: Payload no formato do provedor (ex. TMDb-like)
         "400":
           description: Consulta inválida
+        "401":
+          description: Não autenticado
         "429":
           description: Rate limit
 
@@ -102,7 +105,7 @@ paths:
     get:
       tags: [search]
       summary: Vídeos (trailers) do título
-      security: []
+      description: Requer autenticação.
       parameters:
         - in: query
           name: mediaType
@@ -123,6 +126,8 @@ paths:
           description: Lista de vídeos
         "400":
           description: Dados inválidos
+        "401":
+          description: Não autenticado
 
   /api/search/details:
     get:
@@ -168,7 +173,7 @@ paths:
     get:
       tags: [search]
       summary: Proxy de imagem do provedor
-      security: []
+      description: Requer autenticação (Bearer ou cookie auth_token).
       parameters:
         - in: query
           name: path
@@ -190,6 +195,8 @@ paths:
       responses:
         "200":
           description: Binário imagem
+        "401":
+          description: Não autenticado
 
   /api/trailer/download:
     post:
@@ -355,26 +362,61 @@ paths:
     get:
       tags: [football]
       summary: Proxy de escudo (imagem)
-      security: []
+      description: Requer autenticação premium/admin.
       parameters:
         - in: query
           name: url
           required: true
           schema:
             type: string
-            maxLength: 800
+            maxLength: 3000
       responses:
         "200":
           description: Imagem
+        "401":
+          description: Não autenticado
+        "403":
+          description: Sem plano elegível
+    post:
+      tags: [football]
+      summary: Proxy de escudo via POST (URLs longas)
+      description: Requer autenticação premium/admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url:
+                  type: string
+                  maxLength: 16384
+      responses:
+        "200":
+          description: Imagem
+        "401":
+          description: Não autenticado
+        "403":
+          description: Sem plano elegível
 
   /api/football/schedule/refresh:
     get:
       tags: [football]
-      summary: Dispara/atualiza coleta (cron interno)
-      security: []
+      summary: Dispara/atualiza coleta (premium/admin)
+      description: Requer autenticação premium/admin. Admin também tem POST /api/admin/football/refresh.
+      parameters:
+        - in: query
+          name: date
+          schema:
+            type: string
+            format: date
       responses:
         "200":
           description: OK
+        "401":
+          description: Não autenticado
+        "403":
+          description: Sem plano elegível
 
   /api/assets/image:
     get:

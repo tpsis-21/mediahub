@@ -40,6 +40,14 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
   const [phone, setPhone] = useState(user?.phone || '');
   const [website, setWebsite] = useState(user?.website || '');
   const [telegramChatId, setTelegramChatId] = useState(user?.telegramChatId || '');
+  const [isLinkCodeLoading, setIsLinkCodeLoading] = useState(false);
+  const [botLink, setBotLink] = useState<{
+    code: string;
+    deepLink: string;
+    startCommand: string;
+    expiresAt: string;
+    botUsername: string;
+  } | null>(null);
   const [searchIntegrationKey, setSearchIntegrationKey] = useState('');
   const [clearSearchIntegrationKey, setClearSearchIntegrationKey] = useState(false);
   const [searchConfigured, setSearchConfigured] = useState<boolean | null>(null);
@@ -98,6 +106,40 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
   useEffect(() => {
     setTelegramChatId(user?.telegramChatId || '');
   }, [user?.telegramChatId]);
+
+  const handleGenerateBotLink = async () => {
+    if (isLinkCodeLoading) return;
+    setIsLinkCodeLoading(true);
+    try {
+      const payload = await apiRequest<{
+        code: string;
+        deepLink: string;
+        startCommand: string;
+        expiresAt: string;
+        botUsername: string;
+      }>({
+        path: '/api/telegram/bot/link-code',
+        method: 'POST',
+        auth: true,
+      });
+      setBotLink({
+        code: payload.code,
+        deepLink: payload.deepLink || '',
+        startCommand: payload.startCommand,
+        expiresAt: payload.expiresAt,
+        botUsername: payload.botUsername || '',
+      });
+      toast({
+        title: 'Código gerado',
+        description: 'Abra o link ou envie o comando /start no bot (válido por alguns minutos).',
+      });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Não foi possível gerar o código.';
+      toast({ title: 'Falha ao vincular', description: message, variant: 'destructive' });
+    } finally {
+      setIsLinkCodeLoading(false);
+    }
+  };
 
   const handlePrimaryColorChange = (value: string) => {
     colorsDirtyRef.current = true;
@@ -919,8 +961,54 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
                     <Badge variant="secondary">Alteração pendente de salvar</Badge>
                   )}
                 </div>
+
+                <div className="rounded-md border border-muted-foreground/20 bg-muted/20 px-3 py-3 space-y-3">
+                  <div className="text-sm font-medium">Vincular bot (recomendado)</div>
+                  <p className="text-sm text-muted-foreground">
+                    Gere um código, abra o bot e confirme. O chat fica ligado à sua conta automaticamente.
+                  </p>
+                  <Button type="button" variant="outline" onClick={() => void handleGenerateBotLink()} disabled={isLinkCodeLoading}>
+                    {isLinkCodeLoading ? 'Gerando…' : 'Gerar código de vínculo'}
+                  </Button>
+                  {botLink && (
+                    <div className="space-y-2 text-sm">
+                      <div>
+                        Código: <code className="rounded bg-background px-1 py-0.5">{botLink.code}</code>
+                      </div>
+                      <div className="text-muted-foreground text-xs">
+                        Expira em {new Date(botLink.expiresAt).toLocaleString('pt-BR')}
+                      </div>
+                      {botLink.deepLink ? (
+                        <a
+                          href={botLink.deepLink}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-primary underline underline-offset-2 break-all"
+                        >
+                          Abrir bot e vincular
+                        </a>
+                      ) : (
+                        <p className="text-muted-foreground">
+                          No Telegram, envie: <code className="rounded bg-background px-1">{botLink.startCommand}</code>
+                        </p>
+                      )}
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          void navigator.clipboard.writeText(botLink.deepLink || botLink.startCommand);
+                          toast({ title: 'Copiado' });
+                        }}
+                      >
+                        Copiar link / comando
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
                 <div className="grid gap-2">
-                  <Label htmlFor="telegramChatId">ID do Telegram (chat_id)</Label>
+                  <Label htmlFor="telegramChatId">ID do Telegram (chat_id) — manual</Label>
                   <Input
                     id="telegramChatId"
                     value={telegramChatId}
@@ -941,9 +1029,8 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
                       : 'Nenhum chat_id configurado no momento.'}
                   </div>
                   <p className="text-sm text-muted-foreground">
-                    Para descobrir seu ID: no Telegram, abra o bot @userinfobot, toque em Start e copie o ID exibido.
-                    Para grupos/canais, adicione o bot no chat e repita (IDs podem começar com -100).
-                    Depois de salvar aqui, abra o bot que vai enviar as mensagens e toque em Iniciar (/start). Sem isso o Telegram pode bloquear o recebimento.
+                    Alternativa manual: descubra o ID com @userinfobot, cole aqui e salve o perfil.
+                    Depois envie /start no bot para poder receber mensagens.
                   </p>
                 </div>
               </CardContent>

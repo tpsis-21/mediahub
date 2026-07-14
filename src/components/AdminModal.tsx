@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { BarChart3, CalendarDays, Eye, EyeOff, Key, Pencil, Plus, Settings, Trash2, Users, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { mediaHubUi } from '../lib/mediahub-events';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -430,7 +431,7 @@ const AdminModal: React.FC<AdminModalProps> = ({ onClose, mode }) => {
       body: { allowRegistrations: allowNewRegistrations, ticketsEnabled: enabled },
     })
       .then(() => {
-        window.dispatchEvent(new CustomEvent('mediahub:ticketsSettingsChanged', { detail: { enabled } }));
+        mediaHubUi.ticketsSettingsChanged(enabled);
         toast({
           title: 'Configuração atualizada',
           description: `Tickets ${enabled ? 'habilitados' : 'desabilitados'}.`,

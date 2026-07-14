@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
+import { mediaHubUi } from '../lib/mediahub-events';
 import { ArrowLeft, Copy, Download, Image, Loader2, Play, RefreshCw, Send } from 'lucide-react';
 import { MovieData, searchService } from '../services/searchService';
 import type { TrailerBrandingOptions, TrailerBrandingStage } from '../services/exportService';
@@ -48,7 +49,7 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
       action: (
         <ToastAction
           altText="Fazer login"
-          onClick={() => window.dispatchEvent(new Event('mediahub:openAuthModal'))}
+          onClick={() => mediaHubUi.openAuth()}
         >
           Fazer login
         </ToastAction>
@@ -169,24 +170,24 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
 
   const openSearchConfig = useCallback(() => {
     if (!user) {
-      window.dispatchEvent(new Event('mediahub:openAuthModal'));
+      mediaHubUi.openAuth();
       return;
     }
 
     if (user.type === 'admin') {
-      window.dispatchEvent(new Event('mediahub:openAdminModal'));
+      mediaHubUi.openAdmin();
       return;
     }
 
-    window.dispatchEvent(new Event('mediahub:openUserAreaModal'));
+    mediaHubUi.openUserArea();
   }, [user]);
 
   const openTelegramConfig = useCallback(() => {
     if (!user) {
-      window.dispatchEvent(new Event('mediahub:openAuthModal'));
+      mediaHubUi.openAuth();
       return;
     }
-    window.dispatchEvent(new Event('mediahub:openUserAreaModal'));
+    mediaHubUi.openUserArea();
   }, [user]);
 
   const buildTelegramText = (args: { includeSynopsis: boolean; includeTrailer: boolean; trailerUrl: string }) => {
@@ -943,6 +944,7 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
                             openTelegramComposer('cover');
                           }}
                           className="sm:min-w-[130px] justify-center"
+                          data-testid="movie-actions-telegram"
                         >
                           Telegram
                         </Button>
@@ -1001,6 +1003,7 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
                                 setShowBannerInline((prev) => !prev);
                               }}
                               className="sm:min-w-[130px] justify-center"
+                              data-testid="movie-actions-banner"
                             >
                               {showBannerInline ? 'Ocultar' : 'Criar'}
                             </Button>
@@ -1046,6 +1049,7 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
                                 setShowVideoInline((prev) => !prev);
                               }}
                               className="sm:min-w-[130px] justify-center"
+                              data-testid="movie-actions-video"
                             >
                               {showVideoInline ? 'Ocultar' : 'Criar'}
                             </Button>
@@ -1053,7 +1057,7 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
                         </div>
 
                         {showVideoInline && (
-                          <div className="mt-4 border-t pt-4 space-y-4">
+                          <div className="mt-4 border-t pt-4 space-y-4" data-testid="movie-actions-video-panel">
                             <div className="rounded-md border p-4 space-y-4">
                               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                 <div className="text-sm font-medium">Trailer</div>
@@ -1478,7 +1482,7 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
                   )}
 
                   {showTelegramInline && (
-                    <div className="rounded-xl border bg-card p-4">
+                    <div className="rounded-xl border bg-card p-4" data-testid="movie-actions-telegram-panel">
                       <div className="flex items-center justify-between gap-2">
                         <div className="font-medium">Telegram {telegramPurpose === 'video' ? '— Trailer' : '— Capa'}</div>
                         <Button type="button" variant="outline" size="sm" onClick={closeTelegramComposer} disabled={isSendingTelegram}>
@@ -1491,7 +1495,7 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
                           <div className="rounded-md border bg-muted/40 p-3 text-sm text-foreground">
                             Faça login para enviar via Telegram.
                             <div className="mt-2">
-                              <Button type="button" variant="outline" onClick={() => window.dispatchEvent(new Event('mediahub:openAuthModal'))}>
+                              <Button type="button" variant="outline" onClick={() => mediaHubUi.openAuth()}>
                                 Fazer login
                               </Button>
                             </div>
@@ -1684,7 +1688,11 @@ const MovieActionsModal: React.FC<MovieActionsModalProps> = ({ movie, imageUrl, 
         onClose();
       }}
     >
-      <DialogContent variant="complex" className="sm:max-w-3xl lg:max-w-5xl overflow-hidden p-0">
+      <DialogContent
+        variant="complex"
+        className="sm:max-w-3xl lg:max-w-5xl overflow-hidden p-0"
+        data-testid="movie-actions-modal"
+      >
         {content}
       </DialogContent>
     </Dialog>

@@ -9,6 +9,7 @@ import { Badge } from "../components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "../components/ui/accordion";
 import { Archive, ArrowRight, BadgeCheck, Crown, Layers, Palette, Send, Sparkles, Wand2 } from "lucide-react";
+import { mediaHubUi } from "../lib/mediahub-events";
 
 const Index = () => {
   const navigate = useNavigate();
@@ -22,7 +23,7 @@ const Index = () => {
   }, [user, authLoading, navigate]);
 
   const openAuth = () => {
-    window.dispatchEvent(new Event('mediahub:openAuthModal'));
+    mediaHubUi.openAuth();
   };
 
   const examples = [
@@ -88,7 +89,7 @@ const Index = () => {
                   <Badge variant="outline">Seu workspace por conta</Badge>
                 </div>
 
-                <h1 className="text-2xl sm:text-4xl font-semibold tracking-tight">
+                <h1 className="text-2xl sm:text-4xl font-semibold tracking-tight" data-testid="landing-hero-title">
                   MediaHub: artes prontas para publicar em poucos cliques
                 </h1>
                 <p className="text-sm sm:text-base text-muted-foreground max-w-2xl">
@@ -96,7 +97,7 @@ const Index = () => {
                 </p>
 
                 <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
-                  <Button type="button" onClick={openAuth} className="gap-2 sm:w-auto">
+                  <Button type="button" onClick={openAuth} className="gap-2 sm:w-auto" data-testid="landing-cta-register">
                     Criar conta grátis
                     <ArrowRight className="h-4 w-4" />
                   </Button>

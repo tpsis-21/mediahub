@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { mediaHubUi } from '../lib/mediahub-events';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -82,7 +83,7 @@ const SupportModal: React.FC<SupportModalProps> = ({ isOpen, onClose }) => {
     }
     setIsSending(true);
     try {
-      await ticketService.createTicket({ subject: newSubject, message: newInitialMessage, priority: 'medium' });
+      await ticketService.createTicket({ subject: newSubject, message: newInitialMessage });
       toast({ title: 'Sucesso', description: 'Ticket criado com sucesso.' });
       setIsCreating(false);
       setNewSubject('');
@@ -141,7 +142,7 @@ const SupportModal: React.FC<SupportModalProps> = ({ isOpen, onClose }) => {
       const next = !systemEnabled;
       await ticketService.updateSettings(next);
       setSystemEnabled(next);
-      window.dispatchEvent(new CustomEvent('mediahub:ticketsSettingsChanged', { detail: { enabled: next } }));
+      mediaHubUi.ticketsSettingsChanged(next);
       try {
         const settings = await ticketService.getSettings();
         setSystemEnabled(Boolean(settings.enabled));

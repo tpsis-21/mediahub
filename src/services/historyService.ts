@@ -1,6 +1,7 @@
 
 import { MovieData } from './searchService';
 import { apiRequest, getAuthToken, getCachedAuthUserRaw } from './apiClient';
+import { mediaHubUi } from '../lib/mediahub-events';
 
 export interface SearchHistoryItem {
   id: string;
@@ -15,8 +16,7 @@ class HistoryService {
   private readonly maxItems = 10;
 
   private notifyUpdated(): void {
-    if (typeof window === 'undefined') return;
-    window.dispatchEvent(new Event('mediahub:historyUpdated'));
+    mediaHubUi.historyUpdated();
   }
 
   private getCurrentUserId(): string | null {

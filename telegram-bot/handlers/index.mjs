@@ -16,7 +16,7 @@ import {
  * @param {object} ctx
  */
 export const createHandlers = (ctx) => {
-  const { api, sessions, pairing, services } = ctx
+  const { api, sessions, pairing, services, banners } = ctx
 
   const requireSession = async (chatId) => {
     const session = await sessions.getByChatId(chatId)
@@ -151,8 +151,15 @@ export const createHandlers = (ctx) => {
       return
     }
     const parts = String(args || '').trim().split(/\s+/).filter(Boolean)
-    const wantRefresh = parts[0]?.toLowerCase() === 'atualizar' || parts[0]?.toLowerCase() === 'refresh'
-    const dateArg = wantRefresh ? parts[1] : parts[0]
+    const cmd = (parts[0] || '').toLowerCase()
+    const wantRefresh = cmd === 'atualizar' || cmd === 'refresh'
+    const wantGenerate = cmd === 'gerar' || cmd === 'banner' || cmd === 'png'
+    const dateArg = wantRefresh || wantGenerate ? parts[1] : parts[0]
+
+    if (wantGenerate) {
+      await generateFootballBanner({ chatId, session, dateArg })
+      return
+    }
 
     if (wantRefresh) {
       await api.sendMessage(chatId, 'Atualizando agenda…')
@@ -176,6 +183,108 @@ export const createHandlers = (ctx) => {
     } catch (e) {
       console.error('[telegram-bot] football', e)
       await api.sendMessage(chatId, 'Não foi possível carregar os jogos.')
+    }
+  }
+
+  const generateFootballBanner = async ({ chatId, session, dateArg }) => {
+    if (!banners?.renderFootballBanner || !api.sendPhotoBuffer) {
+      await api.sendMessage(chatId, 'Geração de banner indisponível neste servidor.')
+      return
+    }
+    await api.sendMessage(chatId, 'Gerando banner dos jogos…')
+    try {
+      const { date, matches } = await services.getFootballSchedule(dateArg)
+      const brand = (await services.getUserBrand(session.userId)) || {}
+      const png = await banners.renderFootballBanner({
+        dateIso: date,
+        matches,
+        brandName: brand.brandName,
+        primary: brand.primary,
+        secondary: brand.secondary,
+      })
+      await api.sendPhotoBuffer(chatId, png, {
+        filename: `jogos-${date}.png`,
+        caption: `Jogos do dia · ${date}`,
+      })
+    } catch (e) {
+      console.error('[telegram-bot] football banner', e)
+      await api.sendMessage(chatId, 'Falha ao gerar o banner. Tente de novo em instantes.')
+    }
+  }
+
+  const generateTitleBanner = async ({ chatId, session, item }) => {
+    if (!banners?.renderTitleBanner || !api.sendPhotoBuffer) {
+      await api.sendMessage(chatId, 'Geração de banner indisponível neste servidor.')
+      return
+    }
+    await api.sendMessage(chatId, 'Gerando banner…')
+    try {
+      const brand = (await services.getUserBrand(session.userId)) || {}
+      const posterUrl = await services.buildPosterUrl(item.posterPath)
+      const png = await banners.renderTitleBanner({
+        title: item.title,
+        year: item.year,
+        overview: item.overview,
+        posterUrl,
+        brandName: brand.brandName,
+        primary: brand.primary,
+        secondary: brand.secondary,
+      })
+      await api.sendPhotoBuffer(chatId, png, {
+        filename: 'banner-titulo.png',
+        caption: `<b>${escapeHtml(item.title)}</b>${item.year ? ` (${escapeHtml(item.year)})` : ''}`,
+        parse_mode: 'HTML',
+      })
+    } catch (e) {
+      console.error('[telegram-bot] title banner', e)
+      await api.sendMessage(chatId, 'Falha ao gerar o banner.')
+    }
+  }
+
+  const handleTop10 = async ({ chatId, args }) => {
+    const session = await requireSession(chatId)
+    if (!session) return
+    if (!isPremiumOrAdmin(session.user.type)) {
+      await api.sendMessage(chatId, 'Top 10 é exclusivo Premium. Veja /conta.')
+      return
+    }
+    if (!banners?.renderTop10Banner || !api.sendPhotoBuffer) {
+      await api.sendMessage(chatId, 'Geração de banner indisponível neste servidor.')
+      return
+    }
+    const raw = String(args || '').trim().toLowerCase()
+    const mediaType = raw === 'filme' || raw === 'movie' ? 'movie' : raw === 'serie' || raw === 'série' || raw === 'tv' ? 'tv' : 'all'
+    const label = mediaType === 'movie' ? 'Top 10 Filmes' : mediaType === 'tv' ? 'Top 10 Séries' : 'Top 10'
+    await api.sendMessage(chatId, `Gerando ${label}…`)
+    try {
+      const trending = await services.getTrending({ userId: session.userId, mediaType })
+      if (!trending.ok) {
+        await api.sendMessage(chatId, trending.message || 'Não foi possível carregar o ranking.')
+        return
+      }
+      const brand = (await services.getUserBrand(session.userId)) || {}
+      const items = []
+      for (const it of trending.items) {
+        items.push({
+          title: it.title,
+          year: it.year,
+          posterUrl: await services.buildPosterUrl(it.posterPath),
+        })
+      }
+      const png = await banners.renderTop10Banner({
+        items,
+        categoryLabel: label,
+        brandName: brand.brandName,
+        primary: brand.primary,
+        secondary: brand.secondary || '#DC2626',
+      })
+      await api.sendPhotoBuffer(chatId, png, {
+        filename: 'top10.png',
+        caption: label,
+      })
+    } catch (e) {
+      console.error('[telegram-bot] top10', e)
+      await api.sendMessage(chatId, 'Falha ao gerar o Top 10.')
     }
   }
 
@@ -280,6 +389,8 @@ export const createHandlers = (ctx) => {
         await handleHistory({ chatId })
       } else if (data === 'menu:football') {
         await handleFootball({ chatId, args: '' })
+      } else if (data === 'menu:top10') {
+        await handleTop10({ chatId, args: '' })
       } else if (data === 'menu:support') {
         await handleSupportStart({ chatId })
       } else if (data.startsWith('pick:')) {
@@ -309,9 +420,22 @@ export const createHandlers = (ctx) => {
             await api.sendMessage(chatId, `${caption}\n(sem capa disponível)`)
           }
         }
+      } else if (data.startsWith('banner:')) {
+        const idx = Number(data.slice(7))
+        const item = session.context?.results?.[idx]
+        if (!item) {
+          await api.sendMessage(chatId, 'Resultado expirado. Busque de novo.')
+        } else if (!isPremiumOrAdmin(session.user.type)) {
+          await api.sendMessage(chatId, 'Banner de título é exclusivo Premium. Veja /conta.')
+        } else {
+          await generateTitleBanner({ chatId, session, item })
+        }
       } else if (data.startsWith('fb:refresh:')) {
         const dateIso = data.slice('fb:refresh:'.length)
         await handleFootball({ chatId, args: `atualizar ${dateIso}` })
+      } else if (data.startsWith('fb:gen:')) {
+        const dateIso = data.slice('fb:gen:'.length)
+        await generateFootballBanner({ chatId, session, dateArg: dateIso })
       }
     } finally {
       try {
@@ -331,6 +455,7 @@ export const createHandlers = (ctx) => {
     handleSearchCommand,
     handleHistory,
     handleFootball,
+    handleTop10,
     handleSupportStart,
     handleTickets,
     handleCancel,

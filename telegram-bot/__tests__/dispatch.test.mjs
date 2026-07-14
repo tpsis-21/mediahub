@@ -31,6 +31,7 @@ describe('telegram-bot dispatch parse', () => {
       handleSearchCommand: async (p) => calls.push(['search', p]),
       handleHistory: async () => {},
       handleFootball: async () => {},
+      handleTop10: async () => {},
       handleSupportStart: async () => {},
       handleTickets: async () => {},
       handleCancel: async () => {},

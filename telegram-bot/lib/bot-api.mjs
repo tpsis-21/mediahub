@@ -1,5 +1,5 @@
 /**
- * Cliente fino da Bot API (JSON).
+ * Cliente fino da Bot API (JSON + multipart para arquivos).
  * @param {{ getTelegramBotToken: () => Promise<string> }} deps
  */
 export const createBotApi = (deps) => {
@@ -16,6 +16,28 @@ export const createBotApi = (deps) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body || {}),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || data?.ok === false) {
+      const err = new Error(data?.description || `Bot API ${method} falhou`)
+      err.code = 'TELEGRAM_API_ERROR'
+      err.status = res.status
+      err.payload = data
+      throw err
+    }
+    return data
+  }
+
+  const callMultipart = async (method, form) => {
+    const token = await getTelegramBotToken()
+    if (!token) {
+      const err = new Error('Telegram não configurado.')
+      err.code = 'TELEGRAM_NOT_CONFIGURED'
+      throw err
+    }
+    const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+      method: 'POST',
+      body: form,
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok || data?.ok === false) {
@@ -46,6 +68,30 @@ export const createBotApi = (deps) => {
       reply_markup: extra.reply_markup,
     })
 
+  /** Envia PNG/JPEG a partir de Buffer (Fase 2 banners). */
+  const sendPhotoBuffer = async (chatId, buffer, extra = {}) => {
+    const form = new FormData()
+    form.append('chat_id', String(chatId))
+    form.append('photo', new Blob([buffer], { type: 'image/png' }), extra.filename || 'banner.png')
+    if (extra.caption) form.append('caption', extra.caption)
+    if (extra.parse_mode) form.append('parse_mode', extra.parse_mode)
+    if (extra.reply_markup) form.append('reply_markup', JSON.stringify(extra.reply_markup))
+    return callMultipart('sendPhoto', form)
+  }
+
+  const sendDocumentBuffer = async (chatId, buffer, extra = {}) => {
+    const form = new FormData()
+    form.append('chat_id', String(chatId))
+    form.append(
+      'document',
+      new Blob([buffer], { type: extra.contentType || 'application/octet-stream' }),
+      extra.filename || 'file.bin',
+    )
+    if (extra.caption) form.append('caption', extra.caption)
+    if (extra.parse_mode) form.append('parse_mode', extra.parse_mode)
+    return callMultipart('sendDocument', form)
+  }
+
   const answerCallbackQuery = (callbackQueryId, text) =>
     call('answerCallbackQuery', {
       callback_query_id: callbackQueryId,
@@ -55,5 +101,13 @@ export const createBotApi = (deps) => {
 
   const getMe = () => call('getMe', {})
 
-  return { call, sendMessage, sendPhoto, answerCallbackQuery, getMe }
+  return {
+    call,
+    sendMessage,
+    sendPhoto,
+    sendPhotoBuffer,
+    sendDocumentBuffer,
+    answerCallbackQuery,
+    getMe,
+  }
 }

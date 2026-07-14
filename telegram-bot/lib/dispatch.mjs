@@ -67,6 +67,10 @@ export const createDispatch = (handlers) => {
         case '/football':
           await handlers.handleFootball({ chatId, args: command.args })
           return
+        case '/top10':
+        case '/ranking':
+          await handlers.handleTop10({ chatId, args: command.args })
+          return
         case '/suporte':
         case '/support':
           await handlers.handleSupportStart({ chatId })

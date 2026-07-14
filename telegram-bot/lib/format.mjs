@@ -13,7 +13,10 @@ export const mainMenuKeyboard = (userType) => {
     [{ text: '🎫 Suporte', callback_data: 'menu:support' }, { text: '👤 Conta', callback_data: 'menu:account' }],
   ]
   if (userType === 'premium' || userType === 'admin') {
-    rows.splice(1, 0, [{ text: '⚽ Jogos do dia', callback_data: 'menu:football' }])
+    rows.splice(1, 0, [
+      { text: '⚽ Jogos do dia', callback_data: 'menu:football' },
+      { text: '🏆 Top 10', callback_data: 'menu:top10' },
+    ])
   }
   return { inline_keyboard: rows }
 }
@@ -32,9 +35,15 @@ export const helpText = (userType) => {
     '/ajuda — esta mensagem',
   ]
   if (userType === 'premium' || userType === 'admin') {
-    lines.splice(5, 0, '/futebol [AAAA-MM-DD] — jogos do dia', '/futebol atualizar — atualiza a agenda')
+    lines.splice(
+      5,
+      0,
+      '/futebol [AAAA-MM-DD] — jogos do dia',
+      '/futebol gerar — banner PNG dos jogos',
+      '/top10 [filme|serie|all] — ranking em banner',
+    )
   }
-  lines.push('', 'Banners no chat entram na próxima fase (ainda use a web).')
+  lines.push('', 'Após buscar, use 🖼️ Banner no título escolhido.')
   return lines.join('\n')
 }
 
@@ -78,15 +87,6 @@ export const searchPickKeyboard = (count) => {
   return { inline_keyboard: rows }
 }
 
-export const titleActionsKeyboard = (index) => ({
-  inline_keyboard: [
-    [
-      { text: '📷 Enviar capa', callback_data: `send:${index}` },
-      { text: '◀️ Voltar', callback_data: 'menu:search' },
-    ],
-  ],
-})
-
 export const formatFootballList = (dateIso, matches, { limit = 40 } = {}) => {
   const list = Array.isArray(matches) ? matches.slice(0, limit) : []
   if (!list.length) {
@@ -103,7 +103,7 @@ export const formatFootballList = (dateIso, matches, { limit = 40 } = {}) => {
     ...lines,
     more,
     '',
-    'Gerar banner: ainda pela web (Fase 2 no bot).',
+    'Gerar banner PNG: toque em 🖼️ Gerar banner.',
   ]
     .filter((l) => l !== undefined)
     .join('\n')
@@ -113,8 +113,19 @@ export const footballKeyboard = (dateIso) => ({
   inline_keyboard: [
     [
       { text: '🔄 Atualizar', callback_data: `fb:refresh:${dateIso}` },
-      { text: '📋 Menu', callback_data: 'menu:home' },
+      { text: '🖼️ Gerar banner', callback_data: `fb:gen:${dateIso}` },
     ],
+    [{ text: '📋 Menu', callback_data: 'menu:home' }],
+  ],
+})
+
+export const titleActionsKeyboard = (index) => ({
+  inline_keyboard: [
+    [
+      { text: '📷 Enviar capa', callback_data: `send:${index}` },
+      { text: '🖼️ Banner', callback_data: `banner:${index}` },
+    ],
+    [{ text: '◀️ Voltar', callback_data: 'menu:search' }],
   ],
 })
 

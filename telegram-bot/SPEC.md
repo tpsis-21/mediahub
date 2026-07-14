@@ -286,10 +286,12 @@ Data: 14/07/2026 · 16 jogos
 
 ### Fase 2 — Banners no bot
 
-- [ ] Extrair/portar render para Node (`server/lib/banner-render/`)
-- [ ] `/banner`, `/top10`, `/futebol` gerando PNG
-- [ ] Envio via `sendPhoto` / `sendMediaGroup` / `sendDocument`
-- [ ] Paridade visual mínima com a web (amostra QA)
+- [x] Render Node (`telegram-bot/lib/banner-render.mjs` + `@napi-rs/canvas`)
+- [x] `/futebol gerar` + botão 🖼️ Gerar banner
+- [x] Banner de título após busca (`🖼️ Banner`) — Premium
+- [x] `/top10` — Premium
+- [x] Envio via `sendPhoto` (multipart Buffer)
+- [ ] Paridade visual 1:1 com templates web (melhoria contínua)
 
 ### Fase 3 — Admin + ops
 

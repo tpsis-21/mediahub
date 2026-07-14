@@ -915,6 +915,9 @@ registerTelegramBot(app, {
   isPlaceholderFootballTeamCrestUrl,
   getTicketsEnabled,
   deactivateExpiredPremiumByUserId,
+  normalizeTrendingPayload,
+  createCanvas,
+  loadImage,
 })
 
 registerMeRoutes(app, {

@@ -3,6 +3,7 @@
  * Monta rotas na API Express sem misturar com telegram-routes (envio outbound).
  */
 import { createBotApi } from './lib/bot-api.mjs'
+import { createBannerRenderer } from './lib/banner-render.mjs'
 import { isTelegramBotEnabled, getWebhookSecret, getAppUrl } from './lib/config.mjs'
 import { createDispatch } from './lib/dispatch.mjs'
 import { createPairingService } from './lib/pairing.mjs'
@@ -41,11 +42,18 @@ export const registerTelegramBot = (app, deps) => {
     isPlaceholderFootballTeamCrestUrl,
     getTicketsEnabled,
     deactivateExpiredPremiumByUserId,
+    normalizeTrendingPayload,
+    createCanvas,
+    loadImage,
   } = deps
 
   const sessions = createSessionStore({ query })
   const pairing = createPairingService({ query })
   const api = createBotApi({ getTelegramBotToken })
+  const banners =
+    typeof createCanvas === 'function'
+      ? createBannerRenderer({ createCanvas, loadImage })
+      : null
   const services = createBotServices({
     query,
     pool,
@@ -69,8 +77,9 @@ export const registerTelegramBot = (app, deps) => {
     isPlaceholderFootballTeamCrestUrl,
     getTicketsEnabled,
     deactivateExpiredPremiumByUserId,
+    normalizeTrendingPayload,
   })
-  const handlers = createHandlers({ api, sessions, pairing, services })
+  const handlers = createHandlers({ api, sessions, pairing, services, banners })
   const { handleUpdate } = createDispatch(handlers)
 
   const processUpdateSafe = async (update) => {

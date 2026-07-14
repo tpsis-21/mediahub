@@ -25,6 +25,7 @@ export const createBotServices = (deps) => {
     isPlaceholderFootballTeamCrestUrl,
     getTicketsEnabled,
     deactivateExpiredPremiumByUserId,
+    normalizeTrendingPayload,
   } = deps
 
   const loadUserKey = async (userId) => {
@@ -256,6 +257,71 @@ export const createBotServices = (deps) => {
     }
   }
 
+  const getUserBrand = async (userId) => {
+    const result = await query(
+      `
+      select name, brand_name, brand_colors, brand_logo, type
+      from app_users
+      where id = $1
+      limit 1
+      `,
+      [userId],
+    )
+    const row = result.rows[0]
+    if (!row) return null
+    const colors = row.brand_colors && typeof row.brand_colors === 'object' ? row.brand_colors : {}
+    return {
+      brandName: (typeof row.brand_name === 'string' && row.brand_name.trim()) || row.name || 'MediaHub',
+      primary: typeof colors.primary === 'string' ? colors.primary : '#0F172A',
+      secondary: typeof colors.secondary === 'string' ? colors.secondary : '#1D4ED8',
+      brandLogo: typeof row.brand_logo === 'string' ? row.brand_logo : '',
+      type: row.type,
+    }
+  }
+
+  const getTrending = async ({ userId, mediaType = 'all' }) => {
+    const profile = await loadUserKey(userId)
+    if (!profile) return { ok: false, message: 'Conta indisponível.', items: [] }
+    const settingsKeys = await getSearchProviderSettingsKeys()
+    const apiKeys = uniqStrings([profile.userKey, ...settingsKeys])
+    const type = mediaType === 'movie' || mediaType === 'tv' ? mediaType : 'all'
+    try {
+      const cacheKey = `bot-trending:${type}:week:pt-BR`
+      let payload = getSearchProviderCache(cacheKey)
+      if (!payload) {
+        const raw = await fetchSearchProviderJson({
+          path: `/trending/${type}/week`,
+          params: { language: 'pt-BR' },
+          apiKeys,
+        })
+        payload = typeof normalizeTrendingPayload === 'function' ? normalizeTrendingPayload(raw, type) : raw
+        setSearchProviderCache({ key: cacheKey, data: payload, ttlMs: 10 * 60_000, maxEntries: 50 })
+      }
+      const results = Array.isArray(payload?.results) ? payload.results : Array.isArray(payload) ? payload : []
+      const items = results.slice(0, 10).map((r) => {
+        const media = r.media_type === 'tv' || type === 'tv' ? 'tv' : 'movie'
+        const title = media === 'tv' ? r.name || r.original_name : r.title || r.original_title
+        const date = media === 'tv' ? r.first_air_date : r.release_date
+        const year = typeof date === 'string' && date.length >= 4 ? date.slice(0, 4) : ''
+        return {
+          id: r.id,
+          mediaType: media,
+          title: String(title || 'Sem título').trim(),
+          year,
+          posterPath: typeof r.poster_path === 'string' ? r.poster_path : '',
+        }
+      })
+      return { ok: true, items }
+    } catch (e) {
+      const status = typeof e?.status === 'number' ? e.status : e?.code === 'SEARCH_PROVIDER_NOT_CONFIGURED' ? 503 : 502
+      return {
+        ok: false,
+        message: getSearchProviderErrorMessage({ userType: profile.type, status, code: e?.code }),
+        items: [],
+      }
+    }
+  }
+
   return {
     searchTitles,
     buildPosterUrl,
@@ -264,5 +330,7 @@ export const createBotServices = (deps) => {
     refreshFootball,
     listTickets,
     createTicket,
+    getUserBrand,
+    getTrending,
   }
 }

@@ -36,6 +36,10 @@ npm run telegram:poll
 - `/futebol` (lista texto) + atualizar (premium/admin)
 - `/suporte` + `/tickets`
 
-## Fase 2 (ainda não)
+## Fase 2 (implementada)
 
-Banners PNG no chat — ver `SPEC.md` §7.
+- `/futebol gerar` + botão **Gerar banner** → PNG dos jogos
+- Após busca: botão **Banner** → PNG do título (Premium)
+- `/top10 [filme|serie|all]` → PNG ranking (Premium)
+
+Layouts são versões Node simplificadas (não clonam 100% os 3 kits web).

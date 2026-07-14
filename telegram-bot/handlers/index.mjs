@@ -59,6 +59,16 @@ export const createHandlers = (ctx) => {
       })
       return
     }
+    // Fallback: perfil já tem chat_id (Minha Área) mas ainda sem sessão conversacional
+    const ensured = await sessions.ensureFromUserChatId(chatId)
+    if (ensured) {
+      await api.sendMessage(
+        chatId,
+        `Conta reconhecida: <b>${escapeHtml(ensured.user.name || ensured.user.email)}</b>.\nUse /menu para começar.`,
+        { reply_markup: mainMenuKeyboard(ensured.user.type) },
+      )
+      return
+    }
     await api.sendMessage(chatId, unlinkNeedText())
   }
 

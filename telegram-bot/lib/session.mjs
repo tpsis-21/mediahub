@@ -5,29 +5,15 @@
 export const createSessionStore = (deps) => {
   const { query } = deps
 
-  const getByChatId = async (chatId) => {
-    const id = String(chatId || '').trim()
-    if (!id) return null
-    const result = await query(
-      `
-      select s.chat_id, s.user_id, s.state, s.context, s.updated_at,
-             u.email, u.name, u.type, u.is_active, u.subscription_end, u.telegram_chat_id
-      from telegram_bot_sessions s
-      join app_users u on u.id = s.user_id
-      where s.chat_id = $1
-      limit 1
-      `,
-      [id],
-    )
-    const row = result.rows[0]
+  const mapRow = (row) => {
     if (!row || !row.is_active) return null
     return {
-      chatId: row.chat_id,
-      userId: row.user_id,
+      chatId: row.chat_id || row.telegram_chat_id,
+      userId: row.user_id || row.id,
       state: typeof row.state === 'string' ? row.state : 'linked',
       context: row.context && typeof row.context === 'object' ? row.context : {},
       user: {
-        id: row.user_id,
+        id: row.user_id || row.id,
         email: row.email,
         name: row.name,
         type: row.type,
@@ -50,6 +36,49 @@ export const createSessionStore = (deps) => {
       `,
       [String(chatId), userId, state, JSON.stringify(context || {})],
     )
+  }
+
+  /**
+   * Se já existe telegram_chat_id no perfil (vínculo manual na Minha Área),
+   * cria a sessão do bot automaticamente.
+   */
+  const ensureFromUserChatId = async (chatId) => {
+    const id = String(chatId || '').trim()
+    if (!id) return null
+    const result = await query(
+      `
+      select id as user_id, email, name, type, is_active, subscription_end, telegram_chat_id
+      from app_users
+      where telegram_chat_id = $1
+        and is_active = true
+      order by updated_at desc nulls last
+      limit 1
+      `,
+      [id],
+    )
+    const row = result.rows[0]
+    if (!row) return null
+    await upsert({ chatId: id, userId: row.user_id, state: 'linked', context: {} })
+    return getByChatId(id)
+  }
+
+  const getByChatId = async (chatId) => {
+    const id = String(chatId || '').trim()
+    if (!id) return null
+    const result = await query(
+      `
+      select s.chat_id, s.user_id, s.state, s.context, s.updated_at,
+             u.email, u.name, u.type, u.is_active, u.subscription_end, u.telegram_chat_id
+      from telegram_bot_sessions s
+      join app_users u on u.id = s.user_id
+      where s.chat_id = $1
+      limit 1
+      `,
+      [id],
+    )
+    const mapped = mapRow(result.rows[0])
+    if (mapped) return mapped
+    return ensureFromUserChatId(id)
   }
 
   const patch = async (chatId, { state, context, mergeContext = true }) => {
@@ -75,5 +104,5 @@ export const createSessionStore = (deps) => {
     await query(`delete from telegram_bot_sessions where chat_id = $1`, [String(chatId)])
   }
 
-  return { getByChatId, upsert, patch, remove }
+  return { getByChatId, upsert, patch, remove, ensureFromUserChatId }
 }

@@ -10,6 +10,8 @@ import {
   mainMenuKeyboard,
   resolveNavAction,
   NAV,
+  historyText,
+  historyKeyboard,
 } from '../lib/format.mjs'
 
 describe('telegram-bot format', () => {

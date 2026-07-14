@@ -1,8 +1,8 @@
 # MediaHub — Bot Telegram (especificação)
 
-**Status:** Bot conversacional com login/cadastro no chat (sem web obrigatória). Banners e trailer no chat.  
-**Data:** 2026-07-13  
-**Objetivo:** expor **todas** as funcionalidades da aplicação MediaHub via conversa no Telegram, reutilizando a API Express existente.
+**Status:** Bot-first — a maioria das operações deve funcionar só no Telegram; a web é complementar (admin avançado / branding fino).  
+**Data:** 2026-07-14  
+**Objetivo:** MediaHub completo via conversa no Telegram (conta, mídia, banners, suporte e ops admin frequentes).
 
 ---
 

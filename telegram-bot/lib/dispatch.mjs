@@ -92,10 +92,13 @@ export const createDispatch = (handlers) => {
           return
         case '/suporte':
         case '/support':
-          await handlers.handleSupportStart({ chatId })
+          await handlers.handleSupportHub({ chatId })
           return
         case '/tickets':
           await handlers.handleTickets({ chatId })
+          return
+        case '/admin':
+          await handlers.handleAdminTickets({ chatId })
           return
         case '/cancelar':
         case '/cancel':

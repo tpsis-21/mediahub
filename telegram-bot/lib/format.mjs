@@ -144,20 +144,107 @@ export const accountKeyboard = (userType) => {
   return { inline_keyboard: rows }
 }
 
-export const supportHubText = () =>
-  [
+export const supportHubText = (userType) => {
+  if (userType === 'admin') {
+    return [
+      '<b>Suporte</b>',
+      '',
+      'Atendimento 100% pelo bot — sem precisar abrir o site.',
+      'Escolha uma opção:',
+    ].join('\n')
+  }
+  return [
     '<b>Suporte</b>',
     '',
-    'Como podemos ajudar?',
+    'Abra um chamado ou acompanhe as respostas aqui no chat.',
   ].join('\n')
+}
 
-export const supportHubKeyboard = () => ({
-  inline_keyboard: [
+export const supportHubKeyboard = (userType) => {
+  const rows = [
     [{ text: 'Abrir chamado', callback_data: 'menu:support' }],
     [{ text: 'Meus chamados', callback_data: 'menu:tickets' }],
-    rowMenu(),
-  ],
-})
+  ]
+  if (userType === 'admin') {
+    rows.push([{ text: 'Fila de atendimento', callback_data: 'admin:tickets' }])
+    rows.push([{ text: 'Liberar Premium', callback_data: 'admin:premium' }])
+  }
+  rows.push(rowMenu())
+  return { inline_keyboard: rows }
+}
+
+export const ticketsListKeyboard = (rows, { admin = false } = {}) => {
+  const buttons = (rows || []).slice(0, 10).map((t) => ({
+    text: `#${t.id} · ${String(t.status || '').slice(0, 12)}`,
+    callback_data: admin ? `tkt:admin:${t.id}` : `tkt:view:${t.id}`,
+  }))
+  const kb = []
+  for (let i = 0; i < buttons.length; i += 2) {
+    kb.push(buttons.slice(i, i + 2))
+  }
+  if (!admin) kb.push([{ text: 'Abrir chamado', callback_data: 'menu:support' }])
+  else kb.push([{ text: 'Atualizar fila', callback_data: 'admin:tickets' }])
+  kb.push(rowMenu())
+  return { inline_keyboard: kb }
+}
+
+export const ticketDetailText = ({ ticket, messages, isAdminView = false }) => {
+  const status = escapeHtml(ticket.status || '—')
+  const subject = escapeHtml(ticket.subject || '—')
+  const who = isAdminView
+    ? `${escapeHtml(ticket.user_name || '—')} · ${escapeHtml(ticket.user_email || '')}`
+    : ''
+  const lines = [
+    `<b>Chamado #${ticket.id}</b>`,
+    `Status: <b>${status}</b>`,
+    `Assunto: ${subject}`,
+    who ? `Cliente: ${who}` : '',
+    '',
+    '<b>Mensagens</b>',
+  ].filter(Boolean)
+
+  const msgs = Array.isArray(messages) ? messages.slice(-12) : []
+  if (!msgs.length) {
+    lines.push('<i>Sem mensagens.</i>')
+  } else {
+    for (const m of msgs) {
+      const role = m.is_admin ? 'Equipe' : 'Cliente'
+      const body = escapeHtml(String(m.message || '').slice(0, 400))
+      lines.push(`• <b>${role}</b>: ${body}`)
+    }
+  }
+  return lines.join('\n')
+}
+
+export const ticketDetailKeyboard = ({ ticketId, isAdminView = false }) => {
+  const rows = [[{ text: 'Responder', callback_data: `tkt:reply:${ticketId}` }]]
+  if (isAdminView) {
+    rows.push([
+      { text: 'Em andamento', callback_data: `tkt:status:${ticketId}:in_progress` },
+      { text: 'Resolver', callback_data: `tkt:status:${ticketId}:resolved` },
+    ])
+    rows.push([{ text: 'Fila', callback_data: 'admin:tickets' }])
+  } else {
+    rows.push([{ text: 'Meus chamados', callback_data: 'menu:tickets' }])
+  }
+  rows.push(rowMenu())
+  return { inline_keyboard: rows }
+}
+
+export const ticketsText = (rows, { admin = false } = {}) => {
+  if (!rows.length) {
+    return admin
+      ? ['<b>Fila de atendimento</b>', '', 'Nenhum chamado no momento.'].join('\n')
+      : ['<b>Meus chamados</b>', '', 'Nenhum chamado aberto.'].join('\n')
+  }
+  const lines = rows.map((t) => {
+    const client = admin && t.user_email ? ` · ${escapeHtml(t.user_email)}` : ''
+    return `#${t.id} · ${escapeHtml(t.status)} · <b>${escapeHtml(t.subject)}</b>${client}`
+  })
+  return [admin ? '<b>Fila de atendimento</b>' : '<b>Meus chamados</b>', '', ...lines, '', 'Toque em um chamado:'].join(
+    '\n',
+  )
+}
 
 export const lockedFeatureKeyboard = () => ({
   inline_keyboard: [
@@ -624,23 +711,6 @@ export const historyKeyboard = (count = 0) => {
   return { inline_keyboard: rows }
 }
 
-export const ticketsText = (rows) => {
-  if (!rows.length) {
-    return ['<b>Meus chamados</b>', '', 'Nenhum chamado aberto.'].join('\n')
-  }
-  const lines = rows.map(
-    (t) => `#${t.id} · ${escapeHtml(t.status)} · <b>${escapeHtml(t.subject)}</b>`,
-  )
-  return ['<b>Meus chamados</b>', '', ...lines].join('\n')
-}
-
-export const ticketsKeyboard = () => ({
-  inline_keyboard: [
-    [{ text: 'Abrir chamado', callback_data: 'menu:support' }],
-    rowMenu(),
-  ],
-})
-
 export const BOT_COMMANDS = [
   { command: 'start', description: 'Início / boas-vindas' },
   { command: 'menu', description: 'Menu principal' },
@@ -648,7 +718,7 @@ export const BOT_COMMANDS = [
   { command: 'historico', description: 'Últimas buscas' },
   { command: 'conta', description: 'Minha conta e plano' },
   { command: 'planos', description: 'Comparar planos' },
-  { command: 'suporte', description: 'Abrir chamado' },
+  { command: 'suporte', description: 'Suporte e chamados' },
   { command: 'ajuda', description: 'Central de ajuda' },
   { command: 'entrar', description: 'Entrar na conta' },
   { command: 'sair', description: 'Sair deste chat' },

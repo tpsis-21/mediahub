@@ -25,8 +25,10 @@ import {
   searchPromptText,
   supportHubKeyboard,
   supportHubText,
-  ticketsKeyboard,
+  ticketsListKeyboard,
   ticketsText,
+  ticketDetailKeyboard,
+  ticketDetailText,
   titleActionsKeyboard,
   titleDetailText,
   top10HubKeyboard,
@@ -93,12 +95,115 @@ export const createHandlers = (ctx) => {
     })
   }
 
+  const notifyAdminsNewTicket = async ({ ticketId, subject, message, userName, userEmail }) => {
+    const targets = await services.listAdminTelegramTargets()
+    const text = [
+      '<b>Novo chamado</b>',
+      `#${ticketId} · ${escapeHtml(subject)}`,
+      `De: ${escapeHtml(userName || '—')} · ${escapeHtml(userEmail || '')}`,
+      '',
+      escapeHtml(String(message || '').slice(0, 500)),
+    ].join('\n')
+    for (const target of targets) {
+      try {
+        await api.sendMessage(target, text, {
+          reply_markup: ticketDetailKeyboard({ ticketId, isAdminView: true }),
+        })
+      } catch (e) {
+        console.error('[telegram-bot] notify admin ticket', target, e?.message || e)
+      }
+    }
+  }
+
+  const notifyUserTicketUpdate = async ({ userId, ticketId, message, statusLabel }) => {
+    const chatId = await services.getUserTelegramChatId(userId)
+    if (!chatId) return
+    const text = [
+      `<b>Atualização do chamado #${ticketId}</b>`,
+      statusLabel ? `Status: ${escapeHtml(statusLabel)}` : '',
+      message ? `\n${escapeHtml(String(message).slice(0, 800))}` : '',
+      '',
+      'Responda por aqui no bot se precisar.',
+    ]
+      .filter(Boolean)
+      .join('\n')
+    try {
+      await api.sendMessage(chatId, text, {
+        reply_markup: ticketDetailKeyboard({ ticketId, isAdminView: false }),
+      })
+    } catch (e) {
+      console.error('[telegram-bot] notify user ticket', e?.message || e)
+    }
+  }
+
   const handleSupportHub = async ({ chatId }) => {
     const session = await requireSession(chatId)
     if (!session) return
-    await api.sendMessage(chatId, supportHubText(), {
-      reply_markup: supportHubKeyboard(),
+    await api.sendMessage(chatId, supportHubText(session.user.type), {
+      reply_markup: supportHubKeyboard(session.user.type),
     })
+  }
+
+  const openTicketView = async ({ chatId, session, ticketId, forceAdmin = false }) => {
+    const detail = await services.getTicketDetail({
+      ticketId,
+      requesterUserId: session.userId,
+      requesterType: session.user.type,
+    })
+    if (!detail.ok) {
+      await api.sendMessage(chatId, detail.message || 'Chamado não encontrado.', {
+        reply_markup: supportHubKeyboard(session.user.type),
+      })
+      return
+    }
+    const isAdminView = forceAdmin || detail.isAdmin
+    await api.sendMessage(
+      chatId,
+      ticketDetailText({
+        ticket: detail.ticket,
+        messages: detail.messages,
+        isAdminView,
+      }),
+      { reply_markup: ticketDetailKeyboard({ ticketId: detail.ticket.id, isAdminView }) },
+    )
+  }
+
+  const handleAdminTickets = async ({ chatId }) => {
+    const session = await requireSession(chatId)
+    if (!session) return
+    if (session.user.type !== 'admin') {
+      await api.sendMessage(chatId, 'Acesso restrito à equipe.')
+      return
+    }
+    const rows = await services.listAdminTickets({ limit: 12 })
+    await api.sendMessage(chatId, ticketsText(rows, { admin: true }), {
+      reply_markup: ticketsListKeyboard(rows, { admin: true }),
+    })
+  }
+
+  const handleAdminPremiumStart = async ({ chatId }) => {
+    const session = await requireSession(chatId)
+    if (!session) return
+    if (session.user.type !== 'admin') {
+      await api.sendMessage(chatId, 'Acesso restrito à equipe.')
+      return
+    }
+    await sessions.patch(chatId, {
+      state: 'awaiting_admin_premium_email',
+      context: {},
+      mergeContext: false,
+    })
+    await api.sendMessage(
+      chatId,
+      [
+        '<b>Liberar Premium</b>',
+        '',
+        'Envie o <b>e-mail</b> do cliente.',
+        'Opcional na mesma linha: dias (padrão 30).',
+        'Ex.: <code>cliente@email.com 60</code>',
+      ].join('\n'),
+      { reply_markup: cancelKeyboard() },
+    )
   }
 
   const handleTop10Hub = async ({ chatId }) => {
@@ -555,7 +660,7 @@ export const createHandlers = (ctx) => {
     if (!session) return
     const rows = await services.listTickets(session.userId)
     await api.sendMessage(chatId, ticketsText(rows), {
-      reply_markup: ticketsKeyboard(),
+      reply_markup: ticketsListKeyboard(rows),
     })
   }
 
@@ -777,7 +882,7 @@ export const createHandlers = (ctx) => {
       const subject = session.context?.ticketSubject
       if (!subject || message.length < 3) {
         await api.sendMessage(chatId, 'Mensagem inválida. Abra o suporte novamente.', {
-          reply_markup: supportHubKeyboard(),
+          reply_markup: supportHubKeyboard(session.user.type),
         })
         await sessions.patch(chatId, { state: 'linked', context: {}, mergeContext: false })
         return true
@@ -790,15 +895,122 @@ export const createHandlers = (ctx) => {
       await sessions.patch(chatId, { state: 'linked', context: {}, mergeContext: false })
       if (!created.ok) {
         await api.sendMessage(chatId, created.message || 'Não foi possível abrir o chamado.', {
-          reply_markup: supportHubKeyboard(),
+          reply_markup: supportHubKeyboard(session.user.type),
         })
         return true
       }
       await api.sendMessage(
         chatId,
-        `Chamado <b>#${created.id}</b> aberto.\nNossa equipe retorna em breve.`,
-        { reply_markup: supportHubKeyboard() },
+        [
+          `Chamado <b>#${created.id}</b> aberto.`,
+          'A equipe recebe o aviso neste bot e responde por aqui.',
+        ].join('\n'),
+        { reply_markup: supportHubKeyboard(session.user.type) },
       )
+      void notifyAdminsNewTicket({
+        ticketId: created.id,
+        subject,
+        message,
+        userName: created.userName || session.user.name,
+        userEmail: created.userEmail || session.user.email,
+      })
+      return true
+    }
+
+    if (session.state === 'awaiting_ticket_reply') {
+      const ticketId = session.context?.ticketId
+      const asAdmin = Boolean(session.context?.replyAsAdmin)
+      const message = text.trim().slice(0, 2000)
+      if (!ticketId || message.length < 1) {
+        await api.sendMessage(chatId, 'Resposta inválida.', {
+          reply_markup: supportHubKeyboard(session.user.type),
+        })
+        await sessions.patch(chatId, { state: 'linked', context: {}, mergeContext: false })
+        return true
+      }
+      const added = await services.addTicketMessage({
+        ticketId,
+        userId: session.userId,
+        message,
+        asAdmin,
+      })
+      await sessions.patch(chatId, { state: 'linked', context: {}, mergeContext: false })
+      if (!added.ok) {
+        await api.sendMessage(chatId, added.message || 'Não foi possível responder.', {
+          reply_markup: supportHubKeyboard(session.user.type),
+        })
+        return true
+      }
+      await api.sendMessage(chatId, `Resposta enviada no chamado <b>#${ticketId}</b>.`, {
+        reply_markup: ticketDetailKeyboard({
+          ticketId,
+          isAdminView: asAdmin,
+        }),
+      })
+      if (added.isAdminReply && added.ticket?.user_id) {
+        void notifyUserTicketUpdate({
+          userId: added.ticket.user_id,
+          ticketId,
+          message,
+        })
+      } else if (!asAdmin) {
+        // cliente respondeu → avisa admins
+        void notifyAdminsNewTicket({
+          ticketId,
+          subject: added.ticket?.subject || `Resposta #${ticketId}`,
+          message,
+          userName: session.user.name,
+          userEmail: session.user.email,
+        })
+      }
+      return true
+    }
+
+    if (session.state === 'awaiting_admin_premium_email') {
+      if (session.user.type !== 'admin') {
+        await sessions.patch(chatId, { state: 'linked', context: {}, mergeContext: false })
+        return true
+      }
+      const parts = text.trim().split(/\s+/).filter(Boolean)
+      const email = parts[0] || ''
+      const days = parts[1] || 30
+      const result = await services.setUserPremium({
+        adminUserId: session.userId,
+        targetEmail: email,
+        days,
+      })
+      await sessions.patch(chatId, { state: 'linked', context: {}, mergeContext: false })
+      if (!result.ok) {
+        await api.sendMessage(chatId, result.message, {
+          reply_markup: supportHubKeyboard(session.user.type),
+        })
+        return true
+      }
+      await api.sendMessage(
+        chatId,
+        [
+          '<b>Premium liberado</b>',
+          `${escapeHtml(result.user.email)} · ${result.days} dia(s)`,
+          `Vence: ${escapeHtml(new Date(result.subscriptionEnd).toLocaleString('pt-BR'))}`,
+        ].join('\n'),
+        { reply_markup: supportHubKeyboard(session.user.type) },
+      )
+      const userChat = await services.getUserTelegramChatId(result.user.id)
+      if (userChat) {
+        try {
+          await api.sendMessage(
+            userChat,
+            [
+              '<b>Seu plano Premium foi ativado</b>',
+              `Válido por ${result.days} dia(s).`,
+              'Use /menu para acessar Jogos e Top 10.',
+            ].join('\n'),
+            { reply_markup: mainMenuKeyboard('premium') },
+          )
+        } catch {
+          /* noop */
+        }
+      }
       return true
     }
 
@@ -912,6 +1124,67 @@ export const createHandlers = (ctx) => {
         await handleSupportStart({ chatId })
       } else if (data === 'menu:tickets') {
         await handleTickets({ chatId })
+      } else if (data === 'admin:tickets') {
+        await handleAdminTickets({ chatId })
+      } else if (data === 'admin:premium') {
+        await handleAdminPremiumStart({ chatId })
+      } else if (data.startsWith('tkt:view:') || data.startsWith('tkt:admin:')) {
+        const ticketId = data.split(':')[2]
+        await openTicketView({
+          chatId,
+          session,
+          ticketId,
+          forceAdmin: data.startsWith('tkt:admin:'),
+        })
+      } else if (data.startsWith('tkt:reply:')) {
+        const ticketId = data.slice('tkt:reply:'.length)
+        const detail = await services.getTicketDetail({
+          ticketId,
+          requesterUserId: session.userId,
+          requesterType: session.user.type,
+        })
+        if (!detail.ok) {
+          await api.sendMessage(chatId, detail.message)
+          return
+        }
+        await sessions.patch(chatId, {
+          state: 'awaiting_ticket_reply',
+          context: {
+            ticketId: Number(ticketId),
+            replyAsAdmin: detail.isAdmin && detail.ticket.user_id !== session.userId,
+          },
+          mergeContext: false,
+        })
+        await api.sendMessage(chatId, `Envie a resposta do chamado <b>#${ticketId}</b>:`, {
+          reply_markup: cancelKeyboard(),
+        })
+      } else if (data.startsWith('tkt:status:')) {
+        const parts = data.split(':')
+        const ticketId = parts[2]
+        const status = parts[3]
+        const updated = await services.updateTicketStatus({
+          ticketId,
+          status,
+          adminUserId: session.userId,
+        })
+        if (!updated.ok) {
+          await api.sendMessage(chatId, updated.message)
+          return
+        }
+        await api.sendMessage(chatId, `Status do #${ticketId} → <b>${escapeHtml(status)}</b>.`)
+        const detail = await services.getTicketDetail({
+          ticketId,
+          requesterUserId: session.userId,
+          requesterType: session.user.type,
+        })
+        if (detail.ok && detail.ticket?.user_id) {
+          void notifyUserTicketUpdate({
+            userId: detail.ticket.user_id,
+            ticketId,
+            statusLabel: status,
+          })
+        }
+        await openTicketView({ chatId, session, ticketId, forceAdmin: true })
       } else if (data.startsWith('top10:cat:')) {
         const mediaType = data.slice('top10:cat:'.length)
         const label =
@@ -1031,7 +1304,9 @@ export const createHandlers = (ctx) => {
     handleFootball,
     handleTop10,
     handleSupportStart,
+    handleSupportHub,
     handleTickets,
+    handleAdminTickets,
     handleCancel,
     handleTextWhileAwaiting,
     handleNavAction,

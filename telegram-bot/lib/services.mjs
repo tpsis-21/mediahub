@@ -238,6 +238,138 @@ export const createBotServices = (deps) => {
     return result.rows
   }
 
+  const listAdminTickets = async ({ limit = 15 } = {}) => {
+    const result = await query(
+      `
+      select t.id, t.subject, t.status, t.updated_at, u.email as user_email, u.name as user_name, u.telegram_chat_id
+      from tickets t
+      join app_users u on u.id = t.user_id
+      order by
+        case when t.status = 'open' then 1
+             when t.status = 'in_progress' then 2
+             else 3 end,
+        t.updated_at desc
+      limit $1
+      `,
+      [limit],
+    )
+    return result.rows
+  }
+
+  const getTicketDetail = async ({ ticketId, requesterUserId, requesterType }) => {
+    const id = Number(ticketId)
+    if (!Number.isFinite(id)) return { ok: false, message: 'Chamado inválido.' }
+    const ticketRes = await query(
+      `
+      select t.*, u.email as user_email, u.name as user_name, u.telegram_chat_id as user_telegram_chat_id
+      from tickets t
+      join app_users u on u.id = t.user_id
+      where t.id = $1
+      limit 1
+      `,
+      [id],
+    )
+    const ticket = ticketRes.rows[0]
+    if (!ticket) return { ok: false, message: 'Chamado não encontrado.' }
+    const isAdmin = requesterType === 'admin'
+    if (!isAdmin && ticket.user_id !== requesterUserId) {
+      return { ok: false, message: 'Acesso negado.' }
+    }
+    const messagesRes = await query(
+      `
+      select tm.message, tm.is_admin, tm.created_at, u.name, u.email
+      from ticket_messages tm
+      join app_users u on u.id = tm.user_id
+      where tm.ticket_id = $1
+      order by tm.created_at asc
+      limit 40
+      `,
+      [id],
+    )
+    return { ok: true, ticket, messages: messagesRes.rows, isAdmin }
+  }
+
+  const addTicketMessage = async ({ ticketId, userId, message, asAdmin = false }) => {
+    const id = Number(ticketId)
+    const text = String(message || '').trim().slice(0, 2000)
+    if (!Number.isFinite(id) || text.length < 1) {
+      return { ok: false, message: 'Mensagem inválida.' }
+    }
+    const ticketRes = await query(`select * from tickets where id = $1 limit 1`, [id])
+    const ticket = ticketRes.rows[0]
+    if (!ticket) return { ok: false, message: 'Chamado não encontrado.' }
+
+    const userRes = await query(`select type from app_users where id = $1 limit 1`, [userId])
+    const type = userRes.rows[0]?.type
+    const isAdmin = type === 'admin'
+    if (asAdmin && !isAdmin) return { ok: false, message: 'Acesso negado.' }
+    if (!isAdmin && ticket.user_id !== userId) return { ok: false, message: 'Acesso negado.' }
+
+    await query(
+      `insert into ticket_messages (ticket_id, user_id, message, is_admin) values ($1, $2, $3, $4)`,
+      [id, userId, text, Boolean(asAdmin || (isAdmin && ticket.user_id !== userId))],
+    )
+    await query(`update tickets set updated_at = now() where id = $1`, [id])
+
+    // se estava aberto e admin respondeu, marca em andamento
+    if (isAdmin && ticket.user_id !== userId && ticket.status === 'open') {
+      await query(`update tickets set status = 'in_progress', updated_at = now() where id = $1`, [id])
+    }
+
+    const detail = await getTicketDetail({
+      ticketId: id,
+      requesterUserId: userId,
+      requesterType: type,
+    })
+    return { ok: true, ticket: detail.ticket || ticket, isAdminReply: isAdmin && ticket.user_id !== userId }
+  }
+
+  const updateTicketStatus = async ({ ticketId, status, adminUserId }) => {
+    const admin = await query(`select type from app_users where id = $1 limit 1`, [adminUserId])
+    if (admin.rows[0]?.type !== 'admin') return { ok: false, message: 'Acesso negado.' }
+  const allowed = ['open', 'in_progress', 'closed', 'resolved']
+  if (!allowed.includes(status)) return { ok: false, message: 'Status inválido.' }
+    await query(`update tickets set status = $1, updated_at = now() where id = $2`, [status, ticketId])
+    return { ok: true }
+  }
+
+  /** Destinos Telegram de admins (chat do bot ou chat_id do perfil). */
+  const listAdminTelegramTargets = async () => {
+    const result = await query(
+      `
+      select distinct chat_id from (
+        select s.chat_id
+        from telegram_bot_sessions s
+        join app_users u on u.id = s.user_id
+        where u.type = 'admin' and u.is_active = true
+        union
+        select u.telegram_chat_id as chat_id
+        from app_users u
+        where u.type = 'admin'
+          and u.is_active = true
+          and u.telegram_chat_id is not null
+          and length(trim(u.telegram_chat_id)) > 0
+      ) t
+      where chat_id is not null and length(trim(chat_id)) > 0
+      `,
+    )
+    return result.rows.map((r) => String(r.chat_id).trim()).filter(Boolean)
+  }
+
+  const getUserTelegramChatId = async (userId) => {
+    const result = await query(
+      `
+      select coalesce(
+        (select s.chat_id from telegram_bot_sessions s where s.user_id = $1 limit 1),
+        (select u.telegram_chat_id from app_users u where u.id = $1 limit 1)
+      ) as chat_id
+      `,
+      [userId],
+    )
+    const chat = result.rows[0]?.chat_id
+    return chat ? String(chat).trim() : ''
+  }
+
   const createTicket = async ({ userId, subject, message }) => {
     const enabled = await getTicketsEnabled()
     if (!enabled) {
@@ -259,13 +391,44 @@ export const createBotServices = (deps) => {
         [ticketId, userId, message],
       )
       await client.query('COMMIT')
-      return { ok: true, id: ticketId }
+      const userRes = await query(`select name, email from app_users where id = $1`, [userId])
+      return {
+        ok: true,
+        id: ticketId,
+        subject,
+        message,
+        userName: userRes.rows[0]?.name || '',
+        userEmail: userRes.rows[0]?.email || '',
+      }
     } catch (e) {
       await client.query('ROLLBACK')
       throw e
     } finally {
       client.release()
     }
+  }
+
+  /** Admin promove usuário a Premium pelo bot (dias). */
+  const setUserPremium = async ({ adminUserId, targetEmail, days = 30 }) => {
+    const admin = await query(`select type from app_users where id = $1`, [adminUserId])
+    if (admin.rows[0]?.type !== 'admin') return { ok: false, message: 'Acesso negado.' }
+    const email = String(targetEmail || '').trim().toLowerCase()
+    if (!email.includes('@')) return { ok: false, message: 'E-mail inválido.' }
+    const daysN = Math.max(1, Math.min(730, Number(days) || 30))
+    const end = new Date(Date.now() + daysN * 24 * 60 * 60 * 1000)
+    const updated = await query(
+      `
+      update app_users
+      set type = 'premium',
+          subscription_end = $1,
+          updated_at = now()
+      where email = $2 and is_active = true
+      returning id, name, email, telegram_chat_id
+      `,
+      [end.toISOString(), email],
+    )
+    if (!updated.rows[0]) return { ok: false, message: 'Usuário não encontrado.' }
+    return { ok: true, user: updated.rows[0], subscriptionEnd: end.toISOString(), days: daysN }
   }
 
   const getUserBrand = async (userId) => {
@@ -493,7 +656,14 @@ export const createBotServices = (deps) => {
     getFootballSchedule,
     refreshFootball,
     listTickets,
+    listAdminTickets,
+    getTicketDetail,
+    addTicketMessage,
+    updateTicketStatus,
+    listAdminTelegramTargets,
+    getUserTelegramChatId,
     createTicket,
+    setUserPremium,
     getUserBrand,
     getTrending,
     loginWithPassword,

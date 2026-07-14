@@ -13,6 +13,11 @@ import { Badge } from './ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { apiRequest } from '../services/apiClient';
 
+const TELEGRAM_MEDIAHUB_BOT = 'm3diahub_bot';
+const TELEGRAM_USERINFO_BOT = 'userinfobot';
+const telegramBotUrl = (username: string) =>
+  `https://t.me/${String(username || '').replace(/^@/, '').trim()}`;
+
 interface UserAreaModalProps {
   onClose: () => void;
 }
@@ -131,7 +136,7 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
       });
       toast({
         title: 'Código gerado',
-        description: 'Abra o link ou envie o comando /start no bot (válido por alguns minutos).',
+        description: 'Agora clique em “Abrir bot e vincular” (válido por alguns minutos).',
       });
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Não foi possível gerar o código.';
@@ -952,7 +957,7 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
                   <span>Telegram</span>
                 </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-5">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant={user?.telegramChatId?.trim() ? 'outline' : 'secondary'}>
                     Destino Telegram: {user?.telegramChatId?.trim() ? 'configurado' : 'não configurado'}
@@ -962,78 +967,193 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
                   )}
                 </div>
 
-                <div className="rounded-md border border-muted-foreground/20 bg-muted/20 px-3 py-3 space-y-3">
-                  <div className="text-sm font-medium">Vincular Telegram (recomendado)</div>
-                  <p className="text-sm text-muted-foreground">
-                    Gere um código e abra o bot. Depois disso, capas, banners e arquivos solicitados no
-                    MediaHub são entregues neste chat (mesmo bot de envio).
+                <div className="rounded-md border bg-muted/20 px-3 py-3 text-sm text-muted-foreground space-y-1">
+                  <p className="font-medium text-foreground">Para que serve?</p>
+                  <p>
+                    Quando você pedir <strong className="text-foreground">Enviar no Telegram</strong> no
+                    MediaHub (capa, banner, arquivo), o conteúdo chega nesse chat. Basta configurar o destino
+                    uma vez — pelo caminho recomendado abaixo ou pelo ID manual.
                   </p>
-                  <Button type="button" variant="outline" onClick={() => void handleGenerateBotLink()} disabled={isLinkCodeLoading}>
-                    {isLinkCodeLoading ? 'Gerando…' : 'Gerar código de vínculo'}
-                  </Button>
-                  {botLink && (
-                    <div className="space-y-2 text-sm">
-                      <div>
-                        Código: <code className="rounded bg-background px-1 py-0.5">{botLink.code}</code>
-                      </div>
-                      <div className="text-muted-foreground text-xs">
-                        Expira em {new Date(botLink.expiresAt).toLocaleString('pt-BR')}
-                      </div>
-                      {botLink.deepLink ? (
-                        <a
-                          href={botLink.deepLink}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-primary underline underline-offset-2 break-all"
-                        >
-                          Abrir bot e vincular
-                        </a>
-                      ) : (
-                        <p className="text-muted-foreground">
-                          No Telegram, envie: <code className="rounded bg-background px-1">{botLink.startCommand}</code>
-                        </p>
-                      )}
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => {
-                          void navigator.clipboard.writeText(botLink.deepLink || botLink.startCommand);
-                          toast({ title: 'Copiado' });
-                        }}
-                      >
-                        Copiar link / comando
-                      </Button>
-                    </div>
-                  )}
                 </div>
 
-                <div className="grid gap-2">
-                  <Label htmlFor="telegramChatId">ID do Telegram (chat_id) — manual</Label>
-                  <Input
-                    id="telegramChatId"
-                    value={telegramChatId}
-                    onChange={(e) => setTelegramChatId(e.target.value)}
-                    placeholder="Ex: 123456789 ou -1001234567890"
-                    inputMode="text"
-                    autoComplete="off"
-                  />
-                  <div
-                    className={`rounded-md border px-3 py-2 text-xs ${
-                      user?.telegramChatId?.trim()
-                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                        : 'border-muted-foreground/20 bg-muted/20 text-muted-foreground'
-                    }`}
-                  >
-                    {user?.telegramChatId?.trim()
-                      ? 'Ja existe um chat_id configurado para envio via Telegram.'
-                      : 'Nenhum chat_id configurado no momento.'}
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    Alternativa manual: descubra o ID com @userinfobot, cole aqui e salve o perfil.
-                    Depois envie /start no bot para poder receber mensagens.
-                  </p>
-                </div>
+                {(() => {
+                  const mediaHubBot =
+                    (botLink?.botUsername || TELEGRAM_MEDIAHUB_BOT).replace(/^@/, '') || TELEGRAM_MEDIAHUB_BOT;
+                  const mediaHubUrl = telegramBotUrl(mediaHubBot);
+                  const userInfoUrl = telegramBotUrl(TELEGRAM_USERINFO_BOT);
+                  return (
+                    <>
+                      <div className="rounded-md border border-muted-foreground/20 px-3 py-4 space-y-3">
+                        <div>
+                          <p className="text-sm font-medium">Forma recomendada — vincular com um clique</p>
+                          <p className="text-sm text-muted-foreground mt-1">
+                            Mais fácil: o MediaHub gera um link que já abre o bot certo e confirma sozinho.
+                          </p>
+                        </div>
+                        <ol className="list-decimal list-outside ml-5 space-y-2 text-sm text-muted-foreground">
+                          <li>
+                            Clique em <strong className="text-foreground">Gerar código de vínculo</strong>{' '}
+                            (válido por cerca de 10 minutos).
+                          </li>
+                          <li>
+                            Clique em <strong className="text-foreground">Abrir bot e vincular</strong>. O
+                            Telegram abre o{' '}
+                            <a
+                              href={mediaHubUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-primary underline underline-offset-2"
+                            >
+                              @{mediaHubBot}
+                            </a>
+                            .
+                          </li>
+                          <li>
+                            No Telegram, toque em <strong className="text-foreground">Iniciar</strong> (ou
+                            envie a mensagem que já vier preenchida). Pronto — o destino fica ligado à sua
+                            conta.
+                          </li>
+                          <li>
+                            Volte ao MediaHub e use <strong className="text-foreground">Enviar no Telegram</strong>{' '}
+                            nas telas de capa ou banner.
+                          </li>
+                        </ol>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => void handleGenerateBotLink()}
+                          disabled={isLinkCodeLoading}
+                        >
+                          {isLinkCodeLoading ? 'Gerando…' : 'Gerar código de vínculo'}
+                        </Button>
+                        {botLink && (
+                          <div className="rounded-md border bg-background px-3 py-3 space-y-3 text-sm">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-muted-foreground">Seu código:</span>
+                              <code className="rounded bg-muted px-1.5 py-0.5 font-medium">{botLink.code}</code>
+                              <span className="text-xs text-muted-foreground">
+                                Expira em {new Date(botLink.expiresAt).toLocaleString('pt-BR')}
+                              </span>
+                            </div>
+                            <div className="flex flex-col sm:flex-row gap-2">
+                              {botLink.deepLink ? (
+                                <Button type="button" asChild>
+                                  <a href={botLink.deepLink} target="_blank" rel="noreferrer">
+                                    Abrir @{mediaHubBot} e vincular
+                                  </a>
+                                </Button>
+                              ) : (
+                                <p className="text-muted-foreground">
+                                  Abra{' '}
+                                  <a
+                                    href={mediaHubUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-primary underline underline-offset-2"
+                                  >
+                                    @{mediaHubBot}
+                                  </a>{' '}
+                                  e envie:{' '}
+                                  <code className="rounded bg-muted px-1">{botLink.startCommand}</code>
+                                </p>
+                              )}
+                              <Button
+                                type="button"
+                                size="default"
+                                variant="secondary"
+                                onClick={() => {
+                                  void navigator.clipboard.writeText(botLink.deepLink || botLink.startCommand);
+                                  toast({ title: 'Copiado', description: 'Cole no Telegram se preferir.' });
+                                }}
+                              >
+                                Copiar link / comando
+                              </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              Bot de entrega:{' '}
+                              <a
+                                href={mediaHubUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-primary underline underline-offset-2"
+                              >
+                                @{mediaHubBot}
+                              </a>{' '}
+                              · {mediaHubUrl}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="rounded-md border border-dashed border-muted-foreground/30 px-3 py-4 space-y-3">
+                        <div>
+                          <p className="text-sm font-medium">Alternativa — informar o ID manualmente</p>
+                          <p className="text-sm text-muted-foreground mt-1">
+                            Use se o vínculo automático não abrir ou se preferir colar o número do chat.
+                          </p>
+                        </div>
+                        <ol className="list-decimal list-outside ml-5 space-y-2 text-sm text-muted-foreground">
+                          <li>
+                            No Telegram, abra{' '}
+                            <a
+                              href={userInfoUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-primary underline underline-offset-2"
+                            >
+                              @{TELEGRAM_USERINFO_BOT}
+                            </a>{' '}
+                            ({userInfoUrl}).
+                          </li>
+                          <li>
+                            Toque em <strong className="text-foreground">Iniciar</strong> e copie o número
+                            chamado <strong className="text-foreground">Id</strong> (ex.: 1656282192).
+                          </li>
+                          <li>
+                            Cole esse número no campo abaixo e clique em{' '}
+                            <strong className="text-foreground">Salvar alterações</strong> no final desta
+                            janela.
+                          </li>
+                          <li>
+                            Abra o bot de entrega{' '}
+                            <a
+                              href={mediaHubUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-primary underline underline-offset-2"
+                            >
+                              @{mediaHubBot}
+                            </a>{' '}
+                            ({mediaHubUrl}) e envie <code className="rounded bg-muted px-1">/start</code>{' '}
+                            uma vez, para o Telegram autorizar as mensagens.
+                          </li>
+                        </ol>
+                        <div className="grid gap-2">
+                          <Label htmlFor="telegramChatId">ID do chat (chat_id)</Label>
+                          <Input
+                            id="telegramChatId"
+                            value={telegramChatId}
+                            onChange={(e) => setTelegramChatId(e.target.value)}
+                            placeholder="Ex: 1656282192"
+                            inputMode="text"
+                            autoComplete="off"
+                          />
+                          <div
+                            className={`rounded-md border px-3 py-2 text-xs ${
+                              user?.telegramChatId?.trim()
+                                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                                : 'border-muted-foreground/20 bg-muted/20 text-muted-foreground'
+                            }`}
+                          >
+                            {user?.telegramChatId?.trim()
+                              ? 'Já existe um chat_id salvo: os envios do MediaHub usam esse destino.'
+                              : 'Ainda sem destino. Faça o vínculo recomendado ou cole o ID e salve.'}
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
               </CardContent>
             </Card>
           </TabsContent>

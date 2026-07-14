@@ -963,9 +963,10 @@ const UserAreaModal: React.FC<UserAreaModalProps> = ({ onClose }) => {
                 </div>
 
                 <div className="rounded-md border border-muted-foreground/20 bg-muted/20 px-3 py-3 space-y-3">
-                  <div className="text-sm font-medium">Vincular bot (recomendado)</div>
+                  <div className="text-sm font-medium">Vincular Telegram (recomendado)</div>
                   <p className="text-sm text-muted-foreground">
-                    Gere um código, abra o bot e confirme. O chat fica ligado à sua conta automaticamente.
+                    Gere um código e abra o bot. Depois disso, capas, banners e arquivos solicitados no
+                    MediaHub são entregues neste chat (mesmo bot de envio).
                   </p>
                   <Button type="button" variant="outline" onClick={() => void handleGenerateBotLink()} disabled={isLinkCodeLoading}>
                     {isLinkCodeLoading ? 'Gerando…' : 'Gerar código de vínculo'}

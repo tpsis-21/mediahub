@@ -1,10 +1,16 @@
 /**
- * Bot Telegram conversacional — ponto de entrada.
- * Monta rotas na API Express sem misturar com telegram-routes (envio outbound).
+ * Bot Telegram — vínculo (webhook) + ponte de tickets.
+ * Envio de conteúdo: rotas web `/api/telegram/send*` (mesmo token).
+ * Padrão: delivery. Conversacional só com TELEGRAM_BOT_CONVERSATIONAL=true.
  */
 import { createBotApi } from './lib/bot-api.mjs'
 import { createBannerRenderer } from './lib/banner-render.mjs'
-import { isTelegramBotEnabled, getWebhookSecret, getAppUrl } from './lib/config.mjs'
+import {
+  isTelegramBotEnabled,
+  isTelegramConversationalEnabled,
+  getWebhookSecret,
+  getAppUrl,
+} from './lib/config.mjs'
 import { createDispatch } from './lib/dispatch.mjs'
 import { createPairingService } from './lib/pairing.mjs'
 import { createSessionStore } from './lib/session.mjs'
@@ -12,6 +18,7 @@ import { createBotServices } from './lib/services.mjs'
 import { createTicketTelegramBridge } from './lib/ticket-notify.mjs'
 import { BOT_COMMANDS } from './lib/format.mjs'
 import { createHandlers } from './handlers/index.mjs'
+import { createDeliveryHandlers, DELIVERY_BOT_COMMANDS } from './handlers/delivery.mjs'
 
 /**
  * @param {import('express').Express} app
@@ -55,58 +62,67 @@ export const registerTelegramBot = (app, deps) => {
     resolveTrailerUrlFromProvider,
   } = deps
 
+  const conversational = isTelegramConversationalEnabled()
   const sessions = createSessionStore({ query, deactivateExpiredPremiumByUserId })
   const pairing = createPairingService({ query })
   const api = createBotApi({ getTelegramBotToken })
   const ticketTelegram = createTicketTelegramBridge({ query, getTelegramBotToken })
-  const banners =
-    typeof createCanvas === 'function'
-      ? createBannerRenderer({ createCanvas, loadImage, GlobalFonts })
-      : null
-  const services = createBotServices({
-    query,
-    pool,
-    assertAndIncrementDailySearchQuota,
-    getSearchProviderSettingsKeys,
-    getSearchProviderImageBaseUrl,
-    fetchSearchProviderJson,
-    getSearchProviderCache,
-    setSearchProviderCache,
-    getStableObjectKey,
-    uniqStrings,
-    getSearchProviderErrorMessage,
-    ensureSearchHistorySchema,
-    getFootballSettings,
-    getZonedNowParts,
-    getDefaultFootballScheduleDate,
-    refreshFootballSchedule,
-    parseClockTime,
-    normalizeFootballCrestUrl,
-    normalizeFootballSearchText,
-    isPlaceholderFootballTeamCrestUrl,
-    getTicketsEnabled,
-    deactivateExpiredPremiumByUserId,
-    normalizeTrendingPayload,
-    normalizeEmail,
-    createPasswordDigest,
-    verifyPassword,
-    getAllowRegistrations,
-    resolveTrailerUrlFromProvider,
-  })
-  const handlers = createHandlers({
-    api,
-    sessions,
-    pairing,
-    services,
-    banners,
-    ticketNotify: ticketTelegram,
-  })
+
+  let handlers
+  if (conversational) {
+    const banners =
+      typeof createCanvas === 'function'
+        ? createBannerRenderer({ createCanvas, loadImage, GlobalFonts })
+        : null
+    const services = createBotServices({
+      query,
+      pool,
+      assertAndIncrementDailySearchQuota,
+      getSearchProviderSettingsKeys,
+      getSearchProviderImageBaseUrl,
+      fetchSearchProviderJson,
+      getSearchProviderCache,
+      setSearchProviderCache,
+      getStableObjectKey,
+      uniqStrings,
+      getSearchProviderErrorMessage,
+      ensureSearchHistorySchema,
+      getFootballSettings,
+      getZonedNowParts,
+      getDefaultFootballScheduleDate,
+      refreshFootballSchedule,
+      parseClockTime,
+      normalizeFootballCrestUrl,
+      normalizeFootballSearchText,
+      isPlaceholderFootballTeamCrestUrl,
+      getTicketsEnabled,
+      deactivateExpiredPremiumByUserId,
+      normalizeTrendingPayload,
+      normalizeEmail,
+      createPasswordDigest,
+      verifyPassword,
+      getAllowRegistrations,
+      resolveTrailerUrlFromProvider,
+    })
+    handlers = createHandlers({
+      api,
+      sessions,
+      pairing,
+      services,
+      banners,
+      ticketNotify: ticketTelegram,
+    })
+  } else {
+    handlers = createDeliveryHandlers({ api, sessions, pairing })
+  }
+
   const { handleUpdate } = createDispatch(handlers)
+  const botCommands = conversational ? BOT_COMMANDS : DELIVERY_BOT_COMMANDS
 
   const syncBotCommands = async () => {
     try {
       if (!(await getTelegramBotToken())) return
-      await api.setMyCommands(BOT_COMMANDS)
+      await api.setMyCommands(botCommands)
     } catch (e) {
       console.warn('[telegram-bot] setMyCommands', e?.message || e)
     }
@@ -121,10 +137,9 @@ export const registerTelegramBot = (app, deps) => {
     }
   }
 
-  /** Webhook Telegram */
   app.post('/api/telegram/webhook', async (req, res) => {
     if (!isTelegramBotEnabled()) {
-      res.status(503).json({ message: 'Bot conversacional desativado.' })
+      res.status(503).json({ message: 'Bot Telegram desativado.' })
       return
     }
 
@@ -145,11 +160,10 @@ export const registerTelegramBot = (app, deps) => {
     void processUpdateSafe(req.body)
   })
 
-  /** Gera código + deep link (Minha Área) */
   app.post('/api/telegram/bot/link-code', requireAuth, rateLimitTelegram, async (req, res) => {
     try {
       if (!isTelegramBotEnabled()) {
-        res.status(503).json({ message: 'Bot conversacional desativado.' })
+        res.status(503).json({ message: 'Bot Telegram desativado.' })
         return
       }
       const token = await getTelegramBotToken()
@@ -179,6 +193,7 @@ export const registerTelegramBot = (app, deps) => {
         deepLink,
         startCommand: `/start ${created.startPayload}`,
         appUrl: getAppUrl() || null,
+        mode: conversational ? 'conversational' : 'delivery',
       })
     } catch (e) {
       console.error('[telegram-bot] link-code', e)
@@ -186,13 +201,12 @@ export const registerTelegramBot = (app, deps) => {
     }
   })
 
-  /** Status simples (admin / debug) */
-  app.get('/api/telegram/bot/status', requireAuth, async (req, res) => {
+  app.get('/api/telegram/bot/status', requireAuth, async (_req, res) => {
     try {
-      const enabled = isTelegramBotEnabled()
       const token = await getTelegramBotToken()
       res.json({
-        enabled,
+        enabled: isTelegramBotEnabled(),
+        mode: conversational ? 'conversational' : 'delivery',
         tokenConfigured: Boolean(token),
         webhookSecretConfigured: Boolean(getWebhookSecret()),
         appUrl: getAppUrl() || null,
@@ -202,7 +216,24 @@ export const registerTelegramBot = (app, deps) => {
     }
   })
 
-  return { handleUpdate, processUpdateSafe, sessions, pairing, api, ticketTelegram }
+  console.info(
+    `[telegram-bot] mode=${conversational ? 'conversational' : 'delivery'} — envio de conteúdo via /api/telegram/send*`,
+  )
+
+  return {
+    handleUpdate,
+    processUpdateSafe,
+    sessions,
+    pairing,
+    api,
+    ticketTelegram,
+    mode: conversational ? 'conversational' : 'delivery',
+  }
 }
 
-export { isTelegramBotEnabled, getWebhookSecret, getAppUrl }
+export {
+  isTelegramBotEnabled,
+  isTelegramConversationalEnabled,
+  getWebhookSecret,
+  getAppUrl,
+}

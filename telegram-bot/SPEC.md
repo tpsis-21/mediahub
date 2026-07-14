@@ -1,8 +1,11 @@
 # MediaHub — Bot Telegram (especificação)
 
-**Status:** Bot-first — a maioria das operações deve funcionar só no Telegram; a web é complementar (admin avançado / branding fino).  
+**Status:** Web-first — operação na interface web; bot = vínculo + canal de entrega.  
 **Data:** 2026-07-14  
-**Objetivo:** MediaHub completo via conversa no Telegram (conta, mídia, banners, suporte e ops admin frequentes).
+**Objetivo:** Enviar conteúdos solicitados no Telegram via o bot atual (mesmo token das rotas `/api/telegram/send*`), substituindo o uso conversacional como produto.
+
+Modo padrão: `delivery` (`TELEGRAM_BOT_CONVERSATIONAL` desligado).  
+Modo legado: `TELEGRAM_BOT_CONVERSATIONAL=true` reativa o menu no chat.
 
 ---
 
@@ -15,7 +18,7 @@ O MediaHub tem **dois canais Telegram**:
 | Bot conversacional (`telegram-bot/`) | Webhook `POST /api/telegram/webhook`, conta, busca, banners, suporte, admin |
 | Outbound legado (`telegram-routes`) | Envios da web (`/api/telegram/send*`) |
 
-**Produto:** bot-first completo — login, marca, OTP, lote, tickets web↔bot e painel admin no chat.
+**Produto:** web-first — vínculo via webhook; envio de conteúdo pela SPA (`telegram-routes`); bot conversacional opcional via flag.
 
 ---
 

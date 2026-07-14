@@ -79,5 +79,18 @@ export const createPairingService = (deps) => {
     )
   }
 
-  return { createLinkCode, consumeLinkCode, linkChatToUser, normalizeCode }
+  const unlinkChat = async ({ chatId }) => {
+    const chat = String(chatId)
+    await query(
+      `
+      update app_users
+      set telegram_chat_id = null, updated_at = now()
+      where telegram_chat_id = $1
+      `,
+      [chat],
+    )
+    await query(`delete from telegram_bot_sessions where chat_id = $1`, [chat])
+  }
+
+  return { createLinkCode, consumeLinkCode, linkChatToUser, unlinkChat, normalizeCode }
 }

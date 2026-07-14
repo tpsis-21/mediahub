@@ -46,14 +46,28 @@ const main = async () => {
   console.log(JSON.stringify({ webhookUrl, ok: data.ok, description: data.description }, null, 2))
   if (!data.ok) process.exit(1)
 
+  const { isTelegramConversationalEnabled } = await import('../lib/config.mjs')
   const { BOT_COMMANDS } = await import('../lib/format.mjs')
+  const { DELIVERY_BOT_COMMANDS } = await import('../handlers/delivery.mjs')
+  const commands = isTelegramConversationalEnabled() ? BOT_COMMANDS : DELIVERY_BOT_COMMANDS
   const cmdsRes = await fetch(`https://api.telegram.org/bot${token}/setMyCommands`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ commands: BOT_COMMANDS }),
+    body: JSON.stringify({ commands }),
   })
   const cmdsData = await cmdsRes.json()
-  console.log(JSON.stringify({ setMyCommands: cmdsData.ok, description: cmdsData.description }, null, 2))
+  console.log(
+    JSON.stringify(
+      {
+        setMyCommands: cmdsData.ok,
+        mode: isTelegramConversationalEnabled() ? 'conversational' : 'delivery',
+        count: commands.length,
+        description: cmdsData.description,
+      },
+      null,
+      2,
+    ),
+  )
 }
 
 main()

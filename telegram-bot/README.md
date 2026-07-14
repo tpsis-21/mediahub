@@ -1,52 +1,44 @@
-# MediaHub — Bot Telegram
+# MediaHub — Bot Telegram (entrega)
 
-Bot **completo / bot-first**: a maioria dos usuários opera só pelo Telegram; a web é complementar.
+A **operação fica na interface web**. O bot serve para:
+
+1. **Vincular** o chat à conta (código na Minha Área)
+2. **Receber** capas, banners e arquivos quando o usuário clicar em enviar no site
+
+O envio usa as rotas `/api/telegram/send*` com o **mesmo token** do bot (`TELEGRAM_BOT_TOKEN` / admin).
+
+## Modos
+
+| Modo | Env | Comportamento |
+|------|-----|----------------|
+| **delivery** (padrão) | — | Só vínculo + dicas; menu/busca no chat desligados |
+| **conversational** | `TELEGRAM_BOT_CONVERSATIONAL=true` | Menu completo no Telegram (legado) |
 
 ## Ativar
 
-1. `TELEGRAM_BOT_TOKEN` (ou token no admin web)
+1. `TELEGRAM_BOT_TOKEN`
 2. `TELEGRAM_BOT_ENABLED=true`
-3. `TELEGRAM_WEBHOOK_SECRET` (obrigatório em produção)
-4. `APP_URL=https://seu-dominio`
+3. `TELEGRAM_WEBHOOK_SECRET` (produção)
+4. `APP_URL=https://…` (público HTTPS da API)
 
 ```bash
-npm run telegram:set-webhook   # webhook + menu de comandos
-npm run telegram:poll          # dev local (sem webhook)
+npm run telegram:set-webhook
 ```
 
-No boot da API, o bot também tenta `setMyCommands` automaticamente.
+## Fluxo do usuário
 
-## Conta (sem web)
+1. Web → Minha Área → Telegram → **Gerar código de vínculo**
+2. Abrir o deep link / `/start link_XXXX` no bot
+3. No site: buscar / gerar arte → **Enviar no Telegram**
+4. Conteúdo chega neste chat
 
-| Fluxo | Como |
-|-------|------|
-| Entrar / criar | `/entrar` · `/cadastrar` |
-| Recuperar senha | `/recuperar` (OTP neste chat) |
-| Trocar senha | `/senha` (logado) |
-| Marca | `/marca` — nome, cores hex, foto da logo |
-| Sair | `/sair` |
-
-Código da Minha Área continua opcional.
-
-## Operação
-
-- `/buscar` — um termo **ou lote** (até 10 linhas, um título por linha)
-- `/historico` — rebusca por botão
-- `/futebol` · atualizar · gerar banner (modelos)
-- `/top10` (modelos lista/cartaz)
-- Capa, trailer e banner de título (Premium)
-
-## Suporte e admin
-
-- Cliente abre chamado no bot → **admins com `/entrar`** recebem aviso
-- Chamados criados/respondidos **pela web** também notificam no Telegram
-- Admin: `/admin` (painel), fila, liberar Premium, buscar usuário, atualizar jogos
+`/sair` no bot desvincula o chat (para de receber envios).
 
 ## Estrutura
 
-| Pasta | Função |
-|-------|--------|
-| `index.mjs` | Webhook + link-code + bridge de tickets |
-| `handlers/` | Comandos e callbacks |
-| `lib/` | API Telegram, sessão, banners, notify |
-| `SPEC.md` | Especificação detalhada |
+| Peça | Função |
+|------|--------|
+| `handlers/delivery.mjs` | Webhook fino (vínculo) |
+| `handlers/index.mjs` | Conversacional (só se flag ligada) |
+| `server/routes/telegram-routes.mjs` | Envio autenticado da web |
+| `SPEC.md` | Detalhes históricos / arquitetura |

@@ -1,4 +1,4 @@
-/** Formatação de mensagens e teclados inline (PT-BR) — tom profissional. */
+/** Mensagens e teclados — UI conversacional profissional (PT-BR). */
 
 export const escapeHtml = (value) =>
   String(value ?? '')
@@ -13,6 +13,64 @@ export const planLabel = (userType) => {
   return 'Visitante'
 }
 
+/** Rótulos do teclado fixo (barra inferior). */
+export const NAV = {
+  MENU: '☰ Menu',
+  SEARCH: '🔎 Buscar',
+  ACCOUNT: '👤 Conta',
+  HELP: '❓ Ajuda',
+  LOGIN: 'Entrar',
+  REGISTER: 'Criar conta',
+  PLANS: 'Planos',
+}
+
+export const isNavLabel = (text) => {
+  const t = String(text || '').trim()
+  return Object.values(NAV).includes(t)
+}
+
+export const resolveNavAction = (text) => {
+  const t = String(text || '').trim()
+  if (t === NAV.MENU) return 'menu'
+  if (t === NAV.SEARCH) return 'search'
+  if (t === NAV.ACCOUNT) return 'account'
+  if (t === NAV.HELP) return 'help'
+  if (t === NAV.LOGIN) return 'login'
+  if (t === NAV.REGISTER) return 'register'
+  if (t === NAV.PLANS) return 'plans'
+  return null
+}
+
+/** Teclado fixo após login. */
+export const replyNavKeyboard = () => ({
+  keyboard: [
+    [{ text: NAV.MENU }, { text: NAV.SEARCH }],
+    [{ text: NAV.ACCOUNT }, { text: NAV.HELP }],
+  ],
+  resize_keyboard: true,
+  is_persistent: true,
+})
+
+/** Teclado fixo antes do login. */
+export const replyGuestKeyboard = () => ({
+  keyboard: [
+    [{ text: NAV.LOGIN }, { text: NAV.REGISTER }],
+    [{ text: NAV.PLANS }, { text: NAV.HELP }],
+  ],
+  resize_keyboard: true,
+  is_persistent: true,
+})
+
+export const replyKeyboardRemove = () => ({
+  remove_keyboard: true,
+})
+
+const rowMenu = () => [{ text: '« Menu', callback_data: 'menu:home' }]
+
+const withMenu = (rows) => ({
+  inline_keyboard: [...rows, rowMenu()],
+})
+
 export const welcomeKeyboard = () => ({
   inline_keyboard: [
     [
@@ -25,118 +83,165 @@ export const welcomeKeyboard = () => ({
   ],
 })
 
+export const cancelKeyboard = () => ({
+  inline_keyboard: [[{ text: 'Cancelar', callback_data: 'nav:cancel' }]],
+})
+
+export const mainMenuText = (user) => {
+  const plan = planLabel(user?.type)
+  const lockedHint =
+    user?.type === 'free' ? '\nItens com 🔒 exigem Premium.' : ''
+  return [
+    '<b>Menu principal</b>',
+    `Plano: <b>${escapeHtml(plan)}</b>`,
+    lockedHint,
+    '',
+    'Toque em uma opção abaixo.',
+  ]
+    .filter((line) => line !== undefined)
+    .join('\n')
+}
+
 export const mainMenuKeyboard = (userType) => {
   const premium = userType === 'premium' || userType === 'admin'
-  const rows = [
-    [{ text: 'Buscar título', callback_data: 'menu:search' }],
-    premium
-      ? [
-          { text: 'Jogos do dia', callback_data: 'menu:football' },
-          { text: 'Top 10', callback_data: 'menu:top10' },
-        ]
-      : [
-          { text: 'Jogos do dia 🔒', callback_data: 'menu:locked:football' },
-          { text: 'Top 10 🔒', callback_data: 'menu:locked:top10' },
-        ],
-    [{ text: 'Histórico', callback_data: 'menu:history' }],
-    [
-      { text: 'Planos', callback_data: 'menu:plans' },
-      { text: 'Minha conta', callback_data: 'menu:account' },
+  return {
+    inline_keyboard: [
+      [{ text: 'Buscar título', callback_data: 'menu:search' }],
+      [{ text: 'Histórico', callback_data: 'menu:history' }],
+      premium
+        ? [
+            { text: 'Jogos do dia', callback_data: 'menu:football' },
+            { text: 'Top 10', callback_data: 'menu:top10' },
+          ]
+        : [
+            { text: 'Jogos do dia 🔒', callback_data: 'menu:locked:football' },
+            { text: 'Top 10 🔒', callback_data: 'menu:locked:top10' },
+          ],
+      [
+        { text: 'Minha conta', callback_data: 'menu:account' },
+        { text: 'Planos', callback_data: 'menu:plans' },
+      ],
+      [
+        { text: 'Suporte', callback_data: 'menu:support_hub' },
+        { text: 'Ajuda', callback_data: 'menu:help' },
+      ],
     ],
-    [{ text: 'Suporte', callback_data: 'menu:support' }],
-  ]
-  return { inline_keyboard: rows }
+  }
 }
 
 export const accountKeyboard = (userType) => {
   const rows = [
-    [{ text: 'Ver planos', callback_data: 'menu:plans' }, { text: 'Menu', callback_data: 'menu:home' }],
+    [
+      { text: 'Planos', callback_data: 'menu:plans' },
+      { text: 'Trocar senha', callback_data: 'menu:password' },
+    ],
   ]
   if (userType === 'free') {
-    rows.unshift([{ text: 'Solicitar Premium', callback_data: 'menu:support' }])
+    rows.push([{ text: 'Solicitar Premium', callback_data: 'menu:support' }])
   }
+  rows.push([{ text: 'Sair deste chat', callback_data: 'menu:logout' }])
+  rows.push(rowMenu())
   return { inline_keyboard: rows }
 }
+
+export const supportHubText = () =>
+  [
+    '<b>Suporte</b>',
+    '',
+    'Como podemos ajudar?',
+  ].join('\n')
+
+export const supportHubKeyboard = () => ({
+  inline_keyboard: [
+    [{ text: 'Abrir chamado', callback_data: 'menu:support' }],
+    [{ text: 'Meus chamados', callback_data: 'menu:tickets' }],
+    rowMenu(),
+  ],
+})
+
+export const top10HubText = () =>
+  [
+    '<b>Top 10</b>',
+    '',
+    'Escolha a categoria do ranking:',
+  ].join('\n')
+
+export const top10HubKeyboard = () => ({
+  inline_keyboard: [
+    [
+      { text: 'Geral', callback_data: 'top10:all' },
+      { text: 'Filmes', callback_data: 'top10:movie' },
+    ],
+    [{ text: 'Séries', callback_data: 'top10:tv' }],
+    rowMenu(),
+  ],
+})
+
+export const lockedFeatureKeyboard = () => ({
+  inline_keyboard: [
+    [{ text: 'Ver planos', callback_data: 'menu:plans' }],
+    [{ text: 'Solicitar Premium', callback_data: 'menu:support' }],
+    rowMenu(),
+  ],
+})
 
 export const welcomeText = () =>
   [
     '<b>MediaHub</b>',
     '<i>Assistente de conteúdo para o seu negócio</i>',
     '',
-    'Bem-vindo. Por aqui você organiza buscas, capas, artes e a agenda de jogos — <b>sem precisar abrir o site</b>.',
+    'Organize buscas, capas, artes e a agenda de jogos neste chat — sem precisar abrir o site.',
     '',
-    '<b>O que você pode fazer</b>',
+    '<b>Disponível aqui</b>',
     '• Buscar títulos e enviar capas',
-    '• Receber trailer de um título',
-    '• Gerar banners e Top 10 <i>(Premium)</i>',
-    '• Consultar a lista completa de jogos <i>(Premium)</i>',
-    '• Abrir chamados de suporte',
+    '• Trailer do título',
+    '• Banners e Top 10 <i>(Premium)</i>',
+    '• Agenda completa de jogos <i>(Premium)</i>',
+    '• Suporte por chamado',
     '',
-    'Para continuar, entre na sua conta ou crie uma nova.',
-    'Cadastros novos começam no plano <b>Free</b>.',
+    'Entre na sua conta ou crie uma nova para começar.',
+    'Novos cadastros iniciam no plano <b>Free</b>.',
   ].join('\n')
 
 export const linkedWelcomeText = (user, { justLinked = false } = {}) => {
   const name = escapeHtml(user.name || user.email || 'você')
-  const plan = planLabel(user.type)
-  const greeting = justLinked
-    ? `Conta conectada com sucesso.`
-    : `Bem-vindo de volta.`
-
+  const greeting = justLinked ? 'Conta conectada.' : 'Bem-vindo de volta.'
   const planLine =
     user.type === 'premium'
-      ? `Plano atual: <b>Premium</b>${user.subscriptionEnd ? ` · até ${escapeHtml(formatDateTimeBr(user.subscriptionEnd))}` : ''}`
+      ? `Plano: <b>Premium</b>${user.subscriptionEnd ? ` · até ${escapeHtml(formatDateTimeBr(user.subscriptionEnd))}` : ''}`
       : user.type === 'admin'
         ? 'Acesso: <b>Admin</b>'
-        : 'Plano atual: <b>Free</b> · buscas com limite diário'
-
-  const next =
-    user.type === 'free'
-      ? 'Use o menu abaixo. Recursos com 🔒 pedem Premium — veja em Planos.'
-      : 'Use o menu abaixo para começar.'
+        : 'Plano: <b>Free</b> · limite diário de buscas'
 
   return [
-    `<b>MediaHub</b>`,
+    '<b>MediaHub</b>',
     '',
     `${greeting} Olá, <b>${name}</b>.`,
     planLine,
     '',
-    next,
+    'Use o <b>menu</b> abaixo ou a barra inferior para navegar.',
   ].join('\n')
 }
 
 export const helpText = (userType) => {
   const lines = [
-    '<b>Central de ajuda — MediaHub</b>',
+    '<b>Ajuda</b>',
     '',
-    'Navegue pelos botões do /menu ou use os comandos:',
+    'Navegue pelos botões. Comandos opcionais:',
     '',
     '<b>Conta</b>',
-    '/entrar — acessar com e-mail e senha',
-    '/cadastrar — criar conta (plano Free)',
-    '/conta — dados e plano',
-    '/planos — o que cada plano libera',
-    '/senha — alterar senha',
-    '/sair — desconectar este chat',
+    '/entrar · /cadastrar · /conta · /planos',
+    '/senha · /sair',
     '',
     '<b>Operação</b>',
-    '/buscar &lt;termo&gt; — filme ou série',
-    '/historico — últimas buscas',
-    '/suporte — abrir chamado',
-    '/tickets — meus chamados',
+    '/menu · /buscar · /historico',
+    '/suporte · /tickets · /ajuda',
   ]
   if (userType === 'premium' || userType === 'admin') {
-    lines.push(
-      '',
-      '<b>Premium</b>',
-      '/futebol — agenda completa do dia',
-      '/futebol gerar — banner PNG',
-      '/top10 — ranking em banner',
-    )
+    lines.push('', '<b>Premium</b>', '/futebol · /futebol gerar · /top10')
   } else {
-    lines.push('', 'Itens Premium aparecem no menu com 🔒 até a liberação do plano.')
+    lines.push('', 'Recursos Premium aparecem no menu com 🔒.')
   }
-  lines.push('', 'Dica: após buscar, toque no número do título para capa, trailer ou banner.')
   return lines.join('\n')
 }
 
@@ -151,26 +256,24 @@ const formatDateTimeBr = (value) => {
 export const plansText = (userType) => {
   const current = planLabel(userType)
   return [
-    '<b>Planos MediaHub</b>',
-    userType ? `Seu plano agora: <b>${escapeHtml(current)}</b>` : '',
+    '<b>Planos</b>',
+    userType ? `Atual: <b>${escapeHtml(current)}</b>` : '',
     '',
     '<b>Free</b>',
-    '• Busca de títulos (limite diário)',
-    '• Envio de capa e link de trailer',
+    '• Busca com limite diário',
+    '• Capa e trailer',
     '• Histórico e suporte',
-    '• Ideal para começar',
     '',
     '<b>Premium</b>',
     '• Buscas sem o teto do Free',
-    '• Agenda completa de jogos + banner',
+    '• Jogos do dia + banner',
     '• Top 10 e banner de título',
-    '• Recursos avançados alinhados ao painel web',
     '',
     '<b>Admin</b>',
-    '• Gestão de usuários e planos no painel web',
-    '• O bot não altera planos sozinho — só o administrador',
+    '• Gestão de planos no painel web',
+    '• O bot não altera planos sozinho',
     '',
-    'Para upgrade: abra /suporte com o assunto <i>Solicitar Premium</i>, ou peça ao administrador no painel.',
+    'Upgrade: suporte (Solicitar Premium) ou administrador.',
   ]
     .filter(Boolean)
     .join('\n')
@@ -185,21 +288,10 @@ export const accountText = (user) => {
 
   const tips =
     user.type === 'free'
-      ? [
-          '',
-          '<b>Como evoluir</b>',
-          'Abra Planos ou fale com o suporte pedindo Premium.',
-          'Quem define o plano é o administrador do sistema.',
-        ].join('\n')
+      ? '\n\nPara Premium, use <b>Solicitar Premium</b> ou fale com o administrador.'
       : user.type === 'premium'
-        ? [
-            '',
-            'Seu Premium está ativo. Em caso de dúvidas sobre renovação, use /suporte.',
-          ].join('\n')
-        : [
-            '',
-            'Você tem acesso administrativo. Gerencie planos no painel web.',
-          ].join('\n')
+        ? '\n\nPremium ativo. Dúvidas de renovação: Suporte.'
+        : '\n\nAcesso administrativo. Planos são gerenciados no painel web.'
 
   return [
     '<b>Minha conta</b>',
@@ -214,9 +306,16 @@ export const accountText = (user) => {
     .join('\n')
 }
 
+export const searchPromptText = () =>
+  [
+    '<b>Buscar</b>',
+    '',
+    'Digite o nome do filme ou série.',
+  ].join('\n')
+
 export const formatSearchResults = (items) => {
   if (!items.length) {
-    return 'Nenhum resultado para este termo.\nTente outro nome ou use /buscar novamente.'
+    return 'Nenhum resultado.\nTente outro termo ou inicie uma nova busca.'
   }
   const lines = items.map((item, i) => {
     const year = item.year ? ` (${item.year})` : ''
@@ -224,11 +323,11 @@ export const formatSearchResults = (items) => {
     return `${i + 1}. <b>${escapeHtml(item.title)}</b>${escapeHtml(year)} — <i>${kind}</i>`
   })
   return [
-    `Resultados: <b>${items.length}</b>`,
+    `<b>Resultados</b> · ${items.length}`,
     '',
     ...lines,
     '',
-    'Toque no número para detalhes e ações.',
+    'Selecione um número:',
   ].join('\n')
 }
 
@@ -243,7 +342,7 @@ export const searchPickKeyboard = (count) => {
   }
   rows.push([
     { text: 'Nova busca', callback_data: 'menu:search' },
-    { text: 'Menu', callback_data: 'menu:home' },
+    { text: '« Menu', callback_data: 'menu:home' },
   ])
   return { inline_keyboard: rows }
 }
@@ -254,15 +353,11 @@ const formatDateBr = (dateIso) => {
   return `${d}/${m}/${y}`
 }
 
-/**
- * Formata agenda completa em 1+ mensagens (limite Telegram ~4096).
- * @returns {string[]}
- */
 export const formatFootballListChunks = (dateIso, matches, { maxLen = 3500 } = {}) => {
   const list = Array.isArray(matches) ? matches.slice() : []
   if (!list.length) {
     return [
-      `Não há jogos para <b>${escapeHtml(formatDateBr(dateIso))}</b>.\nSe for Premium, use /futebol atualizar.`,
+      `Não há jogos para <b>${escapeHtml(formatDateBr(dateIso))}</b>.\nUse Atualizar se necessário.`,
     ]
   }
 
@@ -303,7 +398,6 @@ export const formatFootballListChunks = (dateIso, matches, { maxLen = 3500 } = {
 
   const chunks = []
   let current = header
-
   const startContinuation = () =>
     `<b>Jogos</b> (continuação)\n${escapeHtml(formatDateBr(dateIso))}\n\n`
 
@@ -326,9 +420,7 @@ export const formatFootballListChunks = (dateIso, matches, { maxLen = 3500 } = {
     current += block
   }
 
-  if (current.trim()) {
-    chunks.push(current.trimEnd())
-  }
+  if (current.trim()) chunks.push(current.trimEnd())
 
   const total = chunks.length
   if (total > 1) {
@@ -336,15 +428,13 @@ export const formatFootballListChunks = (dateIso, matches, { maxLen = 3500 } = {
       chunks[i] = `${chunks[i].trimEnd()}\n\nParte ${i + 1}/${total}`
     }
   }
-  chunks[chunks.length - 1] = `${chunks[chunks.length - 1].trimEnd()}\n\nBanner PNG: use o botão abaixo.`
+  chunks[chunks.length - 1] = `${chunks[chunks.length - 1].trimEnd()}\n\nUse os botões para atualizar ou gerar banner.`
 
   return chunks
 }
 
-export const formatFootballList = (dateIso, matches, opts = {}) => {
-  const chunks = formatFootballListChunks(dateIso, matches, opts)
-  return chunks.join('\n\n———\n\n')
-}
+export const formatFootballList = (dateIso, matches, opts = {}) =>
+  formatFootballListChunks(dateIso, matches, opts).join('\n\n———\n\n')
 
 export const footballKeyboard = (dateIso) => ({
   inline_keyboard: [
@@ -352,7 +442,7 @@ export const footballKeyboard = (dateIso) => ({
       { text: 'Atualizar', callback_data: `fb:refresh:${dateIso}` },
       { text: 'Gerar banner', callback_data: `fb:gen:${dateIso}` },
     ],
-    [{ text: 'Menu', callback_data: 'menu:home' }],
+    rowMenu(),
   ],
 })
 
@@ -370,36 +460,93 @@ export const titleActionsKeyboard = (index, { premium = false } = {}) => {
   }
   rows.push([
     { text: 'Nova busca', callback_data: 'menu:search' },
-    { text: 'Menu', callback_data: 'menu:home' },
+    { text: '« Menu', callback_data: 'menu:home' },
   ])
   return { inline_keyboard: rows }
+}
+
+export const titleDetailText = (item) => {
+  const overview = item.overview ? `\n\n${escapeHtml(item.overview.slice(0, 280))}` : ''
+  return `<b>${escapeHtml(item.title)}</b>${item.year ? ` (${escapeHtml(item.year)})` : ''}${overview}`
 }
 
 export const unlinkNeedText = () =>
   [
     '<b>Acesso necessário</b>',
     '',
-    'Para usar o MediaHub neste chat, entre ou crie sua conta.',
+    'Entre ou crie sua conta para continuar.',
     'Não é obrigatório abrir o site.',
     '',
-    'Cadastros novos iniciam no plano <b>Free</b>. O administrador define upgrades.',
+    'Novos cadastros: plano <b>Free</b>.',
   ].join('\n')
 
 export const linkHelpText = () =>
   [
-    '<b>Vínculo pelo site (opcional)</b>',
+    '<b>Código da web</b> <i>(opcional)</i>',
     '',
-    '1. Abra o MediaHub → <b>Minha Área → Telegram</b>',
+    '1. MediaHub → Minha Área → Telegram',
     '2. Gere o código',
     '3. Abra o link ou envie <code>/start link_XXXX</code>',
     '',
-    'Preferência recomendada: /entrar ou Criar conta neste bot.',
+    'Recomendado: Entrar ou Criar conta neste bot.',
   ].join('\n')
 
 export const premiumUpsell = (featureLabel) =>
   [
-    `<b>${escapeHtml(featureLabel)}</b> faz parte do plano Premium.`,
+    `<b>${escapeHtml(featureLabel)}</b> — recurso Premium`,
     '',
-    'No Free você busca títulos, envia capas e usa o suporte.',
-    'Para liberar este recurso, abra /planos ou peça upgrade em /suporte.',
+    'No Free: busca, capa, trailer e suporte.',
+    'Para liberar: Ver planos ou Solicitar Premium.',
   ].join('\n')
+
+export const historyText = (rows) => {
+  if (!rows.length) {
+    return [
+      '<b>Histórico</b>',
+      '',
+      'Ainda não há buscas registradas.',
+    ].join('\n')
+  }
+  const lines = rows.map(
+    (r, i) =>
+      `${i + 1}. ${escapeHtml(r.query)} <i>(${new Date(Number(r.timestamp)).toLocaleString('pt-BR')})</i>`,
+  )
+  return ['<b>Histórico</b>', '', ...lines].join('\n')
+}
+
+export const historyKeyboard = () => ({
+  inline_keyboard: [
+    [{ text: 'Buscar título', callback_data: 'menu:search' }],
+    rowMenu(),
+  ],
+})
+
+export const ticketsText = (rows) => {
+  if (!rows.length) {
+    return ['<b>Meus chamados</b>', '', 'Nenhum chamado aberto.'].join('\n')
+  }
+  const lines = rows.map(
+    (t) => `#${t.id} · ${escapeHtml(t.status)} · <b>${escapeHtml(t.subject)}</b>`,
+  )
+  return ['<b>Meus chamados</b>', '', ...lines].join('\n')
+}
+
+export const ticketsKeyboard = () => ({
+  inline_keyboard: [
+    [{ text: 'Abrir chamado', callback_data: 'menu:support' }],
+    rowMenu(),
+  ],
+})
+
+export const BOT_COMMANDS = [
+  { command: 'start', description: 'Início / boas-vindas' },
+  { command: 'menu', description: 'Menu principal' },
+  { command: 'buscar', description: 'Buscar filme ou série' },
+  { command: 'historico', description: 'Últimas buscas' },
+  { command: 'conta', description: 'Minha conta e plano' },
+  { command: 'planos', description: 'Comparar planos' },
+  { command: 'suporte', description: 'Abrir chamado' },
+  { command: 'ajuda', description: 'Central de ajuda' },
+  { command: 'entrar', description: 'Entrar na conta' },
+  { command: 'sair', description: 'Sair deste chat' },
+]

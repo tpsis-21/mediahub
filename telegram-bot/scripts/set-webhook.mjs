@@ -45,6 +45,15 @@ const main = async () => {
   const data = await res.json()
   console.log(JSON.stringify({ webhookUrl, ok: data.ok, description: data.description }, null, 2))
   if (!data.ok) process.exit(1)
+
+  const { BOT_COMMANDS } = await import('../lib/format.mjs')
+  const cmdsRes = await fetch(`https://api.telegram.org/bot${token}/setMyCommands`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ commands: BOT_COMMANDS }),
+  })
+  const cmdsData = await cmdsRes.json()
+  console.log(JSON.stringify({ setMyCommands: cmdsData.ok, description: cmdsData.description }, null, 2))
 }
 
 main()

@@ -7,6 +7,9 @@ import {
   formatFootballListChunks,
   welcomeText,
   plansText,
+  mainMenuKeyboard,
+  resolveNavAction,
+  NAV,
 } from '../lib/format.mjs'
 
 describe('telegram-bot format', () => {
@@ -26,6 +29,16 @@ describe('telegram-bot format', () => {
     expect(welcomeText()).toContain('Free')
     expect(plansText('free')).toContain('Premium')
     expect(plansText('free')).toContain('administrador')
+  })
+
+  it('menu tem seções e botão de suporte hub', () => {
+    const kb = mainMenuKeyboard('free')
+    const flat = kb.inline_keyboard.flat().map((b) => b.callback_data)
+    expect(flat).toContain('menu:search')
+    expect(flat).toContain('menu:support_hub')
+    expect(flat).toContain('menu:locked:football')
+    expect(resolveNavAction(NAV.MENU)).toBe('menu')
+    expect(resolveNavAction(NAV.SEARCH)).toBe('search')
   })
 
   it('formata resultados', () => {
@@ -74,6 +87,7 @@ describe('telegram-bot dispatch parse', () => {
       handleTickets: async () => {},
       handleCancel: async () => {},
       handleTextWhileAwaiting: async () => false,
+      handleNavAction: async () => false,
       handleCallback: async () => {},
     }
     const { handleUpdate, parseCommand } = createDispatch(handlers)

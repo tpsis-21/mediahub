@@ -1,6 +1,8 @@
 /**
  * Roteia Updates do Telegram para handlers.
  */
+import { resolveNavAction } from './format.mjs'
+
 export const createDispatch = (handlers) => {
   const parseCommand = (text) => {
     const raw = String(text || '').trim()
@@ -103,6 +105,13 @@ export const createDispatch = (handlers) => {
           await handlers.handleHelp({ chatId })
           return
       }
+    }
+
+    const nav = resolveNavAction(text)
+    if (nav && typeof handlers.handleNavAction === 'function') {
+      // Teclado inferior tem prioridade sobre fluxos em andamento (exceto senha digitada)
+      const consumedNav = await handlers.handleNavAction({ chatId, action: nav })
+      if (consumedNav) return
     }
 
     const consumed = await handlers.handleTextWhileAwaiting({ chatId, text, messageId })

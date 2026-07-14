@@ -26,6 +26,11 @@ export const createBotServices = (deps) => {
     getTicketsEnabled,
     deactivateExpiredPremiumByUserId,
     normalizeTrendingPayload,
+    normalizeEmail,
+    createPasswordDigest,
+    verifyPassword,
+    getAllowRegistrations,
+    resolveTrailerUrlFromProvider,
   } = deps
 
   const loadUserKey = async (userId) => {
@@ -322,6 +327,159 @@ export const createBotServices = (deps) => {
     }
   }
 
+  const loginWithPassword = async ({ emailRaw, password }) => {
+    const email = typeof normalizeEmail === 'function' ? normalizeEmail(emailRaw) : String(emailRaw || '').trim().toLowerCase()
+    if (!email || !password) {
+      return { ok: false, message: 'Informe e-mail e senha.' }
+    }
+    const result = await query('select * from app_users where email = $1 limit 1', [email])
+    const row = result.rows[0]
+    if (!row) return { ok: false, message: 'E-mail ou senha inválidos.' }
+
+    if (typeof deactivateExpiredPremiumByUserId === 'function') {
+      await deactivateExpiredPremiumByUserId(row.id)
+    }
+    const currentResult = await query('select * from app_users where id = $1 limit 1', [row.id])
+    const currentRow = currentResult.rows[0] || row
+    if (!currentRow.is_active) {
+      return { ok: false, message: 'Sua conta está inativa. Fale com o suporte.' }
+    }
+
+    const ok = await verifyPassword({
+      password,
+      digest: {
+        hash: currentRow.password_hash,
+        salt: currentRow.password_salt,
+        iterations: currentRow.password_iterations,
+      },
+    })
+    if (!ok) return { ok: false, message: 'E-mail ou senha inválidos.' }
+
+    return {
+      ok: true,
+      userId: currentRow.id,
+      email: currentRow.email,
+      name: currentRow.name,
+      type: currentRow.type,
+    }
+  }
+
+  const registerWithPassword = async ({ emailRaw, password, name, brandName, phone = '' }) => {
+    const email = typeof normalizeEmail === 'function' ? normalizeEmail(emailRaw) : String(emailRaw || '').trim().toLowerCase()
+    const nameTrim = String(name || '').trim()
+    const brandTrim = String(brandName || '').trim() || nameTrim
+    const phoneTrim = String(phone || '').trim()
+
+    if (!email || !password || !nameTrim) {
+      return { ok: false, message: 'Preencha nome, e-mail e senha.' }
+    }
+    if (String(password).length < 6) {
+      return { ok: false, message: 'A senha precisa ter pelo menos 6 caracteres.' }
+    }
+
+    if (typeof getAllowRegistrations === 'function') {
+      const allow = await getAllowRegistrations()
+      if (!allow) {
+        return { ok: false, message: 'Cadastros estão temporariamente fechados. Use /entrar se já tiver conta.' }
+      }
+    }
+
+    try {
+      const digest = await createPasswordDigest(password)
+      const bootstrapAdminEmail =
+        typeof process.env.ADMIN_BOOTSTRAP_EMAIL === 'string'
+          ? process.env.ADMIN_BOOTSTRAP_EMAIL.trim().toLowerCase()
+          : 'admin@mediahub.com'
+      const isAdmin = Boolean(bootstrapAdminEmail && email === bootstrapAdminEmail)
+
+      const created = await query(
+        `
+        insert into app_users
+          (email, name, phone, type, is_active, subscription_end, brand_name, brand_colors, password_hash, password_salt, password_iterations)
+        values
+          ($1, $2, nullif($3,''), $4, true, null, $5, $6, $7, $8, $9)
+        returning id, email, name, type
+        `,
+        [
+          email,
+          nameTrim,
+          phoneTrim,
+          isAdmin ? 'admin' : 'free',
+          brandTrim,
+          JSON.stringify({ primary: '#3b82f6', secondary: '#8b5cf6' }),
+          digest.hash,
+          digest.salt,
+          digest.iterations,
+        ],
+      )
+      const row = created.rows[0]
+      return { ok: true, userId: row.id, email: row.email, name: row.name, type: row.type }
+    } catch (e) {
+      const message = String(e?.message || '')
+      if (message.includes('unique') || message.includes('duplicate')) {
+        return { ok: false, message: 'Este e-mail já está cadastrado. Use /entrar.' }
+      }
+      return { ok: false, message: 'Não foi possível criar a conta. Tente novamente.' }
+    }
+  }
+
+  const changePassword = async ({ userId, currentPassword, newPassword }) => {
+    if (!currentPassword || !newPassword) {
+      return { ok: false, message: 'Informe a senha atual e a nova.' }
+    }
+    if (String(newPassword).length < 6) {
+      return { ok: false, message: 'A nova senha precisa ter pelo menos 6 caracteres.' }
+    }
+    const result = await query(
+      `select password_hash, password_salt, password_iterations from app_users where id = $1 limit 1`,
+      [userId],
+    )
+    const row = result.rows[0]
+    if (!row) return { ok: false, message: 'Conta não encontrada.' }
+    const ok = await verifyPassword({
+      password: currentPassword,
+      digest: {
+        hash: row.password_hash,
+        salt: row.password_salt,
+        iterations: row.password_iterations,
+      },
+    })
+    if (!ok) return { ok: false, message: 'Senha atual incorreta.' }
+    const digest = await createPasswordDigest(newPassword)
+    await query(
+      `
+      update app_users
+      set password_hash = $1, password_salt = $2, password_iterations = $3, updated_at = now()
+      where id = $4
+      `,
+      [digest.hash, digest.salt, digest.iterations, userId],
+    )
+    return { ok: true }
+  }
+
+  const findTrailerUrl = async ({ userId, mediaType, mediaId }) => {
+    if (typeof resolveTrailerUrlFromProvider !== 'function') {
+      return { ok: false, message: 'Trailer indisponível neste servidor.' }
+    }
+    const profile = await loadUserKey(userId)
+    if (!profile) return { ok: false, message: 'Conta indisponível.' }
+    const id = Number(mediaId)
+    if (!Number.isFinite(id) || id <= 0) {
+      return { ok: false, message: 'Título inválido para trailer.' }
+    }
+    try {
+      const url = await resolveTrailerUrlFromProvider({
+        mediaType: mediaType === 'tv' ? 'tv' : 'movie',
+        id,
+        userKey: profile.userKey,
+      })
+      if (!url) return { ok: false, message: 'Não encontrei trailer para este título.' }
+      return { ok: true, url }
+    } catch {
+      return { ok: false, message: 'Não foi possível buscar o trailer agora.' }
+    }
+  }
+
   return {
     searchTitles,
     buildPosterUrl,
@@ -332,5 +490,9 @@ export const createBotServices = (deps) => {
     createTicket,
     getUserBrand,
     getTrending,
+    loginWithPassword,
+    registerWithPassword,
+    changePassword,
+    findTrailerUrl,
   }
 }

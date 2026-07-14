@@ -6,11 +6,23 @@ import {
   formatFootballListChunks,
   formatSearchResults,
   helpText,
+  linkHelpText,
   mainMenuKeyboard,
+  premiumUpsell,
   searchPickKeyboard,
   titleActionsKeyboard,
   unlinkNeedText,
+  welcomeKeyboard,
+  welcomeText,
 } from '../lib/format.mjs'
+import {
+  assertAuthAllowed,
+  clearAuthFailures,
+  clearPending,
+  getPending,
+  recordAuthFailure,
+  setPending,
+} from '../lib/pending.mjs'
 
 /**
  * @param {object} ctx
@@ -21,10 +33,54 @@ export const createHandlers = (ctx) => {
   const requireSession = async (chatId) => {
     const session = await sessions.getByChatId(chatId)
     if (!session) {
-      await api.sendMessage(chatId, unlinkNeedText())
+      await api.sendMessage(chatId, unlinkNeedText(), { reply_markup: welcomeKeyboard() })
       return null
     }
     return session
+  }
+
+  const greetLinked = async (chatId, session, { justLinked = false } = {}) => {
+    const name = escapeHtml(session.user.name || session.user.email || 'você')
+    const intro = justLinked
+      ? `Pronto, <b>${name}</b>! Conta conectada com sucesso.`
+      : `Olá de novo, <b>${name}</b>!`
+    await api.sendMessage(
+      chatId,
+      `${intro}\n\nO que você quer fazer agora?`,
+      { reply_markup: mainMenuKeyboard(session.user.type) },
+    )
+  }
+
+  const startLoginFlow = async (chatId) => {
+    const gate = assertAuthAllowed(chatId)
+    if (!gate.ok) {
+      await api.sendMessage(chatId, gate.message)
+      return
+    }
+    setPending(chatId, { state: 'awaiting_login_email', data: {} })
+    await api.sendMessage(
+      chatId,
+      'Vamos entrar na sua conta.\n\nEnvie seu <b>e-mail</b> (ou /cancelar):',
+    )
+  }
+
+  const startRegisterFlow = async (chatId) => {
+    const gate = assertAuthAllowed(chatId)
+    if (!gate.ok) {
+      await api.sendMessage(chatId, gate.message)
+      return
+    }
+    setPending(chatId, { state: 'awaiting_register_name', data: {} })
+    await api.sendMessage(
+      chatId,
+      [
+        'Vamos criar sua conta — leva menos de 1 minuto.',
+        '',
+        'Envie seu <b>nome</b> (como prefere ser chamado):',
+        '',
+        '<i>Dica: use /cancelar a qualquer momento.</i>',
+      ].join('\n'),
+    )
   }
 
   const handleStart = async ({ chatId, payload }) => {
@@ -34,53 +90,48 @@ export const createHandlers = (ctx) => {
       const consumed = await pairing.consumeLinkCode(code)
       if (!consumed.ok) {
         const map = {
-          expired: 'Código expirado. Gere outro na Minha Área.',
-          not_found: 'Código inválido.',
-          inactive: 'Conta inativa.',
+          expired: 'Esse código expirou. Gere outro na Minha Área ou use /entrar.',
+          not_found: 'Código não encontrado. Confira e tente de novo, ou use /entrar.',
+          inactive: 'Essa conta está inativa. Fale com o suporte.',
           invalid: 'Código inválido.',
         }
-        await api.sendMessage(chatId, map[consumed.reason] || 'Não foi possível vincular.')
+        await api.sendMessage(chatId, map[consumed.reason] || 'Não foi possível vincular.', {
+          reply_markup: welcomeKeyboard(),
+        })
         return
       }
+      clearPending(chatId)
       await pairing.linkChatToUser({ chatId, userId: consumed.userId })
       const session = await sessions.getByChatId(chatId)
-      await api.sendMessage(
-        chatId,
-        `Conta vinculada: <b>${escapeHtml(consumed.name || consumed.email)}</b>.\nUse /menu para começar.`,
-        { reply_markup: mainMenuKeyboard(session?.user?.type) },
-      )
+      await greetLinked(chatId, session, { justLinked: true })
       return
     }
 
+    clearPending(chatId)
     const session = await sessions.getByChatId(chatId)
     if (session) {
-      await api.sendMessage(chatId, `Bem-vindo de volta, <b>${escapeHtml(session.user.name || session.user.email)}</b>!`, {
-        reply_markup: mainMenuKeyboard(session.user.type),
-      })
+      await greetLinked(chatId, session)
       return
     }
-    // Fallback: perfil já tem chat_id (Minha Área) mas ainda sem sessão conversacional
     const ensured = await sessions.ensureFromUserChatId(chatId)
     if (ensured) {
-      await api.sendMessage(
-        chatId,
-        `Conta reconhecida: <b>${escapeHtml(ensured.user.name || ensured.user.email)}</b>.\nUse /menu para começar.`,
-        { reply_markup: mainMenuKeyboard(ensured.user.type) },
-      )
+      await greetLinked(chatId, ensured, { justLinked: true })
       return
     }
-    await api.sendMessage(chatId, unlinkNeedText())
+    await api.sendMessage(chatId, welcomeText(), { reply_markup: welcomeKeyboard() })
   }
 
   const handleHelp = async ({ chatId }) => {
     const session = await sessions.getByChatId(chatId)
-    await api.sendMessage(chatId, helpText(session?.user?.type))
+    await api.sendMessage(chatId, helpText(session?.user?.type), {
+      reply_markup: session ? mainMenuKeyboard(session.user.type) : welcomeKeyboard(),
+    })
   }
 
   const handleMenu = async ({ chatId }) => {
     const session = await requireSession(chatId)
     if (!session) return
-    await api.sendMessage(chatId, 'Escolha uma opção:', {
+    await api.sendMessage(chatId, 'Escolha uma opção abaixo 👇', {
       reply_markup: mainMenuKeyboard(session.user.type),
     })
   }
@@ -88,28 +139,66 @@ export const createHandlers = (ctx) => {
   const handleAccount = async ({ chatId }) => {
     const session = await requireSession(chatId)
     if (!session) return
-    await api.sendMessage(chatId, accountText(session.user))
+    await api.sendMessage(chatId, accountText(session.user), {
+      reply_markup: mainMenuKeyboard(session.user.type),
+    })
   }
 
   const handleLogout = async ({ chatId }) => {
     await sessions.remove(chatId)
+    clearPending(chatId)
     await api.sendMessage(
       chatId,
-      'Chat desvinculado da sessão do bot.\nO destino de envio na web (chat_id) permanece até você limpar na Minha Área.\nPara vincular de novo, use um novo código.',
+      'Você saiu deste chat. Seus dados na conta continuam salvos.\n\nQuando quiser voltar, use /entrar.',
+      { reply_markup: welcomeKeyboard() },
     )
+  }
+
+  const handleLoginCommand = async ({ chatId }) => {
+    const existing = await sessions.getByChatId(chatId)
+    if (existing) {
+      await api.sendMessage(
+        chatId,
+        `Você já está conectado como <b>${escapeHtml(existing.user.name || existing.user.email)}</b>.\nUse /sair se quiser trocar de conta.`,
+        { reply_markup: mainMenuKeyboard(existing.user.type) },
+      )
+      return
+    }
+    await startLoginFlow(chatId)
+  }
+
+  const handleRegisterCommand = async ({ chatId }) => {
+    const existing = await sessions.getByChatId(chatId)
+    if (existing) {
+      await api.sendMessage(
+        chatId,
+        'Este chat já tem uma conta conectada. Use /sair antes de criar outra.',
+        { reply_markup: mainMenuKeyboard(existing.user.type) },
+      )
+      return
+    }
+    await startRegisterFlow(chatId)
+  }
+
+  const handlePasswordCommand = async ({ chatId }) => {
+    const session = await requireSession(chatId)
+    if (!session) return
+    clearPending(chatId)
+    setPending(chatId, { state: 'awaiting_password_current', data: { userId: session.userId } })
+    await api.sendMessage(chatId, 'Envie sua <b>senha atual</b> (depois pedimos a nova). Ou /cancelar:')
   }
 
   const runSearch = async ({ chatId, session, queryText }) => {
     const q = String(queryText || '').trim().slice(0, 120)
     if (!q) {
       await sessions.patch(chatId, { state: 'awaiting_search' })
-      await api.sendMessage(chatId, 'Envie o termo de busca (filme ou série):')
+      await api.sendMessage(chatId, 'Digite o nome do filme ou série que deseja buscar:')
       return
     }
     await api.sendMessage(chatId, `Buscando <b>${escapeHtml(q)}</b>…`)
     const result = await services.searchTitles({ userId: session.userId, queryText: q })
     if (!result.ok) {
-      await api.sendMessage(chatId, result.message || 'Falha na busca.')
+      await api.sendMessage(chatId, result.message || 'Não consegui buscar agora. Tente de novo em instantes.')
       return
     }
     await sessions.patch(chatId, {
@@ -133,14 +222,18 @@ export const createHandlers = (ctx) => {
     if (!session) return
     const rows = await services.getHistory(session.userId)
     if (!rows.length) {
-      await api.sendMessage(chatId, 'Histórico vazio.')
+      await api.sendMessage(chatId, 'Ainda não há buscas no histórico.\nQue tal começar com /buscar?', {
+        reply_markup: mainMenuKeyboard(session.user.type),
+      })
       return
     }
     const lines = rows.map(
       (r, i) =>
         `${i + 1}. ${escapeHtml(r.query)} <i>(${new Date(Number(r.timestamp)).toLocaleString('pt-BR')})</i>`,
     )
-    await api.sendMessage(chatId, ['<b>Últimas buscas</b>', '', ...lines].join('\n'))
+    await api.sendMessage(chatId, ['<b>📜 Suas últimas buscas</b>', '', ...lines].join('\n'), {
+      reply_markup: mainMenuKeyboard(session.user.type),
+    })
   }
 
   const sendFootballScheduleMessages = async (chatId, date, matches) => {
@@ -157,7 +250,7 @@ export const createHandlers = (ctx) => {
     const session = await requireSession(chatId)
     if (!session) return
     if (!isPremiumOrAdmin(session.user.type)) {
-      await api.sendMessage(chatId, 'Jogos do dia é exclusivo Premium. Veja /conta.')
+      await api.sendMessage(chatId, premiumUpsell('Jogos do dia'))
       return
     }
     const parts = String(args || '').trim().split(/\s+/).filter(Boolean)
@@ -172,13 +265,13 @@ export const createHandlers = (ctx) => {
     }
 
     if (wantRefresh) {
-      await api.sendMessage(chatId, 'Atualizando agenda…')
+      await api.sendMessage(chatId, 'Atualizando a agenda para você…')
       try {
         const { date, matches } = await services.refreshFootball(dateArg)
         await sendFootballScheduleMessages(chatId, date, matches)
       } catch (e) {
         console.error('[telegram-bot] football refresh', e)
-        await api.sendMessage(chatId, 'Não foi possível atualizar a agenda agora.')
+        await api.sendMessage(chatId, 'Não consegui atualizar a agenda agora. Tente novamente em breve.')
       }
       return
     }
@@ -188,16 +281,16 @@ export const createHandlers = (ctx) => {
       await sendFootballScheduleMessages(chatId, date, matches)
     } catch (e) {
       console.error('[telegram-bot] football', e)
-      await api.sendMessage(chatId, 'Não foi possível carregar os jogos.')
+      await api.sendMessage(chatId, 'Não consegui carregar os jogos agora.')
     }
   }
 
   const generateFootballBanner = async ({ chatId, session, dateArg }) => {
     if (!banners?.renderFootballBanner || !api.sendPhotoBuffer) {
-      await api.sendMessage(chatId, 'Geração de banner indisponível neste servidor.')
+      await api.sendMessage(chatId, 'A geração de banner ainda não está disponível neste servidor.')
       return
     }
-    await api.sendMessage(chatId, 'Gerando banner dos jogos…')
+    await api.sendMessage(chatId, 'Montando o banner dos jogos… um momento ✨')
     try {
       const { date, matches } = await services.getFootballSchedule(dateArg)
       const brand = (await services.getUserBrand(session.userId)) || {}
@@ -214,16 +307,16 @@ export const createHandlers = (ctx) => {
       })
     } catch (e) {
       console.error('[telegram-bot] football banner', e)
-      await api.sendMessage(chatId, 'Falha ao gerar o banner. Tente de novo em instantes.')
+      await api.sendMessage(chatId, 'Não consegui gerar o banner. Tente de novo em instantes.')
     }
   }
 
   const generateTitleBanner = async ({ chatId, session, item }) => {
     if (!banners?.renderTitleBanner || !api.sendPhotoBuffer) {
-      await api.sendMessage(chatId, 'Geração de banner indisponível neste servidor.')
+      await api.sendMessage(chatId, 'A geração de banner ainda não está disponível neste servidor.')
       return
     }
-    await api.sendMessage(chatId, 'Gerando banner…')
+    await api.sendMessage(chatId, 'Gerando seu banner…')
     try {
       const brand = (await services.getUserBrand(session.userId)) || {}
       const posterUrl = await services.buildPosterUrl(item.posterPath)
@@ -243,25 +336,52 @@ export const createHandlers = (ctx) => {
       })
     } catch (e) {
       console.error('[telegram-bot] title banner', e)
-      await api.sendMessage(chatId, 'Falha ao gerar o banner.')
+      await api.sendMessage(chatId, 'Não consegui gerar o banner deste título.')
     }
+  }
+
+  const sendTrailer = async ({ chatId, session, item }) => {
+    await api.sendMessage(chatId, 'Procurando o trailer…')
+    const found = await services.findTrailerUrl({
+      userId: session.userId,
+      mediaType: item.mediaType,
+      mediaId: item.id,
+    })
+    if (!found.ok) {
+      await api.sendMessage(chatId, found.message || 'Trailer não encontrado.')
+      return
+    }
+    await api.sendMessage(
+      chatId,
+      [
+        `🎬 Trailer de <b>${escapeHtml(item.title)}</b>`,
+        '',
+        found.url,
+      ].join('\n'),
+      { disable_web_page_preview: false },
+    )
   }
 
   const handleTop10 = async ({ chatId, args }) => {
     const session = await requireSession(chatId)
     if (!session) return
     if (!isPremiumOrAdmin(session.user.type)) {
-      await api.sendMessage(chatId, 'Top 10 é exclusivo Premium. Veja /conta.')
+      await api.sendMessage(chatId, premiumUpsell('Top 10'))
       return
     }
     if (!banners?.renderTop10Banner || !api.sendPhotoBuffer) {
-      await api.sendMessage(chatId, 'Geração de banner indisponível neste servidor.')
+      await api.sendMessage(chatId, 'A geração de banner ainda não está disponível neste servidor.')
       return
     }
     const raw = String(args || '').trim().toLowerCase()
-    const mediaType = raw === 'filme' || raw === 'movie' ? 'movie' : raw === 'serie' || raw === 'série' || raw === 'tv' ? 'tv' : 'all'
+    const mediaType =
+      raw === 'filme' || raw === 'movie'
+        ? 'movie'
+        : raw === 'serie' || raw === 'série' || raw === 'tv'
+          ? 'tv'
+          : 'all'
     const label = mediaType === 'movie' ? 'Top 10 Filmes' : mediaType === 'tv' ? 'Top 10 Séries' : 'Top 10'
-    await api.sendMessage(chatId, `Gerando ${label}…`)
+    await api.sendMessage(chatId, `Montando o ${label}…`)
     try {
       const trending = await services.getTrending({ userId: session.userId, mediaType })
       if (!trending.ok) {
@@ -290,7 +410,7 @@ export const createHandlers = (ctx) => {
       })
     } catch (e) {
       console.error('[telegram-bot] top10', e)
-      await api.sendMessage(chatId, 'Falha ao gerar o Top 10.')
+      await api.sendMessage(chatId, 'Não consegui gerar o Top 10 agora.')
     }
   }
 
@@ -298,7 +418,10 @@ export const createHandlers = (ctx) => {
     const session = await requireSession(chatId)
     if (!session) return
     await sessions.patch(chatId, { state: 'awaiting_ticket_subject', context: {}, mergeContext: false })
-    await api.sendMessage(chatId, 'Digite o <b>assunto</b> do chamado (ou /cancelar):')
+    await api.sendMessage(
+      chatId,
+      'Vamos abrir um chamado.\n\nPrimeiro, envie o <b>assunto</b> em uma linha (ou /cancelar):',
+    )
   }
 
   const handleTickets = async ({ chatId }) => {
@@ -306,29 +429,187 @@ export const createHandlers = (ctx) => {
     if (!session) return
     const rows = await services.listTickets(session.userId)
     if (!rows.length) {
-      await api.sendMessage(chatId, 'Nenhum chamado. Use /suporte para abrir.')
+      await api.sendMessage(chatId, 'Você ainda não tem chamados.\nUse /suporte quando precisar de ajuda.', {
+        reply_markup: mainMenuKeyboard(session.user.type),
+      })
       return
     }
     const lines = rows.map(
       (t) => `#${t.id} · ${escapeHtml(t.status)} · <b>${escapeHtml(t.subject)}</b>`,
     )
-    await api.sendMessage(chatId, ['<b>Seus chamados</b>', '', ...lines].join('\n'))
+    await api.sendMessage(chatId, ['<b>💬 Seus chamados</b>', '', ...lines].join('\n'), {
+      reply_markup: mainMenuKeyboard(session.user.type),
+    })
   }
 
   const handleCancel = async ({ chatId }) => {
+    clearPending(chatId)
     const session = await sessions.getByChatId(chatId)
-    if (!session) {
-      await api.sendMessage(chatId, 'Nada para cancelar.')
+    if (session) {
+      await sessions.patch(chatId, { state: 'linked', context: {}, mergeContext: false })
+      await api.sendMessage(chatId, 'Ok, cancelei. O que deseja fazer?', {
+        reply_markup: mainMenuKeyboard(session.user.type),
+      })
       return
     }
-    await sessions.patch(chatId, { state: 'linked', context: {}, mergeContext: false })
-    await api.sendMessage(chatId, 'Fluxo cancelado.', { reply_markup: mainMenuKeyboard(session.user.type) })
+    await api.sendMessage(chatId, 'Ok, cancelei. Quando quiser, use /entrar ou /cadastrar.', {
+      reply_markup: welcomeKeyboard(),
+    })
   }
 
-  const handleTextWhileAwaiting = async ({ chatId, text }) => {
+  const finishAuthSuccess = async (chatId, auth) => {
+    clearPending(chatId)
+    clearAuthFailures(chatId)
+    await pairing.linkChatToUser({ chatId, userId: auth.userId })
+    const session = await sessions.getByChatId(chatId)
+    await greetLinked(chatId, session, { justLinked: true })
+  }
+
+  const handlePendingAuthText = async ({ chatId, text, messageId }) => {
+    const pending = getPending(chatId)
+    if (!pending) return false
+
+    const gate = assertAuthAllowed(chatId)
+    if (!gate.ok) {
+      await api.sendMessage(chatId, gate.message)
+      clearPending(chatId)
+      return true
+    }
+
+    const scrubPassword = async () => {
+      if (messageId && api.deleteMessage) {
+        await api.deleteMessage(chatId, messageId)
+      }
+    }
+
+    if (pending.state === 'awaiting_login_email') {
+      const email = text.trim()
+      if (!email.includes('@')) {
+        await api.sendMessage(chatId, 'Esse e-mail não parece válido. Envie de novo ou /cancelar.')
+        return true
+      }
+      setPending(chatId, { state: 'awaiting_login_password', data: { email } })
+      await api.sendMessage(chatId, 'Agora envie sua <b>senha</b>:\n\n<i>Por segurança, tento apagar a mensagem da senha em seguida.</i>')
+      return true
+    }
+
+    if (pending.state === 'awaiting_login_password') {
+      await scrubPassword()
+      const result = await services.loginWithPassword({
+        emailRaw: pending.data.email,
+        password: text,
+      })
+      if (!result.ok) {
+        recordAuthFailure(chatId)
+        clearPending(chatId)
+        await api.sendMessage(chatId, `${result.message}\n\nUse /entrar para tentar de novo.`, {
+          reply_markup: welcomeKeyboard(),
+        })
+        return true
+      }
+      await finishAuthSuccess(chatId, result)
+      return true
+    }
+
+    if (pending.state === 'awaiting_register_name') {
+      const name = text.trim().slice(0, 80)
+      if (name.length < 2) {
+        await api.sendMessage(chatId, 'Nome muito curto. Envie de novo:')
+        return true
+      }
+      setPending(chatId, { state: 'awaiting_register_email', data: { name } })
+      await api.sendMessage(chatId, `Prazer, <b>${escapeHtml(name)}</b>!\nAgora envie seu <b>e-mail</b>:`)
+      return true
+    }
+
+    if (pending.state === 'awaiting_register_email') {
+      const email = text.trim()
+      if (!email.includes('@') || email.length < 5) {
+        await api.sendMessage(chatId, 'E-mail inválido. Tente de novo:')
+        return true
+      }
+      setPending(chatId, { state: 'awaiting_register_brand', data: { email } })
+      await api.sendMessage(
+        chatId,
+        'Qual o <b>nome da sua marca</b> (aparece nas artes)?\n\nPode ser igual ao seu nome.',
+      )
+      return true
+    }
+
+    if (pending.state === 'awaiting_register_brand') {
+      const brandName = text.trim().slice(0, 80)
+      if (brandName.length < 2) {
+        await api.sendMessage(chatId, 'Nome da marca muito curto. Envie de novo:')
+        return true
+      }
+      setPending(chatId, { state: 'awaiting_register_password', data: { brandName } })
+      await api.sendMessage(
+        chatId,
+        'Por fim, crie uma <b>senha</b> (mín. 6 caracteres).\n\n<i>Tento apagar a mensagem da senha em seguida.</i>',
+      )
+      return true
+    }
+
+    if (pending.state === 'awaiting_register_password') {
+      await scrubPassword()
+      const result = await services.registerWithPassword({
+        emailRaw: pending.data.email,
+        password: text,
+        name: pending.data.name,
+        brandName: pending.data.brandName,
+      })
+      if (!result.ok) {
+        recordAuthFailure(chatId)
+        clearPending(chatId)
+        await api.sendMessage(chatId, `${result.message}\n\nUse /cadastrar ou /entrar.`, {
+          reply_markup: welcomeKeyboard(),
+        })
+        return true
+      }
+      await finishAuthSuccess(chatId, result)
+      return true
+    }
+
+    if (pending.state === 'awaiting_password_current') {
+      await scrubPassword()
+      setPending(chatId, {
+        state: 'awaiting_password_new',
+        data: { userId: pending.data.userId, currentPassword: text },
+      })
+      await api.sendMessage(chatId, 'Agora envie a <b>nova senha</b> (mín. 6 caracteres):')
+      return true
+    }
+
+    if (pending.state === 'awaiting_password_new') {
+      await scrubPassword()
+      const session = await sessions.getByChatId(chatId)
+      const changed = await services.changePassword({
+        userId: pending.data.userId,
+        currentPassword: pending.data.currentPassword,
+        newPassword: text,
+      })
+      clearPending(chatId)
+      if (!changed.ok) {
+        await api.sendMessage(chatId, `${changed.message}\nUse /senha para tentar de novo.`)
+        return true
+      }
+      await api.sendMessage(chatId, 'Senha atualizada com sucesso ✅', {
+        reply_markup: session ? mainMenuKeyboard(session.user.type) : undefined,
+      })
+      return true
+    }
+
+    return false
+  }
+
+  const handleTextWhileAwaiting = async ({ chatId, text, messageId }) => {
+    if (await handlePendingAuthText({ chatId, text, messageId })) {
+      return true
+    }
+
     const session = await sessions.getByChatId(chatId)
     if (!session) {
-      await api.sendMessage(chatId, unlinkNeedText())
+      await api.sendMessage(chatId, unlinkNeedText(), { reply_markup: welcomeKeyboard() })
       return true
     }
 
@@ -348,7 +629,7 @@ export const createHandlers = (ctx) => {
         context: { ticketSubject: subject },
         mergeContext: true,
       })
-      await api.sendMessage(chatId, 'Agora envie a <b>mensagem</b> do chamado:')
+      await api.sendMessage(chatId, 'Ótimo. Agora descreva o problema ou pedido (mensagem do chamado):')
       return true
     }
 
@@ -370,7 +651,11 @@ export const createHandlers = (ctx) => {
         await api.sendMessage(chatId, created.message || 'Não foi possível abrir o chamado.')
         return true
       }
-      await api.sendMessage(chatId, `Chamado <b>#${created.id}</b> aberto. Obrigado!`)
+      await api.sendMessage(
+        chatId,
+        `Chamado <b>#${created.id}</b> aberto. Obrigado! Nossa equipe responde em breve.`,
+        { reply_markup: mainMenuKeyboard(session.user.type) },
+      )
       return true
     }
 
@@ -378,19 +663,33 @@ export const createHandlers = (ctx) => {
   }
 
   const handleCallback = async ({ chatId, data, callbackQueryId }) => {
-    const session = await requireSession(chatId)
-    if (!session) {
-      await api.answerCallbackQuery(callbackQueryId)
-      return
-    }
-
     try {
+      if (data === 'auth:login') {
+        await startLoginFlow(chatId)
+        return
+      }
+      if (data === 'auth:register') {
+        await startRegisterFlow(chatId)
+        return
+      }
+      if (data === 'auth:link_help') {
+        await api.sendMessage(chatId, linkHelpText(), { reply_markup: welcomeKeyboard() })
+        return
+      }
+      if (data === 'auth:help') {
+        await handleHelp({ chatId })
+        return
+      }
+
+      const session = await requireSession(chatId)
+      if (!session) return
+
       if (data === 'menu:home' || data === 'menu:account') {
         if (data === 'menu:account') await handleAccount({ chatId })
         else await handleMenu({ chatId })
       } else if (data === 'menu:search') {
         await sessions.patch(chatId, { state: 'awaiting_search' })
-        await api.sendMessage(chatId, 'Envie o termo de busca:')
+        await api.sendMessage(chatId, 'Digite o nome do filme ou série:')
       } else if (data === 'menu:history') {
         await handleHistory({ chatId })
       } else if (data === 'menu:football') {
@@ -403,36 +702,48 @@ export const createHandlers = (ctx) => {
         const idx = Number(data.slice(5))
         const item = session.context?.results?.[idx]
         if (!item) {
-          await api.sendMessage(chatId, 'Resultado expirado. Busque de novo.')
+          await api.sendMessage(chatId, 'Esse resultado expirou. Faça uma nova busca.')
         } else {
           const overview = item.overview ? `\n\n${escapeHtml(item.overview.slice(0, 280))}` : ''
           await api.sendMessage(
             chatId,
             `<b>${escapeHtml(item.title)}</b>${item.year ? ` (${escapeHtml(item.year)})` : ''}${overview}`,
-            { reply_markup: titleActionsKeyboard(idx) },
+            {
+              reply_markup: titleActionsKeyboard(idx, {
+                premium: isPremiumOrAdmin(session.user.type),
+              }),
+            },
           )
         }
       } else if (data.startsWith('send:')) {
         const idx = Number(data.slice(5))
         const item = session.context?.results?.[idx]
         if (!item) {
-          await api.sendMessage(chatId, 'Resultado expirado. Busque de novo.')
+          await api.sendMessage(chatId, 'Esse resultado expirou. Faça uma nova busca.')
         } else {
           const posterUrl = await services.buildPosterUrl(item.posterPath)
           const caption = `<b>${escapeHtml(item.title)}</b>${item.year ? ` (${escapeHtml(item.year)})` : ''}`
           if (posterUrl) {
             await api.sendPhoto(chatId, posterUrl, { caption })
           } else {
-            await api.sendMessage(chatId, `${caption}\n(sem capa disponível)`)
+            await api.sendMessage(chatId, `${caption}\n\n(sem capa disponível)`)
           }
+        }
+      } else if (data.startsWith('trailer:')) {
+        const idx = Number(data.slice(8))
+        const item = session.context?.results?.[idx]
+        if (!item) {
+          await api.sendMessage(chatId, 'Esse resultado expirou. Faça uma nova busca.')
+        } else {
+          await sendTrailer({ chatId, session, item })
         }
       } else if (data.startsWith('banner:')) {
         const idx = Number(data.slice(7))
         const item = session.context?.results?.[idx]
         if (!item) {
-          await api.sendMessage(chatId, 'Resultado expirado. Busque de novo.')
+          await api.sendMessage(chatId, 'Esse resultado expirou. Faça uma nova busca.')
         } else if (!isPremiumOrAdmin(session.user.type)) {
-          await api.sendMessage(chatId, 'Banner de título é exclusivo Premium. Veja /conta.')
+          await api.sendMessage(chatId, premiumUpsell('Banner de título'))
         } else {
           await generateTitleBanner({ chatId, session, item })
         }
@@ -458,6 +769,9 @@ export const createHandlers = (ctx) => {
     handleMenu,
     handleAccount,
     handleLogout,
+    handleLoginCommand,
+    handleRegisterCommand,
+    handlePasswordCommand,
     handleSearchCommand,
     handleHistory,
     handleFootball,

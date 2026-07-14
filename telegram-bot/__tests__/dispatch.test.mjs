@@ -1,15 +1,27 @@
 import { describe, expect, it } from 'vitest'
 import { createDispatch } from '../lib/dispatch.mjs'
-import { escapeHtml, helpText, formatSearchResults, formatFootballListChunks } from '../lib/format.mjs'
+import {
+  escapeHtml,
+  helpText,
+  formatSearchResults,
+  formatFootballListChunks,
+  welcomeText,
+} from '../lib/format.mjs'
 
 describe('telegram-bot format', () => {
   it('escapa HTML', () => {
     expect(escapeHtml('a <b> & c')).toBe('a &lt;b&gt; &amp; c')
   })
 
-  it('ajuda inclui busca', () => {
+  it('ajuda inclui entrada sem web', () => {
+    expect(helpText(null)).toContain('/entrar')
+    expect(helpText(null)).toContain('/cadastrar')
     expect(helpText('free')).toContain('/buscar')
     expect(helpText('premium')).toContain('/futebol')
+  })
+
+  it('boas-vindas explicam autonomia do bot', () => {
+    expect(welcomeText()).toContain('sem precisar abrir o site')
   })
 
   it('formata resultados', () => {
@@ -46,6 +58,9 @@ describe('telegram-bot dispatch parse', () => {
       handleMenu: async () => {},
       handleAccount: async () => {},
       handleLogout: async () => {},
+      handleLoginCommand: async () => {},
+      handleRegisterCommand: async () => {},
+      handlePasswordCommand: async () => {},
       handleSearchCommand: async (p) => calls.push(['search', p]),
       handleHistory: async () => {},
       handleFootball: async () => {},
@@ -61,6 +76,7 @@ describe('telegram-bot dispatch parse', () => {
       cmd: '/buscar',
       args: 'Matrix Reloaded',
     })
+    expect(parseCommand('/entrar')).toEqual({ cmd: '/entrar', args: '' })
     await handleUpdate({
       message: { chat: { id: 1 }, text: '/buscar Matrix' },
     })

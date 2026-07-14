@@ -1,6 +1,6 @@
 # MediaHub — Bot Telegram (especificação)
 
-**Status:** Fase 1 implementada em `telegram-bot/` (webhook + comandos + vínculo). Banners no chat = Fase 2.  
+**Status:** Bot conversacional com login/cadastro no chat (sem web obrigatória). Banners e trailer no chat.  
 **Data:** 2026-07-13  
 **Objetivo:** expor **todas** as funcionalidades da aplicação MediaHub via conversa no Telegram, reutilizando a API Express existente.
 
@@ -39,11 +39,13 @@ Este documento define o produto e a engenharia para virar bot completo.
 
 | Feature web | Comando / fluxo bot | Backend |
 |-------------|---------------------|---------|
-| Login / registro | `/start` → vincular conta | Deep link + pairing (ver §5) |
-| Minha Área (chat_id) | Automático no vínculo | `PUT /api/me` (`telegramChatId`) |
-| Trocar senha | `/senha` | `POST /api/me/password` |
+| Login | `/entrar` (e-mail + senha no chat) | Mesma verificação de `POST /api/auth/login` |
+| Registro | `/cadastrar` (nome → e-mail → marca → senha) | Mesma criação de `POST /api/auth/register` |
+| Vínculo opcional via web | `/start link_CODE` | Deep link Minha Área |
+| Minha Área (chat_id) | Automático no login/cadastro/vínculo | `telegram_chat_id` + sessão |
+| Trocar senha | `/senha` | Mesma lógica de `POST /api/me/password` |
 | Ver plano / vencimento | `/conta` | `GET /api/me` |
-| Logout bot | `/sair` | Invalida sessão bot (tabela §6) |
+| Logout bot | `/sair` | Invalida sessão bot |
 
 ### 3.2 Busca e mídia (VOD)
 

@@ -45,6 +45,11 @@ export const registerTelegramBot = (app, deps) => {
     normalizeTrendingPayload,
     createCanvas,
     loadImage,
+    normalizeEmail,
+    createPasswordDigest,
+    verifyPassword,
+    getAllowRegistrations,
+    resolveTrailerUrlFromProvider,
   } = deps
 
   const sessions = createSessionStore({ query })
@@ -78,6 +83,11 @@ export const registerTelegramBot = (app, deps) => {
     getTicketsEnabled,
     deactivateExpiredPremiumByUserId,
     normalizeTrendingPayload,
+    normalizeEmail,
+    createPasswordDigest,
+    verifyPassword,
+    getAllowRegistrations,
+    resolveTrailerUrlFromProvider,
   })
   const handlers = createHandlers({ api, sessions, pairing, services, banners })
   const { handleUpdate } = createDispatch(handlers)

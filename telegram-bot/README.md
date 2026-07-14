@@ -27,19 +27,18 @@ npm run telegram:set-webhook
 npm run telegram:poll
 ```
 
-## Fase 1 (implementada)
+## Conta (sem precisar da web)
 
-- Vincular conta (`/start link_CODE` + botão na Minha Área)
-- `/menu`, `/ajuda`, `/conta`, `/sair`
-- `/buscar` + capa via `sendPhoto`
+No `/start`, o usuário pode **Entrar** ou **Criar conta** direto no Telegram (`/entrar`, `/cadastrar`).  
+O código da Minha Área continua opcional. Após login, `telegram_chat_id` e a sessão do bot são gravados automaticamente.
+
+## Funcionalidades
+
+- `/menu`, `/ajuda`, `/conta`, `/senha`, `/sair`
+- `/buscar` → capa · trailer · banner (Premium)
 - `/historico`
-- `/futebol` (lista texto) + atualizar (premium/admin)
+- `/futebol` (lista completa paginada) · atualizar · gerar banner
+- `/top10`
 - `/suporte` + `/tickets`
 
-## Fase 2 (implementada)
-
-- `/futebol gerar` + botão **Gerar banner** → PNG dos jogos
-- Após busca: botão **Banner** → PNG do título (Premium)
-- `/top10 [filme|serie|all]` → PNG ranking (Premium)
-
-Layouts são versões Node simplificadas (não clonam 100% os 3 kits web).
+Layouts de banner são versões Node simplificadas (não clonam 100% os kits web).

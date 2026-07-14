@@ -918,6 +918,11 @@ registerTelegramBot(app, {
   normalizeTrendingPayload,
   createCanvas,
   loadImage,
+  normalizeEmail,
+  createPasswordDigest,
+  verifyPassword,
+  getAllowRegistrations,
+  resolveTrailerUrlFromProvider,
 })
 
 registerMeRoutes(app, {

@@ -29,6 +29,7 @@ export const createDispatch = (handlers) => {
     if (!message?.chat?.id) return
     const chatId = String(message.chat.id)
     const text = typeof message.text === 'string' ? message.text : ''
+    const messageId = message.message_id
 
     if (!text) {
       return
@@ -50,6 +51,18 @@ export const createDispatch = (handlers) => {
         case '/conta':
         case '/account':
           await handlers.handleAccount({ chatId })
+          return
+        case '/entrar':
+        case '/login':
+          await handlers.handleLoginCommand({ chatId })
+          return
+        case '/cadastrar':
+        case '/register':
+          await handlers.handleRegisterCommand({ chatId })
+          return
+        case '/senha':
+        case '/password':
+          await handlers.handlePasswordCommand({ chatId })
           return
         case '/sair':
         case '/logout':
@@ -88,7 +101,7 @@ export const createDispatch = (handlers) => {
       }
     }
 
-    const consumed = await handlers.handleTextWhileAwaiting({ chatId, text })
+    const consumed = await handlers.handleTextWhileAwaiting({ chatId, text, messageId })
     if (!consumed) {
       await handlers.handleMenu({ chatId })
     }

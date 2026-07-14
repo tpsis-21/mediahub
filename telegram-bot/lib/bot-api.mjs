@@ -99,6 +99,14 @@ export const createBotApi = (deps) => {
       show_alert: false,
     })
 
+  const deleteMessage = async (chatId, messageId) => {
+    try {
+      await call('deleteMessage', { chat_id: chatId, message_id: messageId })
+    } catch {
+      /* bot sem permissão ou mensagem antiga */
+    }
+  }
+
   const getMe = () => call('getMe', {})
 
   return {
@@ -108,6 +116,7 @@ export const createBotApi = (deps) => {
     sendPhotoBuffer,
     sendDocumentBuffer,
     answerCallbackQuery,
+    deleteMessage,
     getMe,
   }
 }

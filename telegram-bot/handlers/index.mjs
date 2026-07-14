@@ -5,6 +5,8 @@ import {
   cancelKeyboard,
   escapeHtml,
   footballKeyboard,
+  footballModelKeyboard,
+  footballModelPickText,
   formatFootballListChunks,
   formatSearchResults,
   helpText,
@@ -29,6 +31,8 @@ import {
   titleDetailText,
   top10HubKeyboard,
   top10HubText,
+  top10ModelKeyboard,
+  top10ModelPickText,
   unlinkNeedText,
   welcomeKeyboard,
   welcomeText,
@@ -342,7 +346,15 @@ export const createHandlers = (ctx) => {
     const dateArg = wantRefresh || wantGenerate ? parts[1] : parts[0]
 
     if (wantGenerate) {
-      await generateFootballBanner({ chatId, session, dateArg })
+      const dateHint = parts[1] || ''
+      let dateIso = dateHint
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateIso)) {
+        const schedule = await services.getFootballSchedule(dateHint)
+        dateIso = schedule.date
+      }
+      await api.sendMessage(chatId, footballModelPickText(), {
+        reply_markup: footballModelKeyboard(dateIso),
+      })
       return
     }
 
@@ -371,11 +383,12 @@ export const createHandlers = (ctx) => {
     }
   }
 
-  const generateFootballBanner = async ({ chatId, session, dateArg }) => {
+  const generateFootballBanner = async ({ chatId, session, dateArg, model = 'informativo' }) => {
     if (!banners?.renderFootballBanner || !api.sendPhotoBuffer) {
       await api.sendMessage(chatId, 'Geração de banner indisponível neste servidor.')
       return
     }
+    const modelId = ['informativo', 'promo', 'clean'].includes(model) ? model : 'informativo'
     await api.sendMessage(chatId, 'Gerando banner…')
     try {
       const { date, matches } = await services.getFootballSchedule(dateArg)
@@ -386,13 +399,14 @@ export const createHandlers = (ctx) => {
         brandName: brand.brandName,
         primary: brand.primary,
         secondary: brand.secondary,
+        model: modelId,
       })
       await api.sendPhotoBuffer(chatId, png, {
-        filename: `jogos-${date}.png`,
+        filename: `jogos-${date}-${modelId}.png`,
         caption: `Jogos do dia · ${date}`,
       })
-      await api.sendMessage(chatId, 'Banner pronto.', {
-        reply_markup: footballKeyboard(date),
+      await api.sendMessage(chatId, 'Banner pronto. Quer outro modelo?', {
+        reply_markup: footballModelKeyboard(date),
       })
     } catch (e) {
       console.error('[telegram-bot] football banner', e)
@@ -469,19 +483,26 @@ export const createHandlers = (ctx) => {
       await api.sendMessage(chatId, 'Geração de banner indisponível neste servidor.')
       return
     }
-    const raw = String(args || '').trim().toLowerCase()
-    if (!raw) {
+
+    const parts = String(args || '').trim().split(/\s+/).filter(Boolean)
+    const maybeModel = (parts[0] || '').toLowerCase()
+    const hasModel = maybeModel === 'lista' || maybeModel === 'cartaz'
+    const model = hasModel ? maybeModel : 'lista'
+    const catRaw = (hasModel ? parts[1] : parts[0] || '').toLowerCase()
+
+    if (!catRaw && !hasModel) {
       await handleTop10Hub({ chatId })
       return
     }
+
     const mediaType =
-      raw === 'filme' || raw === 'movie'
+      catRaw === 'filme' || catRaw === 'movie'
         ? 'movie'
-        : raw === 'serie' || raw === 'série' || raw === 'tv'
+        : catRaw === 'serie' || catRaw === 'série' || catRaw === 'tv'
           ? 'tv'
           : 'all'
     const label = mediaType === 'movie' ? 'Top 10 Filmes' : mediaType === 'tv' ? 'Top 10 Séries' : 'Top 10'
-    await api.sendMessage(chatId, `Gerando ${label}…`)
+    await api.sendMessage(chatId, `Gerando ${label} (${model})…`)
     try {
       const trending = await services.getTrending({ userId: session.userId, mediaType })
       if (!trending.ok) {
@@ -503,12 +524,15 @@ export const createHandlers = (ctx) => {
         brandName: brand.brandName,
         primary: brand.primary,
         secondary: brand.secondary || '#DC2626',
+        model,
       })
       await api.sendPhotoBuffer(chatId, png, {
-        filename: 'top10.png',
+        filename: `top10-${model}.png`,
         caption: label,
       })
-      await api.sendMessage(chatId, 'Pronto.', { reply_markup: top10HubKeyboard() })
+      await api.sendMessage(chatId, 'Pronto. Quer outro modelo?', {
+        reply_markup: top10ModelKeyboard(mediaType),
+      })
     } catch (e) {
       console.error('[telegram-bot] top10', e)
       await api.sendMessage(chatId, 'Falha ao gerar o Top 10.')
@@ -888,9 +912,28 @@ export const createHandlers = (ctx) => {
         await handleSupportStart({ chatId })
       } else if (data === 'menu:tickets') {
         await handleTickets({ chatId })
+      } else if (data.startsWith('top10:cat:')) {
+        const mediaType = data.slice('top10:cat:'.length)
+        const label =
+          mediaType === 'movie' ? 'Top 10 Filmes' : mediaType === 'tv' ? 'Top 10 Séries' : 'Top 10'
+        await api.sendMessage(chatId, top10ModelPickText(label), {
+          reply_markup: top10ModelKeyboard(mediaType),
+        })
+      } else if (data.startsWith('top10:gen:')) {
+        const rest = data.slice('top10:gen:'.length)
+        const [model, mediaType] = rest.split(':')
+        const cat =
+          mediaType === 'movie' ? 'filme' : mediaType === 'tv' ? 'serie' : 'all'
+        await handleTop10({ chatId, args: `${model} ${cat}` })
       } else if (data.startsWith('top10:')) {
+        // compat: top10:movie etc. → pede modelo
         const kind = data.slice(6)
-        await handleTop10({ chatId, args: kind === 'movie' ? 'filme' : kind === 'tv' ? 'serie' : 'all' })
+        const mediaType = kind === 'movie' || kind === 'tv' ? kind : 'all'
+        const label =
+          mediaType === 'movie' ? 'Top 10 Filmes' : mediaType === 'tv' ? 'Top 10 Séries' : 'Top 10'
+        await api.sendMessage(chatId, top10ModelPickText(label), {
+          reply_markup: top10ModelKeyboard(mediaType),
+        })
       } else if (data.startsWith('pick:')) {
         const idx = Number(data.slice(5))
         const item = session.context?.results?.[idx]
@@ -947,9 +990,22 @@ export const createHandlers = (ctx) => {
       } else if (data.startsWith('fb:refresh:')) {
         const dateIso = data.slice('fb:refresh:'.length)
         await handleFootball({ chatId, args: `atualizar ${dateIso}` })
+      } else if (data.startsWith('fb:pick:')) {
+        const dateIso = data.slice('fb:pick:'.length)
+        await api.sendMessage(chatId, footballModelPickText(), {
+          reply_markup: footballModelKeyboard(dateIso),
+        })
       } else if (data.startsWith('fb:gen:')) {
-        const dateIso = data.slice('fb:gen:'.length)
-        await generateFootballBanner({ chatId, session, dateArg: dateIso })
+        // fb:gen:<model>:<YYYY-MM-DD>  (ou legado fb:gen:<date>)
+        const rest = data.slice('fb:gen:'.length)
+        const parts = rest.split(':')
+        if (parts.length >= 2 && /^\d{4}-\d{2}-\d{2}$/.test(parts[parts.length - 1])) {
+          const dateIso = parts.pop()
+          const model = parts.join(':') || 'informativo'
+          await generateFootballBanner({ chatId, session, dateArg: dateIso, model })
+        } else {
+          await generateFootballBanner({ chatId, session, dateArg: rest, model: 'informativo' })
+        }
       }
     } finally {
       try {

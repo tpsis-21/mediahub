@@ -61,6 +61,28 @@ describe('telegram-bot format', () => {
     expect(kb.inline_keyboard[0].map((b) => b.callback_data)).toEqual(['hist:0', 'hist:1'])
   })
 
+  it('lista de jogos omite competition spam', () => {
+    const chunks = formatFootballListChunks('2026-07-14', [
+      {
+        time: '04:00',
+        home: 'ASA',
+        away: 'Gloria',
+        competition: 'Todos os jogos de hoje | OneFootball',
+      },
+      {
+        time: '16:00',
+        home: 'Franca',
+        away: 'Espanha',
+        competition: 'Copa do Mundo',
+      },
+    ])
+    const joined = chunks.join('\n')
+    expect(joined).not.toContain('OneFootball')
+    expect(joined).not.toContain('Todos os jogos')
+    expect(joined).toContain('Copa do Mundo')
+    expect(joined).toContain('ASA × Gloria')
+  })
+
   it('lista todos os jogos em chunks', () => {
     const matches = Array.from({ length: 80 }, (_, i) => ({
       time: `${String(10 + (i % 10)).padStart(2, '0')}:00`,
@@ -77,6 +99,12 @@ describe('telegram-bot format', () => {
     for (const c of chunks) {
       expect(c.length).toBeLessThanOrEqual(4096)
     }
+  })
+
+  it('formata resultados', () => {
+    const text = formatSearchResults([{ title: 'Matrix', year: '1999', mediaType: 'movie' }])
+    expect(text).toContain('Matrix')
+    expect(text).toContain('1999')
   })
 })
 

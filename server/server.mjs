@@ -918,6 +918,7 @@ registerTelegramBot(app, {
   normalizeTrendingPayload,
   createCanvas,
   loadImage,
+  GlobalFonts,
   normalizeEmail,
   createPasswordDigest,
   verifyPassword,

@@ -45,6 +45,7 @@ export const registerTelegramBot = (app, deps) => {
     normalizeTrendingPayload,
     createCanvas,
     loadImage,
+    GlobalFonts,
     normalizeEmail,
     createPasswordDigest,
     verifyPassword,
@@ -57,7 +58,7 @@ export const registerTelegramBot = (app, deps) => {
   const api = createBotApi({ getTelegramBotToken })
   const banners =
     typeof createCanvas === 'function'
-      ? createBannerRenderer({ createCanvas, loadImage })
+      ? createBannerRenderer({ createCanvas, loadImage, GlobalFonts })
       : null
   const services = createBotServices({
     query,

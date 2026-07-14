@@ -159,24 +159,6 @@ export const supportHubKeyboard = () => ({
   ],
 })
 
-export const top10HubText = () =>
-  [
-    '<b>Top 10</b>',
-    '',
-    'Escolha a categoria do ranking:',
-  ].join('\n')
-
-export const top10HubKeyboard = () => ({
-  inline_keyboard: [
-    [
-      { text: 'Geral', callback_data: 'top10:all' },
-      { text: 'Filmes', callback_data: 'top10:movie' },
-    ],
-    [{ text: 'Séries', callback_data: 'top10:tv' }],
-    rowMenu(),
-  ],
-})
-
 export const lockedFeatureKeyboard = () => ({
   inline_keyboard: [
     [{ text: 'Ver planos', callback_data: 'menu:plans' }],
@@ -353,6 +335,27 @@ const formatDateBr = (dateIso) => {
   return `${d}/${m}/${y}`
 }
 
+export const isUsefulCompetition = (value) => {
+  const t = String(value || '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/https?:\/\/\S+/gi, '')
+    .replace(/\.(png|jpe?g|webp|gif)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!t || t.length < 3 || t.length > 48) return false
+  if (/onefootball|todos os jogos|ver detalhes|futebolnatv|upload\/ligas/i.test(t)) return false
+  return true
+}
+
+export const cleanCompetitionLabel = (value) => {
+  if (!isUsefulCompetition(value)) return ''
+  return String(value || '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/https?:\/\/\S+/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 export const formatFootballListChunks = (dateIso, matches, { maxLen = 3500 } = {}) => {
   const list = Array.isArray(matches) ? matches.slice() : []
   if (!list.length) {
@@ -372,7 +375,7 @@ export const formatFootballListChunks = (dateIso, matches, { maxLen = 3500 } = {
 
   const header = [
     `<b>Jogos do dia</b>`,
-    `${escapeHtml(formatDateBr(dateIso))} · <b>${list.length}</b> confronto(s)`,
+    `${escapeHtml(formatDateBr(dateIso))} · <b>${list.length}</b> confrontos`,
     '',
   ].join('\n')
 
@@ -382,15 +385,9 @@ export const formatFootballListChunks = (dateIso, matches, { maxLen = 3500 } = {
     for (const m of items) {
       const home = escapeHtml(String(m.home || '').trim())
       const away = escapeHtml(String(m.away || '').trim())
-      const comp =
-        typeof m.competition === 'string' && m.competition.trim()
-          ? `\n   <i>${escapeHtml(m.competition.trim())}</i>`
-          : ''
-      const ch =
-        Array.isArray(m.channels) && m.channels.length
-          ? `\n   ${escapeHtml(m.channels.slice(0, 3).join(', '))}`
-          : ''
-      lines.push(`• ${home} <b>x</b> ${away}${comp}${ch}`)
+      const comp = cleanCompetitionLabel(m.competition)
+      const compLine = comp ? `\n   <i>${escapeHtml(comp)}</i>` : ''
+      lines.push(`• ${home} × ${away}${compLine}`)
     }
     lines.push('')
     blocks.push(lines.join('\n'))
@@ -399,7 +396,7 @@ export const formatFootballListChunks = (dateIso, matches, { maxLen = 3500 } = {
   const chunks = []
   let current = header
   const startContinuation = () =>
-    `<b>Jogos</b> (continuação)\n${escapeHtml(formatDateBr(dateIso))}\n\n`
+    `<b>Jogos</b> · ${escapeHtml(formatDateBr(dateIso))} <i>(cont.)</i>\n\n`
 
   for (const block of blocks) {
     if (current.length + block.length > maxLen && current.length > header.length) {
@@ -428,7 +425,7 @@ export const formatFootballListChunks = (dateIso, matches, { maxLen = 3500 } = {
       chunks[i] = `${chunks[i].trimEnd()}\n\nParte ${i + 1}/${total}`
     }
   }
-  chunks[chunks.length - 1] = `${chunks[chunks.length - 1].trimEnd()}\n\nUse os botões para atualizar ou gerar banner.`
+  chunks[chunks.length - 1] = `${chunks[chunks.length - 1].trimEnd()}\n\nGere o banner pelos botões abaixo.`
 
   return chunks
 }
@@ -440,11 +437,50 @@ export const footballKeyboard = (dateIso) => ({
   inline_keyboard: [
     [
       { text: 'Atualizar', callback_data: `fb:refresh:${dateIso}` },
-      { text: 'Gerar banner', callback_data: `fb:gen:${dateIso}` },
+      { text: 'Gerar banner', callback_data: `fb:pick:${dateIso}` },
     ],
     rowMenu(),
   ],
 })
+
+export const footballModelKeyboard = (dateIso) => ({
+  inline_keyboard: [
+    [{ text: 'Informativo', callback_data: `fb:gen:informativo:${dateIso}` }],
+    [{ text: 'Destaque', callback_data: `fb:gen:promo:${dateIso}` }],
+    [{ text: 'Compacto', callback_data: `fb:gen:clean:${dateIso}` }],
+    [{ text: '« Voltar', callback_data: `menu:football` }],
+  ],
+})
+
+export const footballModelPickText = () =>
+  ['<b>Banner de jogos</b>', '', 'Escolha o modelo:'].join('\n')
+
+export const top10HubText = () =>
+  ['<b>Top 10</b>', '', '1) Escolha a categoria', '2) Depois escolha o modelo'].join('\n')
+
+export const top10HubKeyboard = () => ({
+  inline_keyboard: [
+    [
+      { text: 'Geral', callback_data: 'top10:cat:all' },
+      { text: 'Filmes', callback_data: 'top10:cat:movie' },
+    ],
+    [{ text: 'Séries', callback_data: 'top10:cat:tv' }],
+    rowMenu(),
+  ],
+})
+
+export const top10ModelKeyboard = (mediaType) => ({
+  inline_keyboard: [
+    [
+      { text: 'Lista', callback_data: `top10:gen:lista:${mediaType}` },
+      { text: 'Cartaz', callback_data: `top10:gen:cartaz:${mediaType}` },
+    ],
+    [{ text: '« Voltar', callback_data: 'menu:top10' }],
+  ],
+})
+
+export const top10ModelPickText = (categoryLabel) =>
+  [`<b>${escapeHtml(categoryLabel)}</b>`, '', 'Escolha o modelo do banner:'].join('\n')
 
 export const titleActionsKeyboard = (index, { premium = false } = {}) => {
   const rows = [
